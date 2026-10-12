@@ -1,0 +1,265 @@
+# boring-ui headless reactive core (docs/design-notes/boring-ui-draft.md, "Runtime architecture",
+# "Mounted tree and update pass", "Identity & lifecycle", "UI events and batched refresh").
+#
+# Layer 2 of the implementation sequence: it knows nothing about windows, layout or rendering, and
+# nothing about the *types* of views. A `Desc` is the type-erased shape of one build of a view tree;
+# `Runtime` keeps the mounted tree, reconciles each new description against it, hands out
+# generation-checked handles, batches writes into event transactions and runs the 64-pass loop guard.
+#
+# What is deliberately NOT here yet (see boring-ui/README.md):
+#   - typed `state` slots: Boring has no downcast on trait objects, so a lowered view's typed
+#     `V__State` cannot be stored through this erased tree yet. Mounted nodes carry a small named-int
+#     slot map instead, enough to test identity/lifetime semantics.
+#   - keys are strings (a lowered `for … with key` will stringify its `IdentityKey` for now).
+#   - structural sites are explicit (`Desc.site`) or fall back to the sibling index; the array-block
+#     lowering does not emit stable sites for `if` branches yet.
+#   - tasks, `onTask` restarts, environments, per-identity (incremental) rebuilds: the update pass
+#     conservatively rebuilds the whole window, as the draft allows.
+
+# One build of a view: its component kind, where it sits, and its children.
+#
+# Identity of a child is `(site, key)` among its siblings plus a matching `kind`:
+#   - `site` is the static position in the parent's block. `-1` means "use the sibling index".
+#   - `key` is "" for structural children and the iteration key for a keyed `for` group (the
+#     lowering's `KeyedGroup(key, items)`); equal keys at different sites are different identities.
+pub struct Desc:
+    pub string kind
+    pub int site = -1
+    pub string key = ""
+    pub [Desc] children = []
+
+# A mounted node. `id` is recycled after unmount; `generation` never is, so a stale handle can
+# always be told from a live one.
+pub struct Mounted:
+    pub int id
+    pub int generation
+    pub string kind
+    pub int site
+    pub string key
+    pub var mut [mut Mounted] children = []
+    pub var mut {string=int} slots = {=}
+
+# A generation-checked reference to a mounted node.
+pub struct Handle:
+    pub int id
+    pub int generation
+
+# Produces a fresh description of the whole window. May invalidate through `rt` while building;
+# such invalidations are queued for the next pass instead of re-entering.
+pub trait Builder:
+    req Desc build(mut Runtime rt)
+
+# Scratch lists for one reconciliation: hooks are only emitted after the whole tree committed.
+struct Pass:
+    var mut [string] mounts = []
+    var mut [mut Mounted] retiring = []
+
+pub struct Runtime:
+    pub var mut Mounted? root = nil
+    pub var mut [string] events = []
+    pub var mut [string] errors = []
+    pub var mut {int} dirty = {}
+    pub var int depth = 0
+    pub var int maxPasses = 64
+    pub var int passesRun = 0     # update passes executed by `flush`, over the runtime's lifetime
+    var int nextId = 1
+    var int nextGeneration = 1
+    var mut [int] freeIds = []
+    var mut {int=mut Mounted} nodes = {=}
+
+    # ── mount / update ────────────────────────────────────────────────────────
+
+    # Mounts (first call) or updates (later calls) the tree from `d`. Returns false and leaves the
+    # mounted tree untouched when `d` is invalid (duplicate keys).
+    def bool apply(Desc d):
+        let problems = self.validate(d, d.kind)
+        if problems.length > 0:
+            for p in problems:
+                errors.push(p)
+            return false
+        mut ctx = Pass()
+        if let current = root:
+            if current.kind == d.kind:
+                self.reconcileNode(current, d, ctx)
+            else:
+                ctx.retiring.push(current)
+                root = self.create(d, 0, ctx)
+        else:
+            root = self.create(d, 0, ctx)
+        self.commit(ctx)
+        true
+
+    def start(Builder b):
+        _ = self.apply(b.build(self))
+
+    def int fresh():
+        if self.freeIds.length > 0:
+            let reused = self.freeIds[self.freeIds.length - 1]
+            _ = self.freeIds.pop()
+            return reused
+        let id = nextId
+        nextId += 1
+        id
+
+    def mut Mounted create(Desc d, int site, mut Pass ctx):
+        let id = self.fresh()
+        mut node = Mounted(id = id, generation = nextGeneration, kind = d.kind, site = site, key = d.key)
+        nextGeneration += 1
+        nodes[id] = node
+        ctx.mounts.push("mount {d.kind}#{id}")
+        for i in 0..<d.children.length:
+            let child = d.children[i]
+            var childSite = child.site
+            if childSite < 0:
+                childSite = i
+            node.children.push(self.create(child, childSite, ctx))
+        node
+
+    # Same identity, same kind: keep the node (and its slots), reconcile its children.
+    def reconcileNode(mut Mounted node, Desc d, mut Pass ctx):
+        mut {string=mut Mounted} byIdentity = {=}
+        for old in node.children:
+            byIdentity["{old.site}|{old.key}"] = old
+        mut {string} used = {}
+        mut [mut Mounted] next = []
+        for i in 0..<d.children.length:
+            let child = d.children[i]
+            var site = child.site
+            if site < 0:
+                site = i
+            let identity = "{site}|{child.key}"
+            if let old = byIdentity[identity]:
+                _ = used.add(identity)
+                if old.kind == child.kind:
+                    self.reconcileNode(old, child, ctx)
+                    next.push(old)
+                else:
+                    ctx.retiring.push(old)
+                    next.push(self.create(child, site, ctx))
+            else:
+                next.push(self.create(child, site, ctx))
+        for old in node.children:
+            if !used.contains("{old.site}|{old.key}"):
+                ctx.retiring.push(old)
+        node.children = next
+
+    # Unmount hooks first (descendants before parents, siblings in reverse), then mount hooks in
+    # structural preorder — one transaction's worth of hooks, emitted only after the commit.
+    def commit(Pass ctx):
+        var i = ctx.retiring.length - 1
+        while i >= 0:
+            self.release(ctx.retiring[i])
+            i -= 1
+        for m in ctx.mounts:
+            events.push(m)
+
+    def release(Mounted node):
+        var i = node.children.length - 1
+        while i >= 0:
+            self.release(node.children[i])
+            i -= 1
+        events.push("unmount {node.kind}#{node.id}")
+        nodes.remove(node.id)
+        freeIds.push(node.id)
+
+    # Keys must be unique among the keyed siblings of one site, checked before anything mutates.
+    def [string] validate(Desc d, string path):
+        mut [string] problems = []
+        mut {string=int} seen = {=}
+        for i in 0..<d.children.length:
+            let child = d.children[i]
+            if child.key != "":
+                var site = child.site
+                if site < 0:
+                    site = i
+                let identity = "{site}|{child.key}"
+                if let first = seen[identity]:
+                    problems.push("duplicate key '{child.key}' under {path} (indices {first} and {i})")
+                else:
+                    seen[identity] = i
+            for p in self.validate(child, "{path}/{child.kind}"):
+                problems.push(p)
+        problems
+
+    # ── handles and writes ────────────────────────────────────────────────────
+
+    def Handle? handle(int id):
+        if let node = nodes[id]:
+            return Handle(id = node.id, generation = node.generation)
+        nil
+
+    req bool valid(Handle h):
+        if let node = nodes[h.id]:
+            return node.generation == h.generation
+        false
+
+    # A write through a stale handle is a no-op (and is reported), never an access to whatever
+    # node later reuses the id.
+    def bool write(Handle h, string slot, int value):
+        if !self.valid(h):
+            errors.push("stale write to {h.id}.{slot}")
+            return false
+        nodes[h.id].slots[slot] = value
+        _ = dirty.add(h.id)
+        true
+
+    req int? read(Handle h, string slot):
+        if !self.valid(h):
+            return nil
+        if let node = nodes[h.id]:
+            return node.slots[slot]
+        nil
+
+    # ── event transactions and the update loop ────────────────────────────────
+
+    def beginEvent():
+        depth += 1
+
+    # Leaving the outermost event runs the update passes; a nested event joins the outer one.
+    def endEvent(Builder b):
+        depth -= 1
+        if depth == 0:
+            self.flush(b)
+
+    # Runs update passes until nothing is invalidated. Invalidation during a ctx is queued for
+    # the next one; more than `maxPasses` consecutive passes is an update-loop error that clears
+    # the queue and keeps the last committed tree.
+    def bool flush(Builder b):
+        if depth > 0:
+            return true
+        var passes = 0
+        while dirty.length > 0:
+            if passes >= maxPasses:
+                errors.push("update loop: {passes} consecutive passes, still invalidated: {self.dirtyIds().map((i): "{i}").join(",")}")
+                dirty = {}
+                return false
+            passes += 1
+            passesRun += 1
+            dirty = {}
+            _ = self.apply(b.build(self))
+        true
+
+    req [int] dirtyIds():
+        mut [int] ids = []
+        for id in dirty:
+            ids.push(id)
+        ids.sort()
+        ids
+
+    # ── debugging ─────────────────────────────────────────────────────────────
+
+    req string show():
+        if let r = root:
+            return self.showNode(r)
+        "(empty)"
+
+    req string showNode(Mounted m):
+        var out = "{m.kind}#{m.id}"
+        if m.key != "":
+            out = "{out}@{m.key}"
+        if m.children.length > 0:
+            mut [string] parts = []
+            for c in m.children:
+                parts.push(self.showNode(c))
+            out = "{out}[{parts.join(", ")}]"
+        out

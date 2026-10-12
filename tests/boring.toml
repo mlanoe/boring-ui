@@ -1,0 +1,9 @@
+[project]
+name    = "boring-ui-tests"
+version = "0.1.0"
+
+# boring-ui itself has no boring.toml (same convention as boring-numlib): it is a plain `src/`
+# directory consumed through a `[deps]` path entry. This file only gives the tests
+# `use ui.core.*` something to resolve against.
+[deps]
+ui = ".."

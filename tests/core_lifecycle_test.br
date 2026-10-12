@@ -1,0 +1,96 @@
+# Hook ordering, duplicate keys, event batching and the update-loop guard of the headless core.
+# Run: boring run tests/core_lifecycle_test.br
+
+use ui.core.*
+
+def Desc node(string kind, [Desc] kids):
+    Desc(kind = kind, children = kids)
+
+def Desc leaf(string kind):
+    Desc(kind = kind)
+
+def Desc keyed(string key):
+    Desc(kind = "Row", site = 1, key = key)
+
+# ── ordering: mounts in structural preorder, unmounts descendants-first in reverse ──────
+
+mut rt = Runtime()
+_ = rt.apply(node("Root", [node("A", [leaf("A1"), leaf("A2")]), node("B", [leaf("B1")])]))
+assert_eq(rt.events.join(","), "mount Root#1,mount A#2,mount A1#3,mount A2#4,mount B#5,mount B1#6")
+
+# Removing both subtrees and adding one: unmount hooks first (reverse order), then the mount.
+rt.events = []
+_ = rt.apply(node("Root", [node("C", [])]))
+assert_eq(rt.events.join(","), "unmount B1#6,unmount B#5,unmount A2#4,unmount A1#3,unmount A#2,mount C#7")
+assert_eq(rt.show(), "Root#1[C#7]")
+
+# ── duplicate keys: rejected before anything mutates ─────────────────────────────────────
+
+mut d = Runtime()
+_ = d.apply(node("List", [keyed("a"), keyed("b")]))
+let before = d.show()
+let ok = d.apply(node("List", [keyed("a"), keyed("c"), keyed("a")]))
+assert(!ok, "a duplicate key is a recoverable update error, not a panic")
+assert_eq(d.show(), before)                      # the previous tree is left mounted untouched
+assert_eq(d.errors.length, 1)
+assert_eq(d.errors[0], "duplicate key 'a' under List (indices 0 and 2)")
+assert_eq(d.events.length, 3)                    # no partial reconciliation, no hooks
+assert(d.apply(node("List", [keyed("a"), keyed("c")])), "the next valid rebuild reconciles normally")
+assert_eq(d.show(), "List#1[Row#2@a, Row#4@c]")
+
+# On initial mount there is no previous tree to keep: nothing mounts and the error is reported.
+mut e = Runtime()
+assert(!e.apply(node("List", [keyed("x"), keyed("x")])), "invalid initial mount")
+assert_eq(e.show(), "(empty)")
+assert_eq(e.errors.length, 1)
+
+# A nested duplicate is found too, with its path.
+mut n = Runtime()
+assert(!n.apply(node("Window", [node("List", [keyed("q"), keyed("q")])])))
+assert_eq(n.errors[0], "duplicate key 'q' under Window/List (indices 0 and 1)")
+
+# ── event transactions: writes batch, one update pass per outermost event ────────────────
+
+struct Counting as Builder:
+    int rows
+    req Desc build(mut Runtime rt):
+        Desc(kind = "Root", children = [Desc(kind = "Row", site = rows)])
+
+mut b = Runtime()
+let first = Counting(rows = 1)
+b.start(first)
+let hr = b.handle(2) else (Handle(id = -1, generation = -1))
+let passesBefore = b.passesRun
+
+b.beginEvent()
+_ = b.write(hr, "x", 1)
+b.beginEvent()                    # a nested event joins the outer transaction
+_ = b.write(hr, "x", 2)
+b.endEvent(first)
+assert_eq(b.passesRun, passesBefore)     # still inside the outer event: no rebuild yet
+assert_eq(b.dirty.length, 1)            # two writes to one identity are deduplicated
+b.endEvent(first)
+assert_eq(b.passesRun, passesBefore + 1) # exactly one update pass for the whole event
+assert_eq(b.dirty.length, 0)
+assert_eq(b.read(hr, "x") else (-1), 2)
+
+# ── loop guard: a builder that invalidates on every build stops after 64 passes ──────────
+
+struct Churn as Builder:
+    req Desc build(mut Runtime rt):
+        _ = rt.dirty.add(7)
+        Desc(kind = "Root")
+
+mut l = Runtime()
+_ = l.apply(Desc(kind = "Root"))
+_ = l.dirty.add(7)
+let settled = l.flush(Churn())
+assert(!settled, "the loop guard reports failure")
+assert_eq(l.passesRun, 64)
+assert_eq(l.dirty.length, 0)                       # the pending queue is cleared
+assert_eq(l.show(), "Root#1")                      # the last committed tree stays mounted
+assert_eq(l.errors.length, 1)
+assert(l.errors[0].contains("update loop: 64 consecutive passes"), l.errors[0])
+assert(l.errors[0].contains("still invalidated: 7"), l.errors[0])
+
+print "core lifecycle ok"

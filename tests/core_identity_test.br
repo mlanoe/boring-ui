@@ -1,0 +1,76 @@
+# Identity and lifetime semantics of the headless core (src/core.br).
+# Run: boring run tests/core_identity_test.br
+
+use ui.core.*
+
+def Desc text():
+    Desc(kind = "Text")
+
+def Desc keyed(string key, int site):
+    Desc(kind = "Row", site = site, key = key, children = [Desc(kind = "Text")])
+
+# ── same tree rebuilt: identities, ids and slots are retained ───────────────────────────
+
+mut rt = Runtime()
+assert(rt.apply(Desc(kind = "Column", children = [text(), text()])), "first mount")
+assert_eq(rt.show(), "Column#1[Text#2, Text#3]")
+let h = rt.handle(2) else (Handle(id = -1, generation = -1))
+assert(rt.write(h, "count", 5), "write to a live handle")
+assert(rt.apply(Desc(kind = "Column", children = [text(), text()])), "rebuild")
+assert_eq(rt.show(), "Column#1[Text#2, Text#3]")
+assert_eq(rt.read(h, "count") else (-1), 5)
+assert_eq(rt.events.length, 3)    # no extra mount/unmount hooks for a plain rebuild
+
+# ── conditional identity: a different kind at the same site is a new identity ───────────
+
+mut c = Runtime()
+_ = c.apply(Desc(kind = "Column", children = [Desc(kind = "A", site = 0), Desc(kind = "Z", site = 9)]))
+let a = c.handle(2) else (Handle(id = -1, generation = -1))
+_ = c.write(a, "n", 1)
+_ = c.apply(Desc(kind = "Column", children = [Desc(kind = "B", site = 0), Desc(kind = "Z", site = 9)]))
+assert(!c.valid(a), "the old A identity is gone")
+assert_eq(c.events[3], "unmount A#2")
+assert_eq(c.events[4], "mount B#4")   # ids are only recycled after the pass that released them
+assert_eq(c.read(a, "n") else (-1), -1)    # a stale handle reads nothing
+
+# A later mount reuses the freed id 2 — the stale handle must still not see the new node.
+_ = c.apply(Desc(kind = "Column", children = [Desc(kind = "B", site = 0), Desc(kind = "Z", site = 9), Desc(kind = "N", site = 5)]))
+let reused = c.handle(2) else (Handle(id = -1, generation = -1))
+assert_eq(reused.id, a.id)
+assert(reused.generation != a.generation, "same id, different generation")
+assert(!c.valid(a), "the stale handle does not alias the node that reused its id")
+assert(!c.write(a, "n", 9), "stale write is a no-op")
+assert_eq(c.read(reused, "n") else (-1), -1)
+assert_eq(c.errors.length, 1)
+
+# The Z at site 9 was untouched even though its sibling index changed meaning.
+_ = c.apply(Desc(kind = "Column", children = [Desc(kind = "Z", site = 9)]))
+assert_eq(c.show(), "Column#1[Z#3]")
+
+# ── keyed iteration: reorder preserves identity, state and ids ──────────────────────────
+
+mut k = Runtime()
+_ = k.apply(Desc(kind = "List", children = [keyed("a", 1), keyed("b", 1), keyed("c", 1)]))
+assert_eq(k.show(), "List#1[Row#2@a[Text#3], Row#4@b[Text#5], Row#6@c[Text#7]]")
+let hb = k.handle(4) else (Handle(id = -1, generation = -1))
+_ = k.write(hb, "sel", 1)
+_ = k.apply(Desc(kind = "List", children = [keyed("c", 1), keyed("a", 1), keyed("b", 1)]))
+assert_eq(k.show(), "List#1[Row#6@c[Text#7], Row#2@a[Text#3], Row#4@b[Text#5]]")
+assert_eq(k.read(hb, "sel") else (-1), 1)
+assert_eq(k.events.length, 7)     # a reorder mounts and unmounts nothing
+
+# Removing a key unmounts it; inserting the same key later is a new lifetime.
+_ = k.apply(Desc(kind = "List", children = [keyed("c", 1), keyed("a", 1)]))
+assert(!k.valid(hb), "row b is gone")
+_ = k.apply(Desc(kind = "List", children = [keyed("c", 1), keyed("a", 1), keyed("b", 1)]))
+let hb2 = k.handle(4) else (Handle(id = -1, generation = -1))
+assert_eq(k.read(hb2, "sel") else (-1), -1)
+assert(!k.valid(hb), "the old b handle stays stale after the key is reinserted")
+
+# The same key at two different sites is two identities.
+mut s = Runtime()
+_ = s.apply(Desc(kind = "Col", children = [keyed("x", 1), keyed("x", 2)]))
+assert_eq(s.show(), "Col#1[Row#2@x[Text#3], Row#4@x[Text#5]]")
+assert_eq(s.errors.length, 0)
+
+print "core identity ok"
