@@ -1,3 +1,5 @@
+use boring.ui.*
+
 # boring-ui headless reactive core (docs/design-notes/boring-ui-draft.md, "Runtime architecture",
 # "Mounted tree and update pass", "Identity & lifecycle", "UI events and batched refresh").
 #
@@ -22,11 +24,15 @@
 #   - `site` is the static position in the parent's block. `-1` means "use the sibling index".
 #   - `key` is "" for structural children and the iteration key for a keyed `for` group (the
 #     lowering's `KeyedGroup(key, items)`); equal keys at different sites are different identities.
+#
+# A composite view (one with a `body()`) is described lazily: `view` carries it and the runtime
+# expands it with the node's own persistent state while reconciling (see `describe`).
 pub struct Desc:
     pub string kind
     pub int site = -1
     pub string key = ""
     pub [Desc] children = []
+    pub View? view = nil
 
 # A mounted node. `id` is recycled after unmount; `generation` never is, so a stale handle can
 # always be told from a live one.
@@ -38,6 +44,30 @@ pub struct Mounted:
     pub string key
     pub var mut [mut Mounted] children = []
     pub var mut {string=int} slots = {=}
+    # Composite views only: the typed `V__State` (behind `StateBox`) lives exactly as long as the
+    # identity, and the latest description that was expanded.
+    pub var StateBox? state = nil
+    pub var View? view = nil
+
+# The runtime's view of a tree of lowered `View`s: native views become `Desc`s eagerly, a
+# composite view stays a leaf carrying its `View` until it is expanded against its mounted state.
+pub Desc describe(View v):
+    if v.isComposite():
+        return Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), view = v)
+    mut [Desc] kids = []
+    for c in v.viewChildren():
+        kids.push(describe(c))
+    Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), children = kids)
+
+# The static site of a child at index `i`: explicit, else — for a keyed iteration group — a
+# shared default (-2, so a reorder never changes identity; two keyed `for`s under one parent need
+# explicit sites until the lowering emits them), else the sibling index.
+def int siteOf(Desc child, int i):
+    if child.site >= 0:
+        return child.site
+    if child.key != "":
+        return -2
+    i
 
 # A generation-checked reference to a mounted node.
 pub struct Handle:
@@ -48,6 +78,15 @@ pub struct Handle:
 # such invalidations are queued for the next pass instead of re-entering.
 pub trait Builder:
     req Desc build(mut Runtime rt)
+
+# The same, for application code that builds `View`s: wrap it in `ViewRoot` to hand it to `start`/
+# `flush`.
+pub trait ViewBuilder:
+    req View buildView(mut Runtime rt)
+
+pub struct ViewRoot as Builder:
+    ViewBuilder inner
+    req Desc build(mut Runtime rt): describe(inner.buildView(rt))
 
 # Scratch lists for one reconciliation: hooks are only emitted after the whole tree committed.
 struct Pass:
@@ -107,26 +146,48 @@ pub struct Runtime:
         nextGeneration += 1
         nodes[id] = node
         ctx.mounts.push("mount {d.kind}#{id}")
-        for i in 0..<d.children.length:
-            let child = d.children[i]
-            var childSite = child.site
-            if childSite < 0:
-                childSite = i
-            node.children.push(self.create(child, childSite, ctx))
+        if let v = d.view:
+            node.view = v
+            node.state = v.newState()
+        let kids = self.childrenOf(node, d)
+        if self.checked(kids, d.kind):
+            for i in 0..<kids.length:
+                let child = kids[i]
+                node.children.push(self.create(child, siteOf(child, i), ctx))
         node
 
-    # Same identity, same kind: keep the node (and its slots), reconcile its children.
+    # The children to reconcile under `node`: a native node's own, or — for a composite view —
+    # its body, expanded against the state this identity has kept since it mounted.
+    def [Desc] childrenOf(Mounted node, Desc d):
+        if let v = d.view:
+            let st = node.state else (NoState())
+            return [describe(v.expand(st))]
+        d.children
+
+    # A composite's expansion is only known while reconciling, so its keys are checked here, per
+    # children list, before that list mutates. A failing subtree is left as it was (draft: "the
+    # failed update leaves that entire `for` subtree mounted unchanged").
+    def bool checked([Desc] kids, string path):
+        let problems = self.validate(Desc(kind = path, children = kids), path)
+        for p in problems:
+            errors.push(p)
+        problems.length == 0
+
+    # Same identity, same kind: keep the node (and its slots and state), reconcile its children.
     def reconcileNode(mut Mounted node, Desc d, mut Pass ctx):
+        if let v = d.view:
+            node.view = v
+        let kids = self.childrenOf(node, d)
+        if !self.checked(kids, d.kind):
+            return
         mut {string=mut Mounted} byIdentity = {=}
         for old in node.children:
             byIdentity["{old.site}|{old.key}"] = old
         mut {string} used = {}
         mut [mut Mounted] next = []
-        for i in 0..<d.children.length:
-            let child = d.children[i]
-            var site = child.site
-            if site < 0:
-                site = i
+        for i in 0..<kids.length:
+            let child = kids[i]
+            let site = siteOf(child, i)
             let identity = "{site}|{child.key}"
             if let old = byIdentity[identity]:
                 _ = used.add(identity)
@@ -169,10 +230,7 @@ pub struct Runtime:
         for i in 0..<d.children.length:
             let child = d.children[i]
             if child.key != "":
-                var site = child.site
-                if site < 0:
-                    site = i
-                let identity = "{site}|{child.key}"
+                let identity = "{siteOf(child, i)}|{child.key}"
                 if let first = seen[identity]:
                     problems.push("duplicate key '{child.key}' under {path} (indices {first} and {i})")
                 else:
@@ -200,6 +258,22 @@ pub struct Runtime:
             errors.push("stale write to {h.id}.{slot}")
             return false
         nodes[h.id].slots[slot] = value
+        _ = dirty.add(h.id)
+        true
+
+    # The typed state of a composite view's mounted node (downcast it with `as V__State`).
+    req StateBox? stateOf(Handle h):
+        if !self.valid(h):
+            return nil
+        if let node = nodes[h.id]:
+            return node.state
+        nil
+
+    # Marks a node as needing a rebuild without writing a slot (typed state is mutated in place).
+    def bool invalidate(Handle h):
+        if !self.valid(h):
+            errors.push("stale invalidate of {h.id}")
+            return false
         _ = dirty.add(h.id)
         true
 

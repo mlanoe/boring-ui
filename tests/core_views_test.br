@@ -1,0 +1,102 @@
+# The core driving real lowered `view`s: typed `state` lives in the mounted node (behind
+# `StateBox`), survives rebuilds and keyed reorders, and dies with the identity.
+# Interpreter only — see README ("Not here yet").
+# Run: boring run tests/core_views_test.br
+
+use boring.ui.*
+use ui.core.*
+
+view Counter:
+    string title
+    state int taps = 0
+
+    # The body changes shape with the typed state, which is what the tree below observes.
+    body():
+        if taps > 2:
+            return Row(alignment = .Center, spacing = nil, children = [Text("many")])
+        Column(alignment = .Center, spacing = nil, children = [Text("{title}")])
+
+view Page:
+    [string] ids
+
+    body():
+        Column(alignment = .Center, spacing = nil):
+            for id in ids with id:
+                Counter(title = id)
+
+struct Model:
+    var mut [string] ids = []
+
+struct PageBuilder as ViewBuilder:
+    Model model
+    req View buildView(mut Runtime rt): Page(ids = model.ids)
+
+# Finds the node `n`-th in preorder whose kind is `kind` (ids are stable, so tests read them off `show`).
+def int idOf(Runtime rt, string kind, string key):
+    var found = -1
+    if let r = rt.root:
+        found = search(r, kind, key)
+    found
+
+def int search(Mounted m, string kind, string key):
+    if m.kind == kind and m.key == key:
+        return m.id
+    for c in m.children:
+        let r = search(c, kind, key)
+        if r >= 0:
+            return r
+    -1
+
+def tap(Runtime rt, Handle h, int times):
+    let box = rt.stateOf(h) else (NoState())
+    mut st = box as Counter__State else (Counter__State())
+    st.taps = st.taps + times
+
+mut model = Model(ids = ["a", "b"])
+let builder = PageBuilder(model = model)
+let host = ViewRoot(inner = builder)
+mut rt = Runtime()
+rt.start(host)
+
+# Page → Column → one KeyedGroup per id → Counter → its body's Column → Text.
+assert_eq(rt.show(), "Page#1[Column#2[KeyedGroup#3@a[Counter#4[Column#5[Text#6]]], KeyedGroup#7@b[Counter#8[Column#9[Text#10]]]]]")
+
+# Mutate Counter a's *typed* state, then rebuild: its body now expands to a Row.
+let ca = rt.handle(idOf(rt, "Counter", "")) else (Handle(id = -1, generation = -1))
+tap(rt, ca, 3)
+assert(rt.invalidate(ca), "invalidate")
+assert(rt.flush(host), "flush")
+assert_eq(rt.show(), "Page#1[Column#2[KeyedGroup#3@a[Counter#4[Row#11[Text#12]]], KeyedGroup#7@b[Counter#8[Column#9[Text#10]]]]]")
+
+# The parent rebuilds with the ids reordered: both counters keep their identity AND their state.
+model.ids = ["b", "a"]
+assert(rt.invalidate(ca), "invalidate again")
+assert(rt.flush(host))
+assert_eq(rt.show(), "Page#1[Column#2[KeyedGroup#7@b[Counter#8[Column#9[Text#10]]], KeyedGroup#3@a[Counter#4[Row#11[Text#12]]]]]")
+
+# Removing a key unmounts its counter and its state; re-adding it starts a fresh lifetime.
+model.ids = ["b"]
+assert(rt.invalidate(ca))
+_ = rt.flush(host)
+assert(!rt.valid(ca), "the removed counter's handle is stale")
+model.ids = ["b", "a"]
+let cb = rt.handle(8) else (Handle(id = -1, generation = -1))
+assert(rt.invalidate(cb))
+_ = rt.flush(host)
+# Ids are recycled (the re-added Counter reuses #4) but its state is brand new — still a Column, not a
+# Row — and the old handle to #4 stays stale.
+assert_eq(rt.show(), "Page#1[Column#2[KeyedGroup#7@b[Counter#8[Column#9[Text#10]]], KeyedGroup#3@a[Counter#4[Column#11[Text#12]]]]]")
+assert(!rt.valid(ca), "a stale handle does not alias the node that reused its id")
+
+# Hooks cover every kind, including composites and natives.
+assert(rt.events.contains("mount Counter#4"))
+assert(rt.events.contains("unmount Counter#4"))
+
+# A duplicate iteration key below a composite is reported and leaves that subtree as it was.
+model.ids = ["b", "b"]
+assert(rt.invalidate(cb))
+_ = rt.flush(host)
+assert_eq(rt.errors.length, 1)
+assert(rt.errors[0].contains("duplicate key 'b'"), rt.errors[0])
+
+print "core views ok"
