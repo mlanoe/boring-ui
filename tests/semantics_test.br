@@ -1,0 +1,78 @@
+# Accessibility tree (src/semantics.br). Run: boring run tests/semantics_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.semantics.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Semantics sem(View root):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    semantics(must(layout(rt, 200.0, 200.0)))
+
+def string dump(Semantics s):
+    describeTree(s.roots, 0).join("\n")
+
+# ── transparent layout: stacks, padding and backgrounds contribute no nodes of their own ─────
+
+let a = sem(Padding(insets = 4.0, children = [Column(alignment = .Leading, spacing = 0.0, children = [Text("Title"), Background(color = "red", children = [Text("body")])])]))
+assert_eq(dump(a), "staticText 'Title' [4,4 40x16]\nstaticText 'body' [4,20 32x16]")
+assert_eq(a.errors.length, 0)
+
+# ── modifiers: heading, label, hint apply to the one element they wrap ────────────────────────
+
+let m = sem(Column(alignment = .Leading, spacing = 0.0, children = [
+    AccessibilityHeading(level = 2, children = [Text("Settings")]),
+    AccessibilityLabel(label = "Warning", children = [Text("!")]),
+    AccessibilityHint(hint = "tap twice", children = [Text("Go")])]))
+assert_eq(dump(m), "heading 'Settings' level=2 [0,0 64x16]\nstaticText 'Warning' [0,16 8x16]\nstaticText 'Go' hint='tap twice' [0,32 16x16]")
+
+# A label wrapping several elements has no single receiver: reported, nodes kept.
+let bad = sem(AccessibilityLabel(label = "x", children = [Column(alignment = .Leading, spacing = 0.0, children = [Text("a"), Text("b")])]))
+assert_eq(bad.errors.length, 1)
+assert_eq(bad.roots.length, 2)
+
+# ── grouping and hiding ────────────────────────────────────────────────────────────────────────
+
+# A label outside a group names the group; a label inside names the child.
+let g = sem(AccessibilityLabel(label = "Outer", children = [AccessibilityGroup(label = "", children = [
+    Column(alignment = .Leading, spacing = 0.0, children = [
+        AccessibilityLabel(label = "Inner", children = [Text("t")]), Text("u")])])]))
+assert_eq(dump(g), "group 'Outer' [0,0 8x32]\n  staticText 'Inner' [0,0 8x16]\n  staticText 'u' [0,16 8x16]")
+
+# Hiding removes the subtree from the tree; layout still counts it.
+let h = sem(Column(alignment = .Leading, spacing = 0.0, children = [Text("a"), AccessibilityHidden(children = [Text("secret")]), Text("c")]))
+assert_eq(dump(h), "staticText 'a' [0,0 8x16]\nstaticText 'c' [0,32 8x16]")
+
+# ── text field: required label, live value from the bound slot ────────────────────────────────
+
+view Form:
+    state string name = "Ada"
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            TextField(value = name, label = "Name", placeholder = "")
+
+mut rt = Runtime()
+let formView = Form()
+struct FormRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Form()
+rt.start(ViewRoot(inner = FormRoot()))
+let formSem = semantics(must(layout(rt, 200.0, 200.0)))
+assert_eq(formSem.roots.length, 1)
+assert_eq(formSem.roots[0].role, "textField")
+assert_eq(formSem.roots[0].name, "Name")
+assert_eq(formSem.roots[0].value, "Ada")
+assert_eq(formSem.roots[0].actions.length, 2)
+
+let unlabeled = sem(TextField(value = Slot(value = "x"), label = "", placeholder = ""))
+assert_eq(unlabeled.errors.length, 1)
+assert_eq(unlabeled.roots.length, 1)
+
+print "semantics ok"

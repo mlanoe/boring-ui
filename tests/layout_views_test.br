@@ -1,0 +1,53 @@
+# Layout through composite views and keyed groups, and unspecified proposals (src/layout.br).
+# Run: boring run tests/layout_views_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+
+view Label:
+    string text
+    body():
+        Text(text)
+
+view List:
+    [string] items
+    body():
+        Column(alignment = .Leading, spacing = 2.0):
+            Text("title")
+            for it in items with it:
+                Label(text = it)
+            Spacer()
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+mut rt = Runtime()
+rt.start(ViewRoot(inner = Fixed(root = List(items = ["ab", "cde"]))))
+
+# A composite view shares its body's frame; KeyedGroups vanish so their items are Column children.
+let placed = layout(rt, 100.0, 100.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+assert_eq(placed.kind, "List")
+let column = placed.children[0]
+assert_eq(column.kind, "Column")
+assert_eq(column.children.length, 4)             # title, two labels, the spacer
+assert_eq(column.children[1].kind, "Label")
+assert_eq(column.children[1].children[0].kind, "Text")
+assert_eq(column.children[1].y, 18.0)            # 16 (title) + 2 (spacing)
+assert_eq(column.children[2].y, 36.0)
+assert_eq(column.children[1].x, 0.0)             # leading
+assert_eq(column.children[2].w, 24.0)            # "cde"
+
+# The spacer takes the rest of the proposed height; the column reports its full extent.
+assert_eq(column.children[3].kind, "Spacer")
+assert_eq(column.h, 100.0)
+assert_eq(column.children[3].y, 54.0)
+
+# An unspecified proposal gives ideal sizes: the spacer keeps its themed minimum.
+let root = rt.root else (Mounted(id = 0, generation = 0, kind = "", site = 0, key = ""))
+let ideal = measure(root, Prop(w = nil, h = nil))
+assert_eq(ideal.w, 40.0)             # "title"
+assert_eq(ideal.h, 16.0 * 3.0 + 2.0 * 3.0 + spacerMin)
+
+print "layout views ok"

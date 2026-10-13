@@ -33,6 +33,7 @@ pub struct Desc:
     pub string key = ""
     pub [Desc] children = []
     pub View? view = nil
+    pub {string=string} props = {=}
 
 # A mounted node. `id` is recycled after unmount; `generation` never is, so a stale handle can
 # always be told from a live one.
@@ -44,6 +45,8 @@ pub struct Mounted:
     pub string key
     pub var mut [mut Mounted] children = []
     pub var mut {string=int} slots = {=}
+    # The native view's scalar fields (text content, spacing, insets, …) as of the latest build.
+    pub var mut {string=string} props = {=}
     # Composite views only: the typed `V__State` (behind `StateBox`) lives exactly as long as the
     # identity, and the latest description that was expanded.
     pub var StateBox? state = nil
@@ -55,13 +58,13 @@ pub Desc describe(View v):
     # `Sited` is the lowering's transparent static-position tag: its one child, at that site.
     if v.viewKind() == "Sited":
         let inner = describe(v.viewChildren()[0])
-        return Desc(kind = inner.kind, site = v.viewSite(), key = inner.key, children = inner.children, view = inner.view)
+        return Desc(kind = inner.kind, site = v.viewSite(), key = inner.key, children = inner.children, view = inner.view, props = inner.props)
     if v.isComposite():
-        return Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), view = v)
+        return Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), view = v, props = v.viewProps())
     mut [Desc] kids = []
     for c in v.viewChildren():
         kids.push(describe(c))
-    Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), children = kids)
+    Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), children = kids, props = v.viewProps())
 
 # The identity site of a child at index `i`, encoded so the three ways of being positioned can never
 # collide: an explicit static site `n` (>= 0, from the lowering's `Sited` tag) is `2n`, a keyed
@@ -149,6 +152,7 @@ pub struct Runtime:
         let id = self.fresh()
         mut node = Mounted(id = id, generation = nextGeneration, kind = d.kind, site = site, key = d.key)
         nextGeneration += 1
+        node.props = d.props
         nodes[id] = node
         ctx.mounts.push("mount {d.kind}#{id}")
         if let v = d.view:
@@ -180,6 +184,7 @@ pub struct Runtime:
 
     # Same identity, same kind: keep the node (and its slots and state), reconcile its children.
     def reconcileNode(mut Mounted node, Desc d, mut Pass ctx):
+        node.props = d.props
         if let v = d.view:
             node.view = v
         let kids = self.childrenOf(node, d)

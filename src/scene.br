@@ -1,0 +1,77 @@
+# boring-ui headless scene building (docs/design-notes/boring-ui-draft.md, "Painting, compositing,
+# and render invalidation", "Event dispatch" → hit testing). Layer 3: turns a `Placed` tree into
+#   - a deterministic, backend-neutral DISPLAY LIST (no GPU, no pixels), and
+#   - HIT-TEST answers (the retained path from the root to the target under a point).
+#
+# Vocabulary of this slice: `FillRect`, `DrawText`, `PushClip`, `PopClip`. A wrapper controls the
+# order of its own effects and its child: `Background` paints, then the child; `Clip` pushes a clip
+# around everything its child emits. Borders, overlays, opacity, shadows, transforms, images and
+# the accessibility tree are not here yet.
+#
+# Hit region = a node's layout bounds intersected with ancestor clips: visible overflow never enlarges
+# it. Children are tested front to back (reverse paint order), so the topmost wins.
+
+use ui.layout.*
+
+pub struct Command:
+    pub string kind
+    pub float x
+    pub float y
+    pub float w
+    pub float h
+    pub string text = ""
+    pub string color = ""
+    pub int node = -1
+
+def Command cmd(string kind, Placed p, string text, string color):
+    Command(kind = kind, x = p.x, y = p.y, w = p.w, h = p.h, text = text, color = color, node = p.id)
+
+# Appends `p`'s commands (and its subtree's) to `out` in paint order.
+pub def paint(Placed p, mut [Command] out):
+    if p.kind == "Background":
+        out.push(cmd("FillRect", p, "", p.props["color"] else ("")))
+    if p.kind == "Text":
+        out.push(cmd("DrawText", p, p.props["content"] else (""), ""))
+    if p.kind == "Clip":
+        out.push(cmd("PushClip", p, "", ""))
+    for c in p.children:
+        paint(c, out)
+    if p.kind == "Clip":
+        out.push(cmd("PopClip", p, "", ""))
+
+pub def [Command] displayList(Placed root):
+    mut [Command] out = []
+    paint(root, out)
+    out
+
+# One line per command, for golden tests.
+pub def string describe(Command c):
+    var s = "{c.kind} {c.x},{c.y} {c.w}x{c.h}"
+    if c.kind == "DrawText":
+        s = "{s} '{c.text}'"
+    if c.kind == "FillRect":
+        s = "{s} {c.color}"
+    s
+
+def bool contains(Placed p, float x, float y):
+    x >= p.x and x < p.x + p.w and y >= p.y and y < p.y + p.h
+
+# The ids from the root down to the deepest node under (x, y), or [] when the point hits nothing.
+# A point outside a `Clip`'s bounds reaches nothing beneath it.
+pub def [int] hitTest(Placed root, float x, float y):
+    mut [int] path = []
+    if contains(root, x, y):
+        path.push(root.id)
+        descend(root, x, y, path)
+    path
+
+def descend(Placed p, float x, float y, mut [int] path):
+    # front to back: the last child paints last, so it is tested first
+    var i = p.children.length - 1
+    while i >= 0:
+        let c = p.children[i]
+        if contains(c, x, y):
+            path.push(c.id)
+            descend(c, x, y, path)
+            return
+        i -= 1

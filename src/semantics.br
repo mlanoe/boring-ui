@@ -1,0 +1,125 @@
+# boring-ui headless accessibility tree (docs/design-notes/boring-ui-draft.md, "Accessibility
+# semantics"). Layer 3: a backend-neutral semantic tree derived from the same committed `Placed`
+# tree as layout and painting — not inferred from pixels, no platform API.
+#
+# Every node has a stable id (the mounted node's id — a keyed reorder moves the existing semantic
+# node), a role, optional name/value/hint/heading level, state, window-coordinate bounds, ordered
+# children and supported actions. Layout wrappers, `Row`/`Column`, composite views and keyed groups
+# are transparent: their semantic children attach to the nearest semantic ancestor, in structural
+# order. Modifiers are ordered wrappers (a label outside an `AccessibilityGroup` names the group, a
+# label inside names the child); `AccessibilityHidden` drops its whole subtree.
+#
+# Components with semantics so far: `Text` (static text, name = content), `TextField` (text input,
+# required label as name, live value, focus/setValue). Not yet: `Button`, `Toggle`, `Image`,
+# `Video`, `Separator`, `Scroll`, `List`, `Sheet`, live regions, `accessibilityValue`, modal
+# subtree scoping, selection/set-selection and the platform adapter.
+
+use ui.layout.*
+
+pub struct SemNode:
+    pub int id
+    pub var string role
+    pub var string name = ""
+    pub var string value = ""
+    pub var string hint = ""
+    pub var int level = 0
+    pub float x
+    pub float y
+    pub float w
+    pub float h
+    pub var mut [string] actions = []
+    pub var mut [mut SemNode] children = []
+
+pub struct Semantics:
+    pub var mut [mut SemNode] roots = []
+    # Development validation errors (draft: an unlabeled interactive node, a modifier that does not
+    # have exactly one element to apply to). The node stays in the tree so it remains operable.
+    pub var mut [string] errors = []
+
+def mut SemNode node(Placed p, string role):
+    mut n = SemNode(id = p.id, role = role, x = p.x, y = p.y, w = p.w, h = p.h)
+    n
+
+def bool isModifier(string kind):
+    kind == "AccessibilityLabel" or kind == "AccessibilityHint" or kind == "AccessibilityHeading"
+
+def walk(Placed p, mut [mut SemNode] out, mut [string] errors):
+    let k = p.kind
+    if k == "AccessibilityHidden":
+        return
+    if k == "Text":
+        mut n = node(p, "staticText")
+        n.name = p.props["content"] else ("")
+        out.push(n)
+        return
+    if k == "TextField":
+        mut n = node(p, "textField")
+        n.name = p.props["label"] else ("")
+        n.value = p.props["value"] else ("")
+        n.actions = ["focus", "setValue"]
+        if n.name == "":
+            errors.push("unlabeled TextField (node {p.id}): an interactive element needs a name")
+        out.push(n)
+        return
+    if k == "AccessibilityGroup":
+        mut g = node(p, "group")
+        g.name = p.props["label"] else ("")
+        for c in p.children:
+            walk(c, g.children, errors)
+        out.push(g)
+        return
+    if isModifier(k):
+        mut inner = []
+        for c in p.children:
+            walk(c, inner, errors)
+        if inner.length != 1:
+            errors.push("{k} (node {p.id}) needs exactly one semantic element, found {inner.length} — wrap them in AccessibilityGroup")
+            for n in inner:
+                out.push(n)
+            return
+        mut target = inner[0]
+        if k == "AccessibilityLabel":
+            target.name = p.props["label"] else ("")
+        if k == "AccessibilityHint":
+            target.hint = p.props["hint"] else ("")
+        if k == "AccessibilityHeading":
+            if target.role == "staticText":
+                target.role = "heading"
+                target.level = (p.props["level"] else ("1")) as int
+            else:
+                errors.push("AccessibilityHeading (node {p.id}) applies to static text, not '{target.role}'")
+        out.push(target)
+        return
+    # Everything else (layout wrappers, stacks, composite views, backgrounds, clips, …) is transparent.
+    for c in p.children:
+        walk(c, out, errors)
+
+# The semantic tree of one placed window.
+pub def Semantics semantics(Placed root):
+    mut s = Semantics()
+    walk(root, s.roots, s.errors)
+    s
+
+# One line per node, indented by depth, for golden tests.
+pub def [string] describeTree([SemNode] nodes, int depth):
+    mut [string] lines = []
+    for n in nodes:
+        var line = "{n.role}"
+        if n.name != "":
+            line = "{line} '{n.name}'"
+        if n.value != "":
+            line = "{line} value='{n.value}'"
+        if n.hint != "":
+            line = "{line} hint='{n.hint}'"
+        if n.level > 0:
+            line = "{line} level={n.level}"
+        line = "{line} [{n.x},{n.y} {n.w}x{n.h}]"
+        if n.actions.length > 0:
+            line = "{line} actions={n.actions.join(",")}"
+        var pad = ""
+        for i in 0..<depth:
+            pad = "{pad}  "
+        lines.push("{pad}{line}")
+        for l in describeTree(n.children, depth + 1):
+            lines.push(l)
+    lines

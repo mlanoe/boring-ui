@@ -1,0 +1,118 @@
+# Layout negotiation over real mounted views (src/layout.br). Run: boring run tests/layout_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed? lay(View root, float w, float h):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    layout(rt, w, h)
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+# ── text: intrinsic size, wrapping under a proposal ──────────────────────────────────────────
+
+let t = must(lay(Text("hello"), 1000.0, 1000.0))
+assert_eq(t.w, 40.0)
+assert_eq(t.h, 16.0)
+
+let wrapped = must(lay(Text("aa bb cc"), 40.0, 1000.0))   # "aa bb" is 40 wide, "cc" wraps
+assert_eq(wrapped.w, 40.0)
+assert_eq(wrapped.h, 32.0)
+
+
+
+# ── modifier order (draft examples): width(200).padding(10) vs padding(10).width(200) ───────
+
+def View fixedW(float w, View child):
+    Frame(width = w, children = [child])
+
+def View pad(float i, View child):
+    Padding(insets = i, children = [child])
+
+# Inner fixed-width frame, outer padding: total width 200 + 2*10.
+let a = must(lay(pad(10.0, fixedW(200.0, Text("Bonjour"))), 1000.0, 1000.0))
+assert_eq(a.w, 220.0)
+assert_eq(a.h, 36.0)
+let aFrame = a.children[0]
+assert_eq(aFrame.x, 10.0)
+assert_eq(aFrame.w, 200.0)
+
+# Outer fixed-width frame, inner padding: the padding (56 + 20 = 76 wide) sits inside 200, centered.
+let b = must(lay(fixedW(200.0, pad(10.0, Text("Bonjour"))), 1000.0, 1000.0))
+assert_eq(b.w, 200.0)
+let bPad = b.children[0]
+assert_eq(bPad.w, 76.0)
+assert_eq(bPad.x, 62.0)
+assert_eq(bPad.children[0].x, 72.0)      # the text, one inset further in
+
+# ── stacks: fixed children and spacers ───────────────────────────────────────────────────────
+
+def View box(float w):
+    Frame(width = w, height = 20.0, children = [Text("x")])
+
+# Row of width 400, zero spacing: two fixed 80s leave 240 for one spacer.
+let r1 = must(lay(Row(alignment = .Center, spacing = 0.0, children = [box(80.0), Spacer(), box(80.0)]), 400.0, 100.0))
+assert_eq(r1.children[0].w, 80.0)
+assert_eq(r1.children[1].kind, "Spacer")
+assert_eq(r1.children[1].w, 240.0)
+assert_eq(r1.children[2].x, 320.0)
+assert_eq(r1.w, 400.0)
+
+# …or 120 each for two identical spacers.
+let r2 = must(lay(Row(alignment = .Center, spacing = 0.0, children = [box(80.0), Spacer(), Spacer(), box(80.0)]), 400.0, 100.0))
+assert_eq(r2.children[1].w, 120.0)
+assert_eq(r2.children[2].w, 120.0)
+assert_eq(r2.children[3].x, 320.0)
+
+# Explicit spacing is an exact gap between every pair.
+let r3 = must(lay(Row(alignment = .Center, spacing = 10.0, children = [box(50.0), box(50.0), box(50.0)]), 1000.0, 100.0))
+assert_eq(r3.children[1].x, 60.0)
+assert_eq(r3.children[2].x, 120.0)
+assert_eq(r3.w, 170.0)                 # a stack reports its content, it does not fill the proposal
+
+# Cross-axis alignment: heights 20 and 40 in a Row; center puts the short one 10 down, leading at 0.
+let tall = Frame(width = 10.0, height = 40.0, children = [Text("x")])
+let short = Frame(width = 10.0, height = 20.0, children = [Text("x")])
+let center = must(lay(Row(alignment = .Center, spacing = 0.0, children = [tall, short]), 100.0, 100.0))
+assert_eq(center.h, 40.0)
+assert_eq(center.children[1].y, 10.0)
+let lead = must(lay(Row(alignment = .Leading, spacing = 0.0, children = [tall, short]), 100.0, 100.0))
+assert_eq(lead.children[1].y, 0.0)
+
+# A Column stacks vertically with the same machinery.
+let col = must(lay(Column(alignment = .Trailing, spacing = 4.0, children = [box(30.0), box(50.0)]), 100.0, 100.0))
+assert_eq(col.children[1].y, 24.0)
+assert_eq(col.children[0].x, 20.0)     # trailing: 50 - 30
+assert_eq(col.h, 44.0)
+
+# ── priority and insufficient space ───────────────────────────────────────────────────────────
+
+# Two texts (min 32 = one word, ideal 72) in a 120-wide row, no gap. A child reports the size it
+# chose, not the share it was offered: with equal priority each gets 60 (< 72), so both wrap to 32.
+def View longText():
+    Text("aaaa bbbb")
+
+let eq = must(lay(Row(alignment = .Center, spacing = 0.0, children = [longText(), longText()]), 120.0, 100.0))
+assert_eq(eq.children[0].w, 32.0)
+assert_eq(eq.children[1].w, 32.0)
+assert_eq(eq.children[0].h, 32.0)      # two lines
+
+# With a higher priority the second text is served first, up to its ideal, so it fits on one line.
+let pr = must(lay(Row(alignment = .Center, spacing = 0.0, children = [longText(), Priority(value = 1.0, children = [longText()])]), 120.0, 100.0))
+assert_eq(pr.children[1].w, 72.0)
+assert_eq(pr.children[1].h, 16.0)
+assert_eq(pr.children[0].w, 32.0)
+
+# Below the sum of minimums every child keeps its minimum and the stack overflows its proposal.
+let tiny = must(lay(Row(alignment = .Center, spacing = 0.0, children = [longText(), longText()]), 10.0, 100.0))
+assert_eq(tiny.children[0].w, 32.0)
+assert_eq(tiny.w, 64.0)
+
+print "layout ok"

@@ -1,0 +1,455 @@
+# boring-ui headless layout (docs/design-notes/boring-ui-draft.md, "Layout and modifier
+# composition"): size negotiation and placement over the mounted tree produced by `core.br`.
+# Layer 3, first slice. No text shaping, rendering or platform input — text is measured with a
+# deterministic fixture font (every character `charWidth` wide, every line `lineHeight` tall) so
+# results are exact and golden-testable.
+#
+# Contract (draft, "Size negotiation and default sizing"): the parent proposes a size, the child
+# reports the size it chose, the parent places it. Each proposal axis is independently
+# unspecified (`nil`); a proposal is not a constraint, a child may report more. Stacks use the
+# draft's deterministic allocation: reserve every child's minimum, then water-fill by priority
+# toward each ideal, then toward each maximum.
+#
+# Implemented: `Text`, `Padding`, `Frame` (fixed/min/max), `Spacer`, `Priority`, `Row`, `Column`
+# (spacing, cross-axis alignment); composite views and `KeyedGroup` are transparent.
+# Not yet: `fill*`, `Layer`, `clip`, `Scroll`, baseline alignment, idealWidth, adaptive spacing
+# pairs (one default gap), right-to-left, device-pixel rounding, line limits/truncation.
+
+use ui.core.*
+
+# Fixture "theme" and "font". The theme's adaptive spacing is one value for now.
+pub let float charWidth = 8.0
+pub let float lineHeight = 16.0
+pub let float defaultSpacing = 8.0
+pub let float spacerMin = 8.0
+# The private unbounded-maximum sentinel of the layout protocol (never a public value).
+pub let float unbounded = 1000000000.0
+
+pub struct Size:
+    pub float w
+    pub float h
+
+# A proposal: each axis independently specified or `nil` (unspecified — "your ideal size").
+pub struct Prop:
+    pub float? w = nil
+    pub float? h = nil
+
+# A child's interval on one axis under the current cross-axis proposal.
+pub struct Span:
+    pub float min
+    pub float ideal
+    pub float max
+
+# A placed node, in window coordinates. Transparent nodes (composite views) share their body's frame;
+# `KeyedGroup` nodes do not appear — their items are the stack's children directly.
+pub struct Placed:
+    pub int id
+    pub string kind
+    pub float x
+    pub float y
+    pub float w
+    pub float h
+    pub var mut {string=string} props = {=}
+    pub var mut [Placed] children = []
+
+struct Neg:
+    var mut [mut Mounted] items = []
+    var mut [float] mains = []
+    var mut [Size] sizes = []
+    var float gap = 0.0
+    var float total = 0.0
+    var float cross = 0.0
+
+pub def float maxOf(float a, float b):
+    if a > b:
+        return a
+    b
+
+pub def float minOf(float a, float b):
+    if a < b:
+        return a
+    b
+
+def float clampTo(float v, float lo, float hi):
+    maxOf(lo, minOf(v, hi))
+
+def float nonNeg(float v):
+    maxOf(v, 0.0)
+
+# ── props ─────────────────────────────────────────────────────────────────────────────────────
+
+def float? numProp(Mounted n, string key):
+    if let s = n.props[key]:
+        return s as float
+    nil
+
+def bool hasChild(Mounted n):
+    n.children.length > 0
+
+# Composite views (they carry their `View`), `Priority`, `Background` and `Clip` forward all layout to
+# their one child (the last two only add painting/hit-test behaviour, see scene.br).
+def bool isTransparent(Mounted n):
+    n.view != nil or transparentKinds().contains(n.kind)
+
+# Wrappers that forward all layout to their one child (they only add behaviour elsewhere).
+def [string] transparentKinds():
+    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup"]
+
+# A stack's children with every `KeyedGroup` replaced by its items, in order.
+def [mut Mounted] flatten(Mounted n):
+    mut [mut Mounted] out = []
+    for c in n.children:
+        if c.kind == "KeyedGroup":
+            for g in flatten(c):
+                out.push(g)
+        else:
+            out.push(c)
+    out
+
+def float priorityOf(Mounted n):
+    if n.kind == "Priority":
+        return numProp(n, "value") else (0.0)
+    0.0
+
+def float alignFraction(Mounted n):
+    if let a = n.props["alignment"]:
+        if a == "Leading":
+            return 0.0
+        if a == "Trailing":
+            return 1.0
+    0.5
+
+def float gapOf(Mounted n):
+    numProp(n, "spacing") else (defaultSpacing)
+
+# ── text (fixture font) ───────────────────────────────────────────────────────────────────────
+
+def float textWidth(string s):
+    s.length * charWidth
+
+def [string] words(string s):
+    mut [string] out = []
+    for w in s.split(" "):
+        if w.length > 0:
+            out.push(w)
+    out
+
+# Greedy word wrap under `limit` (nil = no wrapping). A word longer than the limit overflows.
+def [string] wrap(string content, float? limit):
+    let ws = words(content)
+    if ws.length == 0:
+        return [""]
+    if limit == nil:
+        return [ws.join(" ")]
+    let max = limit else (0.0)
+    mut [string] lines = []
+    var current = ""
+    for w in ws:
+        if current == "":
+            current = w
+        elif textWidth("{current} {w}") <= max:
+            current = "{current} {w}"
+        else:
+            lines.push(current)
+            current = w
+    lines.push(current)
+    lines
+
+def Size measureText(Mounted n, Prop p):
+    let content = n.props["content"] else ("")
+    let lines = wrap(content, p.w)
+    var widest = 0.0
+    for l in lines:
+        widest = maxOf(widest, textWidth(l))
+    Size(w = widest, h = lines.length * lineHeight)
+
+def float longestWord(string content):
+    var widest = 0.0
+    for w in words(content):
+        widest = maxOf(widest, textWidth(w))
+    widest
+
+# ── spans (min / ideal / max on one axis) ─────────────────────────────────────────────────────
+
+def Span fixedSpan(float v):
+    Span(min = v, ideal = v, max = v)
+
+def Span span(Mounted n, bool horiz, float? cross):
+    if isTransparent(n):
+        if !hasChild(n):
+            return fixedSpan(0.0)
+        return span(n.children[0], horiz, cross)
+    let k = n.kind
+    if k == "Text":
+        let content = n.props["content"] else ("")
+        if horiz:
+            return Span(min = longestWord(content), ideal = textWidth(wrap(content, nil)[0]), max = textWidth(wrap(content, nil)[0]))
+        let h = measureText(n, Prop(w = cross, h = nil)).h
+        return fixedSpan(h)
+    if k == "Spacer":
+        let m = numProp(n, "minLength") else (spacerMin)
+        return Span(min = m, ideal = m, max = unbounded)
+    if k == "Padding":
+        let i = numProp(n, "insets") else (0.0)
+        var inner = cross
+        if let c = cross:
+            inner = nonNeg(c - 2.0 * i)
+        let s = span(n.children[0], horiz, inner)
+        return Span(min = s.min + 2.0 * i, ideal = s.ideal + 2.0 * i, max = minOf(s.max + 2.0 * i, unbounded))
+    if k == "Frame":
+        return frameSpan(n, horiz, cross)
+    if k == "Row" or k == "Column":
+        return stackSpan(n, k == "Row", horiz, cross)
+    fixedSpan(0.0)
+
+def Span frameSpan(Mounted n, bool horiz, float? cross):
+    var fixed = "width"
+    var lo = "minWidth"
+    var hi = "maxWidth"
+    if !horiz:
+        fixed = "height"
+        lo = "minHeight"
+        hi = "maxHeight"
+    if let f = numProp(n, fixed):
+        return fixedSpan(f)
+    let s = span(n.children[0], horiz, cross)
+    let low = numProp(n, lo) else (0.0)
+    let high = numProp(n, hi) else (unbounded)
+    Span(min = clampTo(s.min, low, high), ideal = clampTo(s.ideal, low, high), max = clampTo(s.max, low, high))
+
+def Span stackSpan(Mounted n, bool isRow, bool horiz, float? cross):
+    if isRow == horiz:
+        # Along the stack's own main axis: children's intervals add up, gaps included.
+        let items = flatten(n)
+        let g = gapOf(n)
+        var lo = 0.0
+        var id = 0.0
+        var hi = 0.0
+        for c in items:
+            let s = span(c, horiz, cross)
+            lo += s.min
+            id += s.ideal
+            hi += s.max
+        let gaps = g * nonNeg(items.length - 1)
+        return Span(min = lo + gaps, ideal = id + gaps, max = minOf(hi + gaps, unbounded))
+    # Across: negotiate the main axis under the given proposal, then report the resulting extent.
+    let neg = negotiate(n, isRow, cross, nil)
+    fixedSpan(neg.cross)
+
+# ── stack negotiation ─────────────────────────────────────────────────────────────────────────
+
+def Prop proposal(bool horiz, float? main, float? cross):
+    if horiz:
+        return Prop(w = main, h = cross)
+    Prop(w = cross, h = main)
+
+# Water-filling inside one priority group toward `target`: the child with the smallest remaining
+# range reaches its bound first, the rest share what is left equally. Returns the space left over.
+def float fill(mut [float] cur, [float] target, [int] group, float remaining):
+    var left = remaining
+    mut [int] order = []
+    for i in group:
+        order.push(i)
+    # insertion sort by remaining range, ties by index (deterministic)
+    var a = 1
+    while a < order.length:
+        var b = a
+        while b > 0 and (target[order[b - 1]] - cur[order[b - 1]]) > (target[order[b]] - cur[order[b]]):
+            let tmp = order[b - 1]
+            order[b - 1] = order[b]
+            order[b] = tmp
+            b -= 1
+        a += 1
+    var k = 0
+    while k < order.length:
+        let i = order[k]
+        let share = left / (order.length - k)
+        let take = minOf(target[i] - cur[i], share)
+        cur[i] = cur[i] + nonNeg(take)
+        left -= nonNeg(take)
+        k += 1
+    left
+
+def [float] distinctPrioritiesDesc([Mounted] items):
+    mut [float] ps = []
+    for c in items:
+        let p = priorityOf(c)
+        if !ps.contains(p):
+            ps.push(p)
+    ps.sort()
+    ps.reversed()
+
+def Neg negotiate(Mounted n, bool isRow, float? mainProp, float? crossProp):
+    mut neg = Neg()
+    neg.items = flatten(n)
+    neg.gap = gapOf(n)
+    let count = neg.items.length
+    let gaps = neg.gap * nonNeg(count - 1)
+    mut [float] mins = []
+    mut [float] ideals = []
+    mut [float] maxs = []
+    for c in neg.items:
+        let s = span(c, isRow, crossProp)
+        mins.push(s.min)
+        ideals.push(s.ideal)
+        maxs.push(s.max)
+    mut [float] cur = []
+    for m in mins:
+        cur.push(m)
+    if let avail = mainProp:
+        var remaining = nonNeg(avail - gaps - sumOf(mins))
+        let prios = distinctPrioritiesDesc(neg.items)
+        # toward each ideal, then toward each maximum, highest priority group first
+        for round in 0..<2:
+            var target = ideals.clone()
+            if round == 1:
+                target = maxs.clone()
+            for pr in prios:
+                mut [int] group = []
+                for i in 0..<count:
+                    if priorityOf(neg.items[i]) == pr:
+                        group.push(i)
+                remaining = fill(cur, target, group, remaining)
+    else:
+        cur = ideals.clone()
+    # measure each child under its assigned main size and the cross proposal
+    var main = 0.0
+    var crossMax = 0.0
+    for i in 0..<count:
+        let c = neg.items[i]
+        var sz = measure(c, proposal(isRow, cur[i], crossProp))
+        if c.kind == "Spacer":
+            sz = Size(w = cur[i], h = 0.0)
+            if !isRow:
+                sz = Size(w = 0.0, h = cur[i])
+        neg.sizes.push(sz)
+        var m = sz.h
+        var x = sz.w
+        if isRow:
+            m = sz.w
+            x = sz.h
+        neg.mains.push(m)
+        main += m
+        crossMax = maxOf(crossMax, x)
+    neg.total = main + gaps
+    neg.cross = crossMax
+    neg
+
+def float sumOf([float] xs):
+    var t = 0.0
+    for x in xs:
+        t += x
+    t
+
+# ── measure ───────────────────────────────────────────────────────────────────────────────────
+
+pub def Size measure(Mounted n, Prop p):
+    if isTransparent(n):
+        if !hasChild(n):
+            return Size(w = 0.0, h = 0.0)
+        return measure(n.children[0], p)
+    let k = n.kind
+    if k == "Text":
+        return measureText(n, p)
+    if k == "Spacer":
+        let m = numProp(n, "minLength") else (spacerMin)
+        return Size(w = maxOf(m, p.w else (m)), h = maxOf(m, p.h else (m)))
+    if k == "Padding":
+        let i = numProp(n, "insets") else (0.0)
+        let cs = measure(n.children[0], Prop(w = shrink(p.w, 2.0 * i), h = shrink(p.h, 2.0 * i)))
+        return Size(w = cs.w + 2.0 * i, h = cs.h + 2.0 * i)
+    if k == "Frame":
+        return measureFrame(n, p)
+    if k == "Row" or k == "Column":
+        let isRow = k == "Row"
+        var mainP = p.h
+        var crossP = p.w
+        if isRow:
+            mainP = p.w
+            crossP = p.h
+        let neg = negotiate(n, isRow, mainP, crossP)
+        if isRow:
+            return Size(w = neg.total, h = neg.cross)
+        return Size(w = neg.cross, h = neg.total)
+    Size(w = 0.0, h = 0.0)
+
+def float? shrink(float? v, float by):
+    if let x = v:
+        return nonNeg(x - by)
+    nil
+
+# The proposal a Frame passes to its child on one axis, and the size it reports on that axis.
+def float? frameProposal(float? incoming, float? fixed, float? lo, float? hi):
+    if let f = fixed:
+        return f
+    if let x = incoming:
+        return clampTo(x, lo else (0.0), hi else (unbounded))
+    nil
+
+def Size measureFrame(Mounted n, Prop p):
+    let child = n.children[0]
+    let fw = numProp(n, "width")
+    let fh = numProp(n, "height")
+    let cs = measure(child, Prop(
+        w = frameProposal(p.w, fw, numProp(n, "minWidth"), numProp(n, "maxWidth")),
+        h = frameProposal(p.h, fh, numProp(n, "minHeight"), numProp(n, "maxHeight"))))
+    var w = clampTo(cs.w, numProp(n, "minWidth") else (0.0), numProp(n, "maxWidth") else (unbounded))
+    var h = clampTo(cs.h, numProp(n, "minHeight") else (0.0), numProp(n, "maxHeight") else (unbounded))
+    if let f = fw:
+        w = f
+    if let f = fh:
+        h = f
+    Size(w = w, h = h)
+
+# ── place ─────────────────────────────────────────────────────────────────────────────────────
+
+def Placed placeChild(Mounted c, float x, float y, Size within):
+    let cs = measure(c, Prop(w = within.w, h = within.h))
+    place(c, x + (within.w - cs.w) / 2.0, y + (within.h - cs.h) / 2.0, cs)
+
+pub def Placed place(Mounted n, float x, float y, Size size):
+    mut node = Placed(id = n.id, kind = n.kind, x = x, y = y, w = size.w, h = size.h)
+    node.props = n.props
+    if isTransparent(n):
+        if hasChild(n):
+            let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
+            node.children.push(place(n.children[0], x, y, cs))
+        return node
+    let k = n.kind
+    if k == "Padding":
+        let i = numProp(n, "insets") else (0.0)
+        let cs = measure(n.children[0], Prop(w = nonNeg(size.w - 2.0 * i), h = nonNeg(size.h - 2.0 * i)))
+        node.children.push(place(n.children[0], x + i, y + i, cs))
+    elif k == "Frame":
+        node.children.push(placeChild(n.children[0], x, y, size))
+    elif k == "Row" or k == "Column":
+        let isRow = k == "Row"
+        var mainP = size.h
+        var crossP = size.w
+        var crossExtent = size.w
+        if isRow:
+            mainP = size.w
+            crossP = size.h
+            crossExtent = size.h
+        let neg = negotiate(n, isRow, mainP, crossP)
+        let frac = alignFraction(n)
+        var offset = 0.0
+        for i in 0..<neg.items.length:
+            let sz = neg.sizes[i]
+            var crossSize = sz.w
+            if isRow:
+                crossSize = sz.h
+            let crossPos = (crossExtent - crossSize) * frac
+            if isRow:
+                node.children.push(place(neg.items[i], x + offset, y + crossPos, sz))
+            else:
+                node.children.push(place(neg.items[i], x + crossPos, y + offset, sz))
+            offset += neg.mains[i] + neg.gap
+    node
+
+# Lays out the whole window: the root gets the window as its proposal.
+pub def Placed? layout(Runtime rt, float width, float height):
+    if let r = rt.root:
+        let size = measure(r, Prop(w = width, h = height))
+        return place(r, 0.0, 0.0, size)
+    nil

@@ -60,6 +60,54 @@ Semantics implemented and tested (`tests/`):
 - **Loop guard**: `flush` stops after `maxPasses` (64) consecutive passes, reports the repeatedly invalidated ids,
   clears the queue and keeps the last committed tree.
 
+## Layout — [`src/layout.br`](src/layout.br) (layer 3, first slice)
+
+Headless size negotiation and placement over the mounted tree, with a deterministic fixture font
+(8 wide per character, 16 tall per line) so results are exact and golden-testable. `layout(rt, w, h)` proposes
+the window to the root and returns a `Placed` tree in window coordinates; `measure`/`place` are public too.
+
+- The draft's contract: parent proposes (each axis independently unspecified = `nil`), child reports what it
+  chose (a proposal is not a constraint), parent places. `Text` wraps greedily under a proposed width and reports
+  its widest line; `Padding`, `Frame` (fixed / min / max), `Priority`, `Spacer`, `Row`, `Column` (spacing,
+  cross-axis alignment) are implemented; composite views are transparent, `KeyedGroup`s are erased so their
+  items are the stack's children.
+- Stack allocation is the draft's deterministic algorithm: reserve every minimum, then water-fill by priority group
+  toward each ideal, then toward each maximum; below the sum of minimums everything keeps its minimum and the stack
+  overflows; with an unspecified main axis children get their ideal and spacers their themed minimum.
+- Modifier order matters and is tested with the draft's examples (`width(200).padding(10)` = 220 wide,
+  `padding(10).width(200)` = 200 wide with the padding centered inside).
+- Native views reach layout as **props**: the lowering generates `viewProps()` (scalar fields, stringified; `T?`
+  absent while nil) and the core keeps them on each mounted node.
+- Wrappers are views for now (`Padding(insets = 10.0):` + indented child); the `view.padding(10)` method form is
+  not implemented.
+
+## Scene — [`src/scene.br`](src/scene.br) (layer 3, second slice)
+
+From a `Placed` tree: a deterministic **display list** (`FillRect`, `DrawText`, `PushClip`/`PopClip`, in paint
+order — a wrapper paints its own effect, then its child; a `Clip` brackets everything its child emits, overflow
+included) and **hit testing** (`hitTest(root, x, y)` → the ids from the root down to the deepest node under the
+point). The hit region is a node's layout bounds intersected with ancestor clips, so visible overflow never
+enlarges it, and children are tested front to back. `Background(color)` and `Clip()` are wrapper views in
+`boring.ui`, layout-transparent. `describe(command)` renders one line per command for golden tests.
+
+## Accessibility — [`src/semantics.br`](src/semantics.br) (layer 3, third slice)
+
+A backend-neutral semantic tree from the same `Placed` tree: nodes with a stable id (the mounted id — a keyed
+reorder moves the node), role, name/value/hint/heading level, window-coordinate bounds, ordered children and
+actions; `describeTree` renders it for golden tests. Layout wrappers, stacks, composite views and keyed groups are
+transparent (their semantic children attach to the nearest semantic ancestor, in order). `Text` is static text
+(name = content); `TextField` is a text input with its required label as name, the live bound value, and
+`focus`/`setValue` actions. Modifier wrappers in `boring.ui` — `AccessibilityLabel`/`Hint`/`Heading`/`Hidden`/
+`Group` — are ordered: they apply to the one semantic element they wrap (otherwise an error is reported and the
+nodes are kept), a label outside a group names the group, a label inside names the child, and `Hidden` drops the
+subtree without touching layout. An unlabeled `TextField` is a validation error in `Semantics.errors` but stays
+in the tree. Not yet: `Button`/`Toggle`/`Image`/`Video`/`Separator`/`Scroll`/`List`/`Sheet`, live regions,
+`accessibilityValue`, modal scoping, selection actions, and the platform adapter.
+
+Not yet: `fill*`, `Layer`, `clip`, `Scroll`, baseline alignment, `idealWidth`, adaptive spacing pairs (one
+default gap), right-to-left, device-pixel rounding, line limits/truncation — and, for the scene: borders, overlays, opacity, shadows, transforms, images, text decorations/carets,
+hit shapes, modal routing.
+
 ## Not here yet
 
 - **`boring build`.** The core and the typed-state adapter run under `boring run` only. `boring build` turns the

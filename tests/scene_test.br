@@ -1,0 +1,55 @@
+# Display list and hit testing (src/scene.br). Run: boring run tests/scene_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Placed lay(View root, float w, float h):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    must(layout(rt, w, h))
+
+def string dump(Placed p):
+    mut parts = []
+    for c in displayList(p):
+        parts.push(describe(c))
+    parts.join("; ")
+
+# ── paint order: a wrapper paints its own effect, then its child ──────────────────────────────
+
+let card = lay(Padding(insets = 4.0, children = [Background(color = "red", children = [Padding(insets = 2.0, children = [Text("hi")])])]), 100.0, 100.0)
+assert_eq(dump(card), "FillRect 4,4 20x20 red; DrawText 6,6 16x16 'hi'")
+
+# Siblings paint in source order, so later ones cover earlier ones.
+let row = lay(Row(alignment = .Center, spacing = 0.0, children = [Text("a"), Text("bb")]), 100.0, 100.0)
+assert_eq(dump(row), "DrawText 0,0 8x16 'a'; DrawText 8,0 16x16 'bb'")
+
+# A clip pushes around everything its child emits, even what overflows.
+let clipped = lay(Clip(children = [Frame(width = 10.0, height = 16.0, children = [Text("hello")])]), 100.0, 100.0)
+assert_eq(dump(clipped), "PushClip 0,0 10x16; DrawText -15,0 40x16 'hello'; PopClip 0,0 10x16")
+
+# ── hit testing ────────────────────────────────────────────────────────────────────────────────
+
+# The retained path runs root → target; composite views and wrappers are on it.
+let h = lay(Row(alignment = .Center, spacing = 0.0, children = [Text("a"), Text("bb")]), 100.0, 100.0)
+assert_eq(hitTest(h, 12.0, 4.0).length, 2)           # Row, second Text
+assert_eq(hitTest(h, 12.0, 4.0)[1], h.children[1].id)
+assert_eq(hitTest(h, 4.0, 4.0)[1], h.children[0].id)
+assert_eq(hitTest(h, 50.0, 4.0).length, 0)           # right of the content: not on the root either
+assert_eq(hitTest(h, 12.0, 40.0).length, 0)
+
+# Overflow does not enlarge the hit region, and a clip bounds everything under it.
+let c = clipped
+assert_eq(hitTest(c, 5.0, 8.0).length, 3)            # Clip, Frame, Text
+assert_eq(hitTest(c, 20.0, 8.0).length, 0)           # over the visible overflow, outside the clip: no hit
+assert_eq(hitTest(c, -5.0, 8.0).length, 0)
+
+print "scene ok"
