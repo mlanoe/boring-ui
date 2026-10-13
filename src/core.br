@@ -52,6 +52,10 @@ pub struct Mounted:
 # The runtime's view of a tree of lowered `View`s: native views become `Desc`s eagerly, a
 # composite view stays a leaf carrying its `View` until it is expanded against its mounted state.
 pub Desc describe(View v):
+    # `Sited` is the lowering's transparent static-position tag: its one child, at that site.
+    if v.viewKind() == "Sited":
+        let inner = describe(v.viewChildren()[0])
+        return Desc(kind = inner.kind, site = v.viewSite(), key = inner.key, children = inner.children, view = inner.view)
     if v.isComposite():
         return Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), view = v)
     mut [Desc] kids = []
@@ -59,15 +63,16 @@ pub Desc describe(View v):
         kids.push(describe(c))
     Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), children = kids)
 
-# The static site of a child at index `i`: explicit, else — for a keyed iteration group — a
-# shared default (-2, so a reorder never changes identity; two keyed `for`s under one parent need
-# explicit sites until the lowering emits them), else the sibling index.
+# The identity site of a child at index `i`, encoded so the three ways of being positioned can never
+# collide: an explicit static site `n` (>= 0, from the lowering's `Sited` tag) is `2n`, a keyed
+# iteration group without one is the shared `-2` (a reorder never changes identity), and a plain
+# positional child is `2i + 1`.
 def int siteOf(Desc child, int i):
     if child.site >= 0:
-        return child.site
+        return child.site * 2
     if child.key != "":
         return -2
-    i
+    i * 2 + 1
 
 # A generation-checked reference to a mounted node.
 pub struct Handle:

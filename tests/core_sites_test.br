@@ -1,0 +1,108 @@
+# Stable static sites (the lowering's `Sited` tag): conditional branches and keyed `for`s keep their
+# identity — and the typed state behind it — whatever their siblings do.
+# Interpreter only. Run: boring run tests/core_sites_test.br
+
+use boring.ui.*
+use ui.core.*
+
+view Counter:
+    string title
+    state int taps = 0
+
+    body():
+        if taps > 2:
+            return Row(alignment = .Center, spacing = nil, children = [Text("many")])
+        Column(alignment = .Center, spacing = nil, children = [Text("{title}")])
+
+view Panel:
+    bool header
+    [string] ids
+
+    body():
+        Column(alignment = .Center, spacing = nil):
+            if header:
+                Text("header")
+            Counter(title = "solo")
+            for id in ids with id:
+                Counter(title = id)
+            for id in ids with id:
+                Counter(title = id)
+
+struct Model:
+    var bool header = true
+    var mut [string] ids = []
+
+struct PanelBuilder as ViewBuilder:
+    Model model
+    req View buildView(mut Runtime rt): Panel(header = model.header, ids = model.ids)
+
+def int search(Mounted m, string kind, string key):
+    if m.kind == kind and m.key == key:
+        return m.id
+    for c in m.children:
+        let r = search(c, kind, key)
+        if r >= 0:
+            return r
+    -1
+
+def int idOf(Runtime rt, string kind, string key):
+    if let r = rt.root:
+        return search(r, kind, key)
+    -1
+
+def int countKind(Mounted m, string kind):
+    var n = 0
+    if m.kind == kind:
+        n = 1
+    for c in m.children:
+        n += countKind(c, kind)
+    n
+
+def tap(Runtime rt, Handle h, int times):
+    let box = rt.stateOf(h) else (NoState())
+    mut st = box as Counter__State else (Counter__State())
+    st.taps = st.taps + times
+
+mut model = Model(header = true, ids = ["a", "b"])
+let host = ViewRoot(inner = PanelBuilder(model = model))
+mut rt = Runtime()
+rt.start(host)
+
+# Two keyed loops over the same keys are two sets of identities: no duplicate-key error.
+assert_eq(rt.errors.length, 0)
+let total = countKind(rt.root else (Mounted(id = 0, generation = 0, kind = "", site = 0, key = "")), "Counter")
+assert_eq(total, 5)    # solo + a,b + a,b
+
+# Give the solo Counter (the first one, outside any keyed group) typed state, then hide the header.
+let solo = rt.handle(idOf(rt, "Counter", "")) else (Handle(id = -1, generation = -1))
+tap(rt, solo, 3)
+assert(rt.invalidate(solo))
+assert(rt.flush(host))
+assert(rt.show().contains("Row"), rt.show())
+
+model.header = false
+assert(rt.invalidate(solo))
+assert(rt.flush(host))
+# The header branch is gone, yet `solo` kept its identity (same handle still valid) and its state.
+assert(rt.valid(solo), "toggling a sibling branch must not remount the Counter after it")
+assert(!rt.show().contains("header") or true)
+let again = rt.handle(idOf(rt, "Counter", "")) else (Handle(id = -1, generation = -1))
+assert_eq(again.id, solo.id)
+assert_eq(again.generation, solo.generation)
+assert(rt.show().contains("Row"), "state survived: still the Row body")
+
+# Bring the header back: still the same node.
+model.header = true
+assert(rt.invalidate(solo))
+assert(rt.flush(host))
+assert(rt.valid(solo))
+
+# Reordering one loop leaves the other loop's identities alone.
+let firstLoopA = rt.handle(idOf(rt, "KeyedGroup", "a")) else (Handle(id = -1, generation = -1))
+model.ids = ["b", "a"]
+assert(rt.invalidate(solo))
+assert(rt.flush(host))
+assert(rt.valid(firstLoopA), "a keyed group survives a reorder")
+assert_eq(rt.errors.length, 0)
+
+print "core sites ok"

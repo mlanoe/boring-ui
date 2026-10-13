@@ -50,6 +50,13 @@ Semantics implemented and tested (`tests/`):
   `expand` (which downcasts it with `as V__State`) on every build — it survives parent rebuilds and keyed
   reorders and dies with its identity. A duplicate key below a composite is detected while that subtree is
   reconciled and leaves *that subtree* as it was.
+- **Stable static sites** (`tests/core_sites_test.br`): in a `[View]` block with `if`/`for`, the array-block
+  lowering wraps every element as `Sited(site = n, children = [element])` (`n` = its position in the block's
+  source, preorder, so conditional branches get distinct numbers; a keyed loop gets one, and its iterations
+  number their own items afresh). `describe` treats `Sited` as transparent — its child, at that site — so
+  toggling a branch or reordering one loop never remounts what comes after it, and two keyed loops over the
+  same keys are distinct identities. Identity sites are encoded collision-free: explicit `2n`, keyed default
+  `-2`, positional `2i+1`.
 - **Loop guard**: `flush` stops after `maxPasses` (64) consecutive passes, reports the repeatedly invalidated ids,
   clears the queue and keeps the last committed tree.
 
@@ -59,9 +66,8 @@ Semantics implemented and tested (`tests/`):
   generated runtime methods off (`lower_view::set_runtime_methods`): returning a native view's owned `[View]`
   children needs a by-reference story for `Box<dyn View>`, and an expanded body that borrows its mounted state
   cannot outlive the call (the draft's "callback `self` as mounted-view context" is the same problem).
-- Keys are strings (a lowered `for … with key` passes `"{key}"`); sites: keyed groups default to a shared site
-  (`-2`), so two keyed `for`s under one parent need explicit sites, and the array-block lowering does not emit
-  stable sites for `if` branches — a view whose children sit behind a conditional shifts sibling indices.
+- Keys are strings (a lowered `for … with key` passes `"{key}"`). Unkeyed `for` loops keep positional (index)
+  identity for their items.
 - Views with `env` are not expandable (no environment to give them); `bind` slots work (they are inputs).
 - Per-identity (incremental) rebuilds — `flush` conservatively rebuilds the whole window, as the draft allows;
   lifecycle *hooks as user callbacks* (`events` is a log), `onTask` and its generations, focus, animated removal,
