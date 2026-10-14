@@ -1,0 +1,118 @@
+# The first end-to-end boring-ui application: an editable todo list (docs/design-notes/
+# boring-ui-draft.md, "First implementation target"). Add an item through a form with its own draft
+# state, edit an item in place, select, reorder and delete — with the state of surviving rows
+# preserved. Driven headlessly by tests/todo_test.br; nothing here knows about a window.
+#
+# Deviations from the draft's sketch, each waiting on something not built yet:
+#   - `Todo`'s editable fields are shared `Slot`s, so a row can `bind` them. The draft binds a keyed
+#     element projection (`bind Todo item`, `TextField(value = item.title)`), which the lowering
+#     does not support.
+#   - the "new item" form is a conditional branch, not a `Sheet`: its draft `state` is destroyed when
+#     the branch unmounts, which is the behaviour a sheet has to give.
+#   - rows have Select / Up / Delete buttons instead of a `List` with selection, `onMove`, `onDelete`.
+#   - `.focused(...)` bindings, `Separator`, `Scroll`, fonts and theming are absent.
+
+use boring.ui.*
+
+# A row reports what the user asked for ("select", "up", "delete") through one callback.
+pub use RowCommand as def void(string)
+
+pub struct Todo:
+    pub int id
+    pub var mut Slot<string>'actor title
+    pub var mut Slot<bool>'actor completed
+
+pub Todo newTodo(int id, string title):
+    Todo(id = id, title = Slot(value = title), completed = Slot(value = false))
+
+# The form for a new item. Its `title` is draft state: leaving the screen destroys it. The parent's
+# collection, id counter and presentation flag cross the boundary through `bind`.
+pub view NewTodoForm:
+    bind [Todo] items
+    bind int nextId
+    bind bool isPresented
+
+    state string title = ""
+
+    def add():
+        let raw = "{title}"
+        let clean = raw.trim()
+        if clean.length == 0:
+            return
+        items.push(newTodo(nextId, clean))
+        nextId += 1
+        isPresented = false
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            Text("New item")
+            TextField(value = title, label = "Title", placeholder = "Title")
+            Row(alignment = .Center, spacing = 8.0):
+                Button(label = "Cancel", onActivate = ():
+                    isPresented = false)
+                Button(label = "Add", onActivate = ():
+                    self.add())
+
+pub view TodoRow:
+    Todo item
+    bool selected
+    RowCommand onCommand
+
+    body():
+        Row(alignment = .Center, spacing = 8.0):
+            Toggle(value = item.completed, label = "Completed")
+            TextField(value = item.title, label = "Item title", placeholder = "")
+            Button(label = "Select", onActivate = ():
+                onCommand("select"))
+            Button(label = "Up", onActivate = ():
+                onCommand("up"))
+            Button(label = "Delete", onActivate = ():
+                onCommand("delete"))
+
+pub view TodoApp:
+    state [Todo] items = [newTodo(1, "Design boring-ui"), newTodo(2, "Implement the vertical slice")]
+    state int nextId = 3
+    state int selection = -1
+    state bool showingNewItem = false
+
+    req int indexOf(int id):
+        for i in 0..<items.length:
+            if items[i].id == id:
+                return i
+        -1
+
+    def select(int id):
+        selection = id
+
+    def command(string name, int id):
+        if name == "select":
+            self.select(id)
+        if name == "up":
+            self.moveUp(id)
+        if name == "delete":
+            self.remove(id)
+
+    def moveUp(int id):
+        let i = self.indexOf(id)
+        if i > 0:
+            items.move(i, i - 1)
+
+    def remove(int id):
+        let i = self.indexOf(id)
+        if i >= 0:
+            items.removeIndices([i])
+        if selection == id:
+            selection = -1
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            Row(alignment = .Center, spacing = 8.0):
+                Text("Todos")
+                Spacer()
+                Button(label = "Add", onActivate = ():
+                    showingNewItem = true)
+            for item in items with item.id:
+                TodoRow(item = item, selected = selection == item.id, onCommand = (command):
+                    self.command(command, item.id))
+            if showingNewItem:
+                NewTodoForm(items = items, nextId = nextId, isPresented = showingNewItem)

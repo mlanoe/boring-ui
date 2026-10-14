@@ -37,7 +37,7 @@ pub def [Handle] focusOrder(Runtime rt):
         return collect(r)
     []
 
-pub def void focus(mut Runtime rt, Handle h):
+pub def void setFocus(mut Runtime rt, Handle h):
     if rt.valid(h):
         rt.focus = h
 
@@ -70,7 +70,7 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
         if let node = rt.find(id):
             if isFocusable(node.kind):
                 let h = Handle(id = node.id, generation = node.generation)
-                focus(rt, h)
+                setFocus(rt, h)
                 if node.kind == "Button":
                     _ = act(rt, host, h, "activate", "")
                 if node.kind == "Toggle":
@@ -87,7 +87,7 @@ def int indexOf([Handle] order, Handle h):
 
 # A key press: Tab / ShiftTab move focus through `focusOrder` (wrapping); Enter and Space activate
 # the focused Button; Space toggles the focused Toggle. Returns whether the key was used.
-pub def bool key(mut Runtime rt, Builder host, string name):
+pub def bool keyPress(mut Runtime rt, Builder host, string name):
     let order = focusOrder(rt)
     if order.length == 0:
         return false
@@ -102,7 +102,7 @@ pub def bool key(mut Runtime rt, Builder host, string name):
             next = (at - 1 + order.length) % order.length
             if at < 0:
                 next = order.length - 1
-        focus(rt, order[next])
+        setFocus(rt, order[next])
         return true
     if let f = rt.focus:
         if !rt.valid(f):

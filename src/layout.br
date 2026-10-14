@@ -24,6 +24,8 @@ pub let float defaultSpacing = 8.0
 pub let float spacerMin = 8.0
 pub let float controlPadding = 8.0
 pub let float toggleBox = 20.0
+pub let float textFieldWidth = 160.0
+pub let float textFieldHeight = 24.0
 # The private unbounded-maximum sentinel of the layout protocol (never a public value).
 pub let float unbounded = 1000000000.0
 
@@ -166,15 +168,17 @@ def Size measureText(Mounted n, Prop p):
     Size(w = widest, h = lines.length * lineHeight)
 
 # Intrinsic size of the built-in controls (themed): a button is its label plus padding, a toggle is
-# a square box, a gap and its label.
+# a square box, a gap and its label, a text field a fixed-width single line.
 def Size controlSize(Mounted n):
     let label = n.props["label"] else ("")
     if n.kind == "Button":
         return Size(w = textWidth(label) + 2.0 * controlPadding, h = lineHeight + 2.0 * controlPadding)
+    if n.kind == "TextField":
+        return Size(w = textFieldWidth, h = textFieldHeight)
     Size(w = toggleBox + controlPadding + textWidth(label), h = maxOf(toggleBox, lineHeight))
 
 def bool isControl(Mounted n):
-    n.kind == "Button" or n.kind == "Toggle"
+    n.kind == "Button" or n.kind == "Toggle" or n.kind == "TextField"
 
 def float longestWord(string content):
     var widest = 0.0

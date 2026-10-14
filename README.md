@@ -76,6 +76,7 @@ the window to the root and returns a `Placed` tree in window coordinates; `measu
   overflows; with an unspecified main axis children get their ideal and spacers their themed minimum.
 - Modifier order matters and is tested with the draft's examples (`width(200).padding(10)` = 220 wide,
   `padding(10).width(200)` = 200 wide with the padding centered inside).
+- `TextField` has a themed fixed size (160 × 24) and is painted as a field plus its value.
 - Native views reach layout as **props**: the lowering generates `viewProps()` (scalar fields, stringified; `T?`
   absent while nil) and the core keeps them on each mounted node.
 - Wrappers are views for now (`Padding(insets = 10.0):` + indented child); the `view.padding(10)` method form is
@@ -111,7 +112,7 @@ facades in `boring.ui`; the runtime owns their interaction and reaches the appli
 callback or the bound slot (the lowering generates `viewAct(action, arg)` from each facade's shape: `onActivate` →
 "activate", a `bool` bind → "toggle", a `string` bind → "setText"). Input becomes **semantic actions**:
 `pointerDown(rt, host, placed, x, y)` hit-tests, focuses the deepest control on the path and activates/toggles it;
-`key(rt, host, name)` handles `Tab`/`ShiftTab` (focus order = structural, wrapping), `Enter`/`Space`;
+`keyPress(rt, host, name)` handles `Tab`/`ShiftTab` (focus order = structural, wrapping), `Enter`/`Space`;
 `typeText` appends to the focused field; `act(rt, host, handle, action, arg)` is the accessibility entry and takes
 the same path. Each runs as one event transaction — callback, window invalidation, **one** update pass — and a
 stale handle is ignored. Keyboard focus lives on the `Runtime` (generation-checked, cleared when the node
@@ -127,6 +128,23 @@ invalidation (an action invalidates the whole window). Callbacks are written inl
 Not yet: `fill*`, `Layer`, `clip`, `Scroll`, baseline alignment, `idealWidth`, adaptive spacing pairs (one
 default gap), right-to-left, device-pixel rounding, line limits/truncation — and, for the scene: borders, overlays, opacity, shadows, transforms, images, text decorations/carets,
 hit shapes, modal routing.
+
+## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
+
+The draft's first end-to-end target, running headlessly through every layer: `TodoApp` (items, selection, an
+add form), `TodoRow` (toggle, editable title, Select / Up / Delete) and `NewTodoForm` (draft `state`, `bind`s to the
+parent's collection, id counter and presentation flag). The test mounts it, lays it out, paints it and reads its
+accessibility tree, then drives it with pointer presses, key presses, typing and semantic actions, and checks the
+draft's acceptance behaviours that exist so far: adding and editing items, an empty title refused, **cancelling
+destroys the uncommitted draft** (reopening shows an empty field), **reordering keeps row identity and keyboard
+focus**, deleting a row unmounts it and clears focus if it was inside, the accessibility tree has no unnamed
+interactive node, no runtime errors.
+
+Deviations from the draft's sketch, each waiting on something not built: `Todo`'s editable fields are shared
+`Slot`s (typed keyed-element `bind` projections are not supported — a field projection is passed through and must
+already be a `Slot`); the form is a conditional branch rather than a `Sheet`; rows have Select/Up/Delete buttons
+instead of a `List` with selection, `onMove`, `onDelete`; no `.focused` bindings, `Separator`, `Scroll`, fonts or
+theming. Interpreter only, like the rest of the runtime.
 
 ## Not here yet
 

@@ -7,3 +7,4 @@ version = "0.1.0"
 # `use ui.core.*` something to resolve against.
 [deps]
 ui = ".."
+todo = "../examples/todo"

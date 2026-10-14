@@ -60,20 +60,20 @@ assert_eq(label(rt), "1:")
 # ── keyboard: tab order, activate, toggle, typing ──────────────────────────────────────────────
 
 assert_eq(focusOrder(rt).length, 3)                     # Button, Toggle, TextField
-assert(key(rt, host, "Space"), "space on the focused button")   # focus is on the Button from the press
+assert(keyPress(rt, host, "Space"), "space on the focused button")   # focus is on the Button from the press
 assert_eq(label(rt), "2:")
-assert(key(rt, host, "Tab"))                            # → Toggle
-assert(key(rt, host, "Space"))                          # toggles the bound bool
+assert(keyPress(rt, host, "Tab"))                            # → Toggle
+assert(keyPress(rt, host, "Space"))                          # toggles the bound bool
 let tree = semantics(relayout(rt))
 assert_eq(tree.roots[1].role, "toggle")
 assert_eq(tree.roots[1].value, "true")
-assert(key(rt, host, "Tab"))                            # → TextField
+assert(keyPress(rt, host, "Tab"))                            # → TextField
 assert(typeText(rt, host, "Ad"))
 assert(typeText(rt, host, "a"))
 assert_eq(label(rt), "2:Ada")
-assert(key(rt, host, "Tab"))                            # wraps to the Button
+assert(keyPress(rt, host, "Tab"))                            # wraps to the Button
 assert(!typeText(rt, host, "x"), "typing needs a focused text field")
-assert(key(rt, host, "ShiftTab"))                       # back to the TextField
+assert(keyPress(rt, host, "ShiftTab"))                       # back to the TextField
 assert(typeText(rt, host, "!"))
 assert_eq(label(rt), "2:Ada!")
 

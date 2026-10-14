@@ -36,6 +36,10 @@ pub def paint(Placed p, mut [Command] out):
         out.push(cmd("FillRect", p, "", "button"))
         let label = p.props["label"] else ("")
         out.push(Command(kind = "DrawText", x = p.x + controlPadding, y = p.y + controlPadding, w = p.w - 2.0 * controlPadding, h = lineHeight, text = label, color = "", node = p.id))
+    if p.kind == "TextField":
+        let text = p.props["value"] else ("")
+        out.push(cmd("FillRect", p, "", "field"))
+        out.push(Command(kind = "DrawText", x = p.x + 4.0, y = p.y + 4.0, w = p.w - 8.0, h = lineHeight, text = text, color = "", node = p.id))
     if p.kind == "Toggle":
         var state = "off"
         let value = p.props["value"] else ("false")
