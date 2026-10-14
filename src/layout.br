@@ -84,7 +84,7 @@ def float nonNeg(float v):
 
 def float? numProp(Mounted n, string key):
     if let s = n.props[key]:
-        return s as float
+        return s.parseFloat()
     nil
 
 def bool hasChild(Mounted n):
@@ -129,7 +129,8 @@ def float gapOf(Mounted n):
 # ── text (fixture font) ───────────────────────────────────────────────────────────────────────
 
 def float textWidth(string s):
-    s.length * charWidth
+    let n = s.length
+    (n as float) * charWidth
 
 def [string] words(string s):
     mut [string] out = []
@@ -165,7 +166,8 @@ def Size measureText(Mounted n, Prop p):
     var widest = 0.0
     for l in lines:
         widest = maxOf(widest, textWidth(l))
-    Size(w = widest, h = lines.length * lineHeight)
+    let count = lines.length
+    Size(w = widest, h = (count as float) * lineHeight)
 
 # Intrinsic size of the built-in controls (themed): a button is its label plus padding, a toggle is
 # a square box, a gap and its label, a text field a fixed-width single line.
@@ -213,10 +215,7 @@ def Span span(Mounted n, bool horiz, float? cross):
         return Span(min = m, ideal = m, max = unbounded)
     if k == "Padding":
         let i = numProp(n, "insets") else (0.0)
-        var inner = cross
-        if let c = cross:
-            inner = nonNeg(c - 2.0 * i)
-        let s = span(n.children[0], horiz, inner)
+        let s = span(n.children[0], horiz, shrink(cross, 2.0 * i))
         return Span(min = s.min + 2.0 * i, ideal = s.ideal + 2.0 * i, max = minOf(s.max + 2.0 * i, unbounded))
     if k == "Frame":
         return frameSpan(n, horiz, cross)
@@ -252,7 +251,7 @@ def Span stackSpan(Mounted n, bool isRow, bool horiz, float? cross):
             lo += s.min
             id += s.ideal
             hi += s.max
-        let gaps = g * nonNeg(items.length - 1)
+        let gaps = g * nonNeg((items.length - 1) as float)
         return Span(min = lo + gaps, ideal = id + gaps, max = minOf(hi + gaps, unbounded))
     # Across: negotiate the main axis under the given proposal, then report the resulting extent.
     let neg = negotiate(n, isRow, cross, nil)
@@ -276,7 +275,7 @@ def float fill(mut [float] cur, [float] target, [int] group, float remaining):
     var a = 1
     while a < order.length:
         var b = a
-        while b > 0 and (target[order[b - 1]] - cur[order[b - 1]]) > (target[order[b]] - cur[order[b]]):
+        while b > 0 and rangeOf(target, cur, order[b - 1]) > rangeOf(target, cur, order[b]):
             let tmp = order[b - 1]
             order[b - 1] = order[b]
             order[b] = tmp
@@ -285,12 +284,31 @@ def float fill(mut [float] cur, [float] target, [int] group, float remaining):
     var k = 0
     while k < order.length:
         let i = order[k]
-        let share = left / (order.length - k)
+        let share = left / ((order.length - k) as float)
         let take = minOf(target[i] - cur[i], share)
         cur[i] = cur[i] + nonNeg(take)
         left -= nonNeg(take)
         k += 1
     left
+
+def float rangeOf([float] target, [float] cur, int i):
+    target[i] - cur[i]
+
+# Floats are not `Ord` in Rust, so sort by hand (insertion sort, descending).
+def [float] sortDescending([float] xs):
+    mut [float] out = []
+    for x in xs:
+        out.push(x)
+    var a = 1
+    while a < out.length:
+        var b = a
+        while b > 0 and out[b - 1] < out[b]:
+            let tmp = out[b - 1]
+            out[b - 1] = out[b]
+            out[b] = tmp
+            b -= 1
+        a += 1
+    out
 
 def [float] distinctPrioritiesDesc([Mounted] items):
     mut [float] ps = []
@@ -298,15 +316,14 @@ def [float] distinctPrioritiesDesc([Mounted] items):
         let p = priorityOf(c)
         if !ps.contains(p):
             ps.push(p)
-    ps.sort()
-    ps.reversed()
+    sortDescending(ps)
 
 def Neg negotiate(Mounted n, bool isRow, float? mainProp, float? crossProp):
     mut neg = Neg()
     neg.items = flatten(n)
     neg.gap = gapOf(n)
     let count = neg.items.length
-    let gaps = neg.gap * nonNeg(count - 1)
+    let gaps = neg.gap * nonNeg((count - 1) as float)
     mut [float] mins = []
     mut [float] ideals = []
     mut [float] maxs = []

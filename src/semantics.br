@@ -98,7 +98,8 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors):
         if k == "AccessibilityHeading":
             if target.role == "staticText":
                 target.role = "heading"
-                target.level = (p.props["level"] else ("1")) as int
+                let levelText = p.props["level"] else ("1")
+                target.level = levelText.parseInt() else (1)
             else:
                 errors.push("AccessibilityHeading (node {p.id}) applies to static text, not '{target.role}'")
         out.push(target)
@@ -114,10 +115,10 @@ pub def Semantics semantics(Placed root):
     s
 
 # Marks the node with mounted id `id` (and nothing else) as keyboard-focused.
-pub def void markFocus([mut SemNode] nodes, int id):
-    for n in nodes:
-        n.focused = n.id == id
-        markFocus(n.children, id)
+pub def void markFocus(mut [mut SemNode] nodes, int id):
+    for i in 0..<nodes.length:
+        nodes[i].focused = nodes[i].id == id
+        markFocus(nodes[i].children, id)
 
 # One line per node, indented by depth, for golden tests.
 pub def [string] describeTree([SemNode] nodes, int depth):

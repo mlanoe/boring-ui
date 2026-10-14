@@ -175,8 +175,9 @@ pub struct Runtime:
     # its body, expanded against the state this identity has kept since it mounted.
     def [Desc] childrenOf(Mounted node, Desc d):
         if let v = d.view:
-            let st = node.state else (NoState())
-            return [describe(v.expand(st))]
+            if let st = node.state:
+                return [describe(v.expand(st))]
+            return [describe(v.expand(NoState()))]
         d.children
 
     # A composite's expansion is only known while reconciling, so its keys are checked here, per
@@ -261,7 +262,7 @@ pub struct Runtime:
 
     # ── handles and writes ────────────────────────────────────────────────────
 
-    def Handle? handle(int id):
+    req Handle? handle(int id):
         if let node = nodes[id]:
             return Handle(id = node.id, generation = node.generation)
         nil
@@ -295,7 +296,8 @@ pub struct Runtime:
         if !self.valid(h):
             return nil
         if let node = nodes[h.id]:
-            return node.state
+            if let st = node.state:
+                return st
         nil
 
     # Marks a node as needing a rebuild without writing a slot (typed state is mutated in place).

@@ -19,6 +19,9 @@ use ui.core.*
 use ui.layout.*
 use ui.scene.*
 
+def string propOf(Mounted n, string name):
+    n.props[name] else ("")
+
 def bool isFocusable(string kind):
     kind == "Button" or kind == "Toggle" or kind == "TextField"
 
@@ -50,12 +53,13 @@ pub def bool act(mut Runtime rt, Builder host, Handle h, string action, string a
     if found == nil:
         return false
     let node = found else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
-    mut control = node.control else (Text(content = ""))
-    rt.beginEvent()
-    control.viewAct(action, arg)
-    rt.invalidateRoot()
-    rt.endEvent(host)
-    true
+    if let control = node.control:
+        rt.beginEvent()
+        control.viewAct(action, arg)
+        rt.invalidateRoot()
+        rt.endEvent(host)
+        return true
+    false
 
 def Handle? handleFor(Runtime rt, int id):
     rt.handle(id)
@@ -119,6 +123,5 @@ pub def bool typeText(mut Runtime rt, Builder host, string s):
     if let f = rt.focus:
         if let node = rt.find(f.id):
             if node.kind == "TextField":
-                let current = node.props["value"] else ("")
-                return act(rt, host, f, "setText", "{current}{s}")
+                return act(rt, host, f, "setText", "{propOf(node, "value")}{s}")
     false
