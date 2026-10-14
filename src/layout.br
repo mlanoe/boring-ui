@@ -22,6 +22,8 @@ pub let float charWidth = 8.0
 pub let float lineHeight = 16.0
 pub let float defaultSpacing = 8.0
 pub let float spacerMin = 8.0
+pub let float controlPadding = 8.0
+pub let float toggleBox = 20.0
 # The private unbounded-maximum sentinel of the layout protocol (never a public value).
 pub let float unbounded = 1000000000.0
 
@@ -163,6 +165,17 @@ def Size measureText(Mounted n, Prop p):
         widest = maxOf(widest, textWidth(l))
     Size(w = widest, h = lines.length * lineHeight)
 
+# Intrinsic size of the built-in controls (themed): a button is its label plus padding, a toggle is
+# a square box, a gap and its label.
+def Size controlSize(Mounted n):
+    let label = n.props["label"] else ("")
+    if n.kind == "Button":
+        return Size(w = textWidth(label) + 2.0 * controlPadding, h = lineHeight + 2.0 * controlPadding)
+    Size(w = toggleBox + controlPadding + textWidth(label), h = maxOf(toggleBox, lineHeight))
+
+def bool isControl(Mounted n):
+    n.kind == "Button" or n.kind == "Toggle"
+
 def float longestWord(string content):
     var widest = 0.0
     for w in words(content):
@@ -186,6 +199,11 @@ def Span span(Mounted n, bool horiz, float? cross):
             return Span(min = longestWord(content), ideal = textWidth(wrap(content, nil)[0]), max = textWidth(wrap(content, nil)[0]))
         let h = measureText(n, Prop(w = cross, h = nil)).h
         return fixedSpan(h)
+    if isControl(n):
+        let cs = controlSize(n)
+        if horiz:
+            return fixedSpan(cs.w)
+        return fixedSpan(cs.h)
     if k == "Spacer":
         let m = numProp(n, "minLength") else (spacerMin)
         return Span(min = m, ideal = m, max = unbounded)
@@ -351,6 +369,8 @@ pub def Size measure(Mounted n, Prop p):
     let k = n.kind
     if k == "Text":
         return measureText(n, p)
+    if isControl(n):
+        return controlSize(n)
     if k == "Spacer":
         let m = numProp(n, "minLength") else (spacerMin)
         return Size(w = maxOf(m, p.w else (m)), h = maxOf(m, p.h else (m)))

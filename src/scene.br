@@ -32,6 +32,18 @@ pub def paint(Placed p, mut [Command] out):
         out.push(cmd("FillRect", p, "", p.props["color"] else ("")))
     if p.kind == "Text":
         out.push(cmd("DrawText", p, p.props["content"] else (""), ""))
+    if p.kind == "Button":
+        out.push(cmd("FillRect", p, "", "button"))
+        let label = p.props["label"] else ("")
+        out.push(Command(kind = "DrawText", x = p.x + controlPadding, y = p.y + controlPadding, w = p.w - 2.0 * controlPadding, h = lineHeight, text = label, color = "", node = p.id))
+    if p.kind == "Toggle":
+        var state = "off"
+        let value = p.props["value"] else ("false")
+        if value == "true":
+            state = "on"
+        let label = p.props["label"] else ("")
+        out.push(Command(kind = "FillRect", x = p.x, y = p.y, w = toggleBox, h = toggleBox, text = "", color = state, node = p.id))
+        out.push(Command(kind = "DrawText", x = p.x + toggleBox + controlPadding, y = p.y, w = p.w - toggleBox - controlPadding, h = p.h, text = label, color = "", node = p.id))
     if p.kind == "Clip":
         out.push(cmd("PushClip", p, "", ""))
     for c in p.children:

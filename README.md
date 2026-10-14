@@ -104,6 +104,27 @@ subtree without touching layout. An unlabeled `TextField` is a validation error 
 in the tree. Not yet: `Button`/`Toggle`/`Image`/`Video`/`Separator`/`Scroll`/`List`/`Sheet`, live regions,
 `accessibilityValue`, modal scoping, selection actions, and the platform adapter.
 
+## Controls and events — [`src/events.br`](src/events.br) (layer 4, first slice)
+
+`Button(label, onActivate)`, `Toggle(bind bool value, label)` and `TextField(bind string value, label, …)` are native
+facades in `boring.ui`; the runtime owns their interaction and reaches the application through the `onActivate`
+callback or the bound slot (the lowering generates `viewAct(action, arg)` from each facade's shape: `onActivate` →
+"activate", a `bool` bind → "toggle", a `string` bind → "setText"). Input becomes **semantic actions**:
+`pointerDown(rt, host, placed, x, y)` hit-tests, focuses the deepest control on the path and activates/toggles it;
+`key(rt, host, name)` handles `Tab`/`ShiftTab` (focus order = structural, wrapping), `Enter`/`Space`;
+`typeText` appends to the focused field; `act(rt, host, handle, action, arg)` is the accessibility entry and takes
+the same path. Each runs as one event transaction — callback, window invalidation, **one** update pass — and a
+stale handle is ignored. Keyboard focus lives on the `Runtime` (generation-checked, cleared when the node
+unmounts); layout sizes controls from the themed constants, the scene paints them, and the semantic tree gives
+them roles (`button`, `toggle`, `textField`, `focused`). Test: `tests/events_test.br` (a view whose callback
+mutates its typed state, driven by pointer, keyboard and semantic actions).
+
+Not yet: pointer release/capture/cancel, capture-target-bubble phases, disabled state, modal routing, focus rings
+and `.focused` bindings, caret/selection/IME, scroll input, error reporting from callbacks, per-state-slot
+invalidation (an action invalidates the whole window). Callbacks must be declared as a local `let` closure before
+the block (`let bump = ():` …) — a multi-line closure argument inside an array-block item does not parse yet
+(filed).
+
 Not yet: `fill*`, `Layer`, `clip`, `Scroll`, baseline alignment, `idealWidth`, adaptive spacing pairs (one
 default gap), right-to-left, device-pixel rounding, line limits/truncation — and, for the scene: borders, overlays, opacity, shadows, transforms, images, text decorations/carets,
 hit shapes, modal routing.

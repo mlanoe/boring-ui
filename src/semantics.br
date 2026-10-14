@@ -27,6 +27,7 @@ pub struct SemNode:
     pub float y
     pub float w
     pub float h
+    pub var bool focused = false
     pub var mut [string] actions = []
     pub var mut [mut SemNode] children = []
 
@@ -59,6 +60,18 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors):
         n.actions = ["focus", "setValue"]
         if n.name == "":
             errors.push("unlabeled TextField (node {p.id}): an interactive element needs a name")
+        out.push(n)
+        return
+    if k == "Button" or k == "Toggle":
+        mut n = node(p, "button")
+        n.name = p.props["label"] else ("")
+        n.actions = ["focus", "activate"]
+        if k == "Toggle":
+            n.role = "toggle"
+            n.value = p.props["value"] else ("false")
+            n.actions = ["focus", "toggle"]
+        if n.name == "":
+            errors.push("unlabeled {k} (node {p.id}): an interactive element needs a name")
         out.push(n)
         return
     if k == "AccessibilityGroup":
@@ -100,6 +113,12 @@ pub def Semantics semantics(Placed root):
     walk(root, s.roots, s.errors)
     s
 
+# Marks the node with mounted id `id` (and nothing else) as keyboard-focused.
+pub def void markFocus([mut SemNode] nodes, int id):
+    for n in nodes:
+        n.focused = n.id == id
+        markFocus(n.children, id)
+
 # One line per node, indented by depth, for golden tests.
 pub def [string] describeTree([SemNode] nodes, int depth):
     mut [string] lines = []
@@ -114,6 +133,8 @@ pub def [string] describeTree([SemNode] nodes, int depth):
         if n.level > 0:
             line = "{line} level={n.level}"
         line = "{line} [{n.x},{n.y} {n.w}x{n.h}]"
+        if n.focused:
+            line = "{line} focused"
         if n.actions.length > 0:
             line = "{line} actions={n.actions.join(",")}"
         var pad = ""

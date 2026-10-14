@@ -1,0 +1,124 @@
+# boring-ui headless event dispatch and keyboard focus (docs/design-notes/boring-ui-draft.md,
+# "UI events and batched refresh", "Event dispatch, capture, and errors", "Focus"). Layer 4, first
+# slice. Physical input — a pointer press, a key — is turned into SEMANTIC ACTIONS on a control
+# ("activate", "toggle", "setText"); a semantic action from an accessibility client takes exactly the
+# same path (`act`). Every action runs inside one event transaction: the control's callback or
+# bound-slot write happens, the window is invalidated, and ONE update pass runs when the outermost
+# event ends.
+#
+# Controls: `Button` (activate), `Toggle` (toggle its bound bool), `TextField` (focus; text via
+# `typeText`). Keyboard focus is generation-checked, kept on the `Runtime`, and cleared when the
+# focused node unmounts.
+#
+# Not here yet: pointer release / capture / cancel, key capture-target-bubble phases, disabled
+# state, modal routing, focus rings and `.focused` bindings, caret/selection/IME, scroll input,
+# focus restoration, error reporting from callbacks.
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+
+def bool isFocusable(string kind):
+    kind == "Button" or kind == "Toggle" or kind == "TextField"
+
+def [Handle] collect(Mounted m):
+    mut [Handle] out = []
+    if isFocusable(m.kind):
+        out.push(Handle(id = m.id, generation = m.generation))
+    for c in m.children:
+        for h in collect(c):
+            out.push(h)
+    out
+
+# The focusable controls in structural (tab) order.
+pub def [Handle] focusOrder(Runtime rt):
+    if let r = rt.root:
+        return collect(r)
+    []
+
+pub def void focus(mut Runtime rt, Handle h):
+    if rt.valid(h):
+        rt.focus = h
+
+# Delivers a semantic action to the control behind `h`, as one event transaction. Returns false for
+# a stale handle or a node that is not a native control.
+pub def bool act(mut Runtime rt, Builder host, Handle h, string action, string arg):
+    if !rt.valid(h):
+        return false
+    let found = rt.find(h.id)
+    if found == nil:
+        return false
+    let node = found else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    mut control = node.control else (Text(content = ""))
+    rt.beginEvent()
+    control.viewAct(action, arg)
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    true
+
+def Handle? handleFor(Runtime rt, int id):
+    rt.handle(id)
+
+# A pointer press at (x, y) of the laid-out window `placed`: the deepest control on the hit path
+# takes focus; a Button activates, a Toggle toggles. Returns whether a control was hit.
+pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    let path = hitTest(placed, x, y)
+    var i = path.length - 1
+    while i >= 0:
+        let id = path[i]
+        if let node = rt.find(id):
+            if isFocusable(node.kind):
+                let h = Handle(id = node.id, generation = node.generation)
+                focus(rt, h)
+                if node.kind == "Button":
+                    _ = act(rt, host, h, "activate", "")
+                if node.kind == "Toggle":
+                    _ = act(rt, host, h, "toggle", "")
+                return true
+        i -= 1
+    false
+
+def int indexOf([Handle] order, Handle h):
+    for i in 0..<order.length:
+        if order[i].id == h.id:
+            return i
+    -1
+
+# A key press: Tab / ShiftTab move focus through `focusOrder` (wrapping); Enter and Space activate
+# the focused Button; Space toggles the focused Toggle. Returns whether the key was used.
+pub def bool key(mut Runtime rt, Builder host, string name):
+    let order = focusOrder(rt)
+    if order.length == 0:
+        return false
+    if name == "Tab" or name == "ShiftTab":
+        var at = -1
+        if let f = rt.focus:
+            at = indexOf(order, f)
+        var next = 0
+        if name == "Tab":
+            next = (at + 1) % order.length
+        else:
+            next = (at - 1 + order.length) % order.length
+            if at < 0:
+                next = order.length - 1
+        focus(rt, order[next])
+        return true
+    if let f = rt.focus:
+        if !rt.valid(f):
+            return false
+        if let node = rt.find(f.id):
+            if node.kind == "Button" and (name == "Enter" or name == "Space"):
+                return act(rt, host, f, "activate", "")
+            if node.kind == "Toggle" and name == "Space":
+                return act(rt, host, f, "toggle", "")
+    false
+
+# Text input for the focused TextField: appends `s` to its current text.
+pub def bool typeText(mut Runtime rt, Builder host, string s):
+    if let f = rt.focus:
+        if let node = rt.find(f.id):
+            if node.kind == "TextField":
+                let current = node.props["value"] else ("")
+                return act(rt, host, f, "setText", "{current}{s}")
+    false
