@@ -1,7 +1,6 @@
 # Event dispatch and focus (src/events.br). Run: boring run tests/events_test.br
 
 use boring.ui.*
-use boring.ui_controls.*
 use ui.core.*
 use ui.layout.*
 use ui.scene.*
@@ -14,10 +13,9 @@ view Panel:
     state string text = ""
 
     body():
-        let bump = ():
-            taps += 1
         Column(alignment = .Leading, spacing = 0.0):
-            Button(label = "+", onActivate = bump)
+            Button(label = "+", onActivate = ():
+                taps += 1)
             Toggle(value = on, label = "on")
             TextField(value = text, label = "name", placeholder = "")
             Text("{taps}:{text}")

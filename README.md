@@ -121,9 +121,8 @@ mutates its typed state, driven by pointer, keyboard and semantic actions).
 
 Not yet: pointer release/capture/cancel, capture-target-bubble phases, disabled state, modal routing, focus rings
 and `.focused` bindings, caret/selection/IME, scroll input, error reporting from callbacks, per-state-slot
-invalidation (an action invalidates the whole window). Callbacks must be declared as a local `let` closure before
-the block (`let bump = ():` …) — a multi-line closure argument inside an array-block item does not parse yet
-(filed).
+invalidation (an action invalidates the whole window). Callbacks are written inline
+(`Button(label = "+", onActivate = ():` + an indented body) — closures capture the body's typed state.
 
 Not yet: `fill*`, `Layer`, `clip`, `Scroll`, baseline alignment, `idealWidth`, adaptive spacing pairs (one
 default gap), right-to-left, device-pixel rounding, line limits/truncation — and, for the scene: borders, overlays, opacity, shadows, transforms, images, text decorations/carets,
