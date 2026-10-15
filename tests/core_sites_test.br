@@ -64,7 +64,7 @@ def tap(Runtime rt, Handle h, int times):
     st.taps = st.taps + times
 
 mut model = Model(header = true, ids = ["a", "b"])
-let host = ViewRoot(inner = PanelBuilder(model = model))
+var host = ViewRoot(inner = PanelBuilder(model = model))
 mut rt = Runtime()
 rt.start(host)
 
@@ -81,6 +81,7 @@ assert(rt.flush(host))
 assert(rt.show().contains("Row"), rt.show())
 
 model.header = false
+host = ViewRoot(inner = PanelBuilder(model = model))   # the builder holds its own copy of `model`
 assert(rt.invalidate(solo))
 assert(rt.flush(host))
 # The header branch is gone, yet `solo` kept its identity (same handle still valid) and its state.
@@ -93,6 +94,7 @@ assert(rt.show().contains("Row"), "state survived: still the Row body")
 
 # Bring the header back: still the same node.
 model.header = true
+host = ViewRoot(inner = PanelBuilder(model = model))   # the builder holds its own copy of `model`
 assert(rt.invalidate(solo))
 assert(rt.flush(host))
 assert(rt.valid(solo))
@@ -100,6 +102,7 @@ assert(rt.valid(solo))
 # Reordering one loop leaves the other loop's identities alone.
 let firstLoopA = rt.handle(idOf(rt, "KeyedGroup", "a")) else (Handle(id = -1, generation = -1))
 model.ids = ["b", "a"]
+host = ViewRoot(inner = PanelBuilder(model = model))   # the builder holds its own copy of `model`
 assert(rt.invalidate(solo))
 assert(rt.flush(host))
 assert(rt.valid(firstLoopA), "a keyed group survives a reorder")

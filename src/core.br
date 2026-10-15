@@ -45,13 +45,9 @@ pub struct Mounted:
     pub string kind
     pub int site
     pub string key
-    pub var mut [mut Mounted] children = []
-    pub var mut {string=int} slots = {=}
+    pub var mut [Mounted] children = []
     # The native view's scalar fields (text content, spacing, insets, …) as of the latest build.
     pub var mut {string=string} props = {=}
-    # Composite views only: the typed `V__State` (behind `StateBox`) lives exactly as long as the
-    # identity, and the latest description that was expanded.
-    pub var StateBox? state = nil
     pub var View? view = nil
     pub var View? control = nil
 
@@ -99,13 +95,21 @@ pub struct ViewRoot as Builder:
     ViewBuilder inner
     req Desc build(mut Runtime rt): describe(inner.buildView(rt))
 
+# What the runtime keeps per mounted id, outside the tree: the named-int slot map, and — for a
+# composite view — the typed `V__State` (behind `StateBox`), which lives exactly as long as the
+# identity. The tree itself (`Mounted.children`) is plain owned data; nothing aliases it.
+struct Meta:
+    int generation
+    var mut {string=int} slots = {=}
+    var StateBox? state = nil
+
 # Scratch lists for one reconciliation: hooks are only emitted after the whole tree committed.
 struct Pass:
     var mut [string] mounts = []
-    var mut [mut Mounted] retiring = []
+    var mut [Mounted] retiring = []
 
 pub struct Runtime:
-    pub var mut Mounted? root = nil
+    pub var Mounted? root = nil
     pub var mut [string] events = []
     pub var mut [string] errors = []
     pub var mut {int} dirty = {}
@@ -117,7 +121,7 @@ pub struct Runtime:
     var int nextId = 1
     var int nextGeneration = 1
     var mut [int] freeIds = []
-    var mut {int=mut Mounted} nodes = {=}
+    var mut {int=Meta} meta = {=}
 
     # ── mount / update ────────────────────────────────────────────────────────
 
@@ -132,7 +136,9 @@ pub struct Runtime:
         mut ctx = Pass()
         if let current = root:
             if current.kind == d.kind:
-                self.reconcileNode(current, d, ctx)
+                mut updated = current
+                self.reconcileNode(updated, d, ctx)
+                root = updated
             else:
                 ctx.retiring.push(current)
                 root = self.create(d, 0, ctx)
@@ -153,18 +159,19 @@ pub struct Runtime:
         nextId += 1
         id
 
-    def mut Mounted create(Desc d, int site, mut Pass ctx):
+    def Mounted create(Desc d, int site, mut Pass ctx):
         let id = self.fresh()
         mut node = Mounted(id = id, generation = nextGeneration, kind = d.kind, site = site, key = d.key)
+        mut info = Meta(generation = nextGeneration)
         nextGeneration += 1
         node.props = d.props
         node.control = d.control
-        nodes[id] = node
         ctx.mounts.push("mount {d.kind}#{id}")
         if let v = d.view:
             node.view = v
-            node.state = v.newState()
-        let kids = self.childrenOf(node, d)
+            info.state = v.newState()
+        meta[id] = info
+        let kids = self.childrenOf(id, d)
         if self.checked(kids, d.kind):
             for i in 0..<kids.length:
                 let child = kids[i]
@@ -173,10 +180,11 @@ pub struct Runtime:
 
     # The children to reconcile under `node`: a native node's own, or — for a composite view —
     # its body, expanded against the state this identity has kept since it mounted.
-    def [Desc] childrenOf(Mounted node, Desc d):
+    def [Desc] childrenOf(int id, Desc d):
         if let v = d.view:
-            if let st = node.state:
-                return [describe(v.expand(st))]
+            if let info = meta[id]:
+                if let st = info.state:
+                    return [describe(v.expand(st))]
             return [describe(v.expand(NoState()))]
         d.children
 
@@ -195,14 +203,14 @@ pub struct Runtime:
         node.control = d.control
         if let v = d.view:
             node.view = v
-        let kids = self.childrenOf(node, d)
+        let kids = self.childrenOf(node.id, d)
         if !self.checked(kids, d.kind):
             return
-        mut {string=mut Mounted} byIdentity = {=}
+        mut {string=Mounted} byIdentity = {=}
         for old in node.children:
             byIdentity["{old.site}|{old.key}"] = old
         mut {string} used = {}
-        mut [mut Mounted] next = []
+        mut [Mounted] next = []
         for i in 0..<kids.length:
             let child = kids[i]
             let site = siteOf(child, i)
@@ -210,8 +218,9 @@ pub struct Runtime:
             if let old = byIdentity[identity]:
                 _ = used.add(identity)
                 if old.kind == child.kind:
-                    self.reconcileNode(old, child, ctx)
-                    next.push(old)
+                    mut kept = old
+                    self.reconcileNode(kept, child, ctx)
+                    next.push(kept)
                 else:
                     ctx.retiring.push(old)
                     next.push(self.create(child, site, ctx))
@@ -241,7 +250,7 @@ pub struct Runtime:
             if f.id == node.id:
                 focus = nil
         events.push("unmount {node.kind}#{node.id}")
-        nodes.remove(node.id)
+        meta.remove(node.id)
         freeIds.push(node.id)
 
     # Keys must be unique among the keyed siblings of one site, checked before anything mutates.
@@ -263,13 +272,13 @@ pub struct Runtime:
     # ── handles and writes ────────────────────────────────────────────────────
 
     req Handle? handle(int id):
-        if let node = nodes[id]:
-            return Handle(id = node.id, generation = node.generation)
+        if let info = meta[id]:
+            return Handle(id = id, generation = info.generation)
         nil
 
     req bool valid(Handle h):
-        if let node = nodes[h.id]:
-            return node.generation == h.generation
+        if let info = meta[h.id]:
+            return info.generation == h.generation
         false
 
     # A write through a stale handle is a no-op (and is reported), never an access to whatever
@@ -278,12 +287,22 @@ pub struct Runtime:
         if !self.valid(h):
             errors.push("stale write to {h.id}.{slot}")
             return false
-        nodes[h.id].slots[slot] = value
+        meta[h.id].slots[slot] = value
         _ = dirty.add(h.id)
         true
 
     req Mounted? find(int id):
-        nodes[id]
+        if let r = root:
+            return self.findIn(r, id)
+        nil
+
+    req Mounted? findIn(Mounted n, int id):
+        if n.id == id:
+            return n
+        for c in n.children:
+            if let hit = self.findIn(c, id):
+                return hit
+        nil
 
     # Typed state is mutated in place by callbacks, so an action conservatively invalidates the
     # whole window (the first runtime rebuilds everything anyway).
@@ -295,8 +314,8 @@ pub struct Runtime:
     req StateBox? stateOf(Handle h):
         if !self.valid(h):
             return nil
-        if let node = nodes[h.id]:
-            if let st = node.state:
+        if let info = meta[h.id]:
+            if let st = info.state:
                 return st
         nil
 
@@ -311,8 +330,8 @@ pub struct Runtime:
     req int? read(Handle h, string slot):
         if !self.valid(h):
             return nil
-        if let node = nodes[h.id]:
-            return node.slots[slot]
+        if let info = meta[h.id]:
+            return info.slots[slot]
         nil
 
     # ── event transactions and the update loop ────────────────────────────────

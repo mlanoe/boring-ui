@@ -54,7 +54,7 @@ def tap(Runtime rt, Handle h, int times):
 
 mut model = Model(ids = ["a", "b"])
 let builder = PageBuilder(model = model)
-let host = ViewRoot(inner = builder)
+var host = ViewRoot(inner = builder)
 mut rt = Runtime()
 rt.start(host)
 
@@ -70,16 +70,19 @@ assert_eq(rt.show(), "Page#1[Column#2[KeyedGroup#3@a[Counter#4[Row#11[Text#12]]]
 
 # The parent rebuilds with the ids reordered: both counters keep their identity AND their state.
 model.ids = ["b", "a"]
+host = ViewRoot(inner = PageBuilder(model = model))   # the builder holds its own copy of `model`
 assert(rt.invalidate(ca), "invalidate again")
 assert(rt.flush(host))
 assert_eq(rt.show(), "Page#1[Column#2[KeyedGroup#7@b[Counter#8[Column#9[Text#10]]], KeyedGroup#3@a[Counter#4[Row#11[Text#12]]]]]")
 
 # Removing a key unmounts its counter and its state; re-adding it starts a fresh lifetime.
 model.ids = ["b"]
+host = ViewRoot(inner = PageBuilder(model = model))   # the builder holds its own copy of `model`
 assert(rt.invalidate(ca))
 _ = rt.flush(host)
 assert(!rt.valid(ca), "the removed counter's handle is stale")
 model.ids = ["b", "a"]
+host = ViewRoot(inner = PageBuilder(model = model))   # the builder holds its own copy of `model`
 let cb = rt.handle(8) else (Handle(id = -1, generation = -1))
 assert(rt.invalidate(cb))
 _ = rt.flush(host)
@@ -94,6 +97,7 @@ assert(rt.events.contains("unmount Counter#4"))
 
 # A duplicate iteration key below a composite is reported and leaves that subtree as it was.
 model.ids = ["b", "b"]
+host = ViewRoot(inner = PageBuilder(model = model))   # the builder holds its own copy of `model`
 assert(rt.invalidate(cb))
 _ = rt.flush(host)
 assert_eq(rt.errors.length, 1)

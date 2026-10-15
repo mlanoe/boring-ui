@@ -57,7 +57,7 @@ pub struct Placed:
     pub var mut [Placed] children = []
 
 struct Neg:
-    var mut [mut Mounted] items = []
+    var mut [Mounted] items = []
     var mut [float] mains = []
     var mut [Size] sizes = []
     var float gap = 0.0
@@ -100,8 +100,8 @@ def [string] transparentKinds():
     ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup"]
 
 # A stack's children with every `KeyedGroup` replaced by its items, in order.
-def [mut Mounted] flatten(Mounted n):
-    mut [mut Mounted] out = []
+def [Mounted] flatten(Mounted n):
+    mut [Mounted] out = []
     for c in n.children:
         if c.kind == "KeyedGroup":
             for g in flatten(c):
