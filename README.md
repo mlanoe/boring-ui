@@ -148,10 +148,13 @@ theming. Interpreter only, like the rest of the runtime.
 
 ## Not here yet
 
-- **`boring build`.** The core and the typed-state adapter run under `boring run` only. `boring build` turns the
-  generated runtime methods off (`lower_view::set_runtime_methods`): returning a native view's owned `[View]`
-  children needs a by-reference story for `Box<dyn View>`, and an expanded body that borrows its mounted state
-  cannot outlive the call (the draft's "callback `self` as mounted-view context" is the same problem).
+- **Transpiled runtime is real, not interpreter-only** (checked 2026-10-16 against `boring` 4637855e): every
+  `tests/*_test.br` — core, layout, scene, semantics, events and the Todo app — goes through `boring build` +
+  `cargo run` and passes, with the same output as `boring run` (`tests/run_tests_transpiled.sh`). The generated
+  `View` methods are always emitted; `lower_view::set_runtime_methods(false)` (set by `boring build`) only makes a
+  `view`'s `body()` return `Arc<dyn View>` instead of `impl View`, so `expand` can return it (`'static`). State
+  slots are `Arc<Mutex<Slot<T>>>` handles, so callbacks capture them by clone. Still untested in Rust: a real host
+  (window/renderer) driving this code.
 - Keys are strings (a lowered `for … with key` passes `"{key}"`). Unkeyed `for` loops keep positional (index)
   identity for their items.
 - Views with `env` are not expandable (no environment to give them); `bind` slots work (they are inputs).
@@ -162,5 +165,6 @@ theming. Interpreter only, like the rest of the runtime.
 ## Running the tests
 
 ```bash
-tests/run_tests.sh        # needs a `boring` on PATH (cargo install --path ../boring)
+tests/run_tests.sh              # interpreter (`boring run`); needs a `boring` on PATH (cargo install --path ../boring)
+tests/run_tests_transpiled.sh   # transpiler (`boring build` + `cargo run`), same files
 ```
