@@ -44,6 +44,13 @@ let aFrame = a.children[0]
 assert_eq(aFrame.x, 10.0)
 assert_eq(aFrame.w, 200.0)
 
+# The same two draft examples in method form (`Text(..).frame(..).padding(..)` = ordered wrappers).
+let aM = must(lay(Text("Bonjour").frame(width = 200.0).padding(10.0), 1000.0, 1000.0))
+assert_eq(aM.w, a.w)
+assert_eq(aM.children[0].x, 10.0)
+let bM = must(lay(Text("Bonjour").padding(10.0).frame(width = 200.0), 1000.0, 1000.0))
+assert_eq(bM.w, 200.0)
+
 # Outer fixed-width frame, inner padding: the padding (56 + 20 = 76 wide) sits inside 200, centered.
 let b = must(lay(fixedW(200.0, pad(10.0, Text("Bonjour"))), 1000.0, 1000.0))
 assert_eq(b.w, 200.0)

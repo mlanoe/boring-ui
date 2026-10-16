@@ -101,8 +101,12 @@ the window to the root and returns a `Placed` tree in window coordinates; `measu
 - `TextField` has a themed fixed size (160 × 24) and is painted as a field plus its value.
 - Native views reach layout as **props**: the lowering generates `viewProps()` (scalar fields, stringified; `T?`
   absent while nil) and the core keeps them on each mounted node.
-- Wrappers are views for now (`Padding(insets = 10.0):` + indented child); the `view.padding(10)` method form is
-  not implemented.
+- Wrappers are views (`Padding(insets = 10.0):` + indented child) and also have a **method form**:
+  `Text("x").frame(width = 200.0).padding(10.0)` is sugar for the ordered wrappers
+  `Padding(insets = 10.0, children = [Frame(width = 200.0, children = [Text("x")])])` (a modifier is any view with a
+  `[View] children` field; method = lowerCamel view name; positional arguments take the view's other fields in
+  order). Only on a receiver that is syntactically a view (a view construction or an earlier modifier), so a user
+  type's own `padding()` is never captured. The draft's convenience names (`width(200)` → `frame`) are not there.
 
 ## Scene — [`src/scene.br`](src/scene.br) (layer 3, second slice)
 
