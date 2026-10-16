@@ -60,6 +60,28 @@ Semantics implemented and tested (`tests/`):
 - **Loop guard**: `flush` stops after `maxPasses` (64) consecutive passes, reports the repeatedly invalidated ids,
   clears the queue and keeps the last committed tree.
 
+## Lifecycle hooks and scoped tasks (`OnMount`, `OnUnmount`, `OnTask`)
+
+Ordered wrapper views in `boring.ui` (layout/paint-transparent, like every modifier); tested in
+`tests/core_hooks_test.br` (interpreter and `boring build`).
+
+- **`OnMount(onMount = …)`** runs once after the commit that created it, in structural preorder (outermost modifier
+  first). Hooks of one commit run together; their writes are batched into the next update pass.
+- **`OnUnmount(onUnmount = …)`** runs when the wrapper is released, descendants before parents and the innermost
+  modifier first, while the node's identity is still valid. Before the first unmount hook of a retiring subtree,
+  every task in it is cancelled.
+- **`OnTask(id = …, onTask = (run): …)`** starts a run once the update after mount is stable (so an `OnMount` that
+  removes its own subtree starts nothing). An ordinary rebuild never restarts it; a changed `id` cancels the old run
+  and starts a new one without remounting anything; unmount cancels it. The body receives a `TaskRun`
+  (node, node generation, task-run generation, id).
+- **Staleness**: a run is current (`rt.isCurrent(run)`) only while BOTH generations match; an id change or unmount
+  bumps the task-run generation first. `rt.deliver(run, host, action)` applies a late result as one event
+  transaction if the run is current, and drops and reports it (`errors`) if not. The runtime cannot intercept a write
+  made outside `deliver`; that call is the continuation contract.
+- Tasks here are run-to-completion callbacks, not real `task` futures: a body that wants to finish "later" keeps its
+  `TaskRun` and calls `deliver` when the result arrives (what a host will do). Not done: `Future.cancel()` wiring,
+  error reporting from hooks/tasks, teardown-only (read-only) state access in `OnUnmount`, animated removal.
+
 ## Layout — [`src/layout.br`](src/layout.br) (layer 3, first slice)
 
 Headless size negotiation and placement over the mounted tree, with a deterministic fixture font

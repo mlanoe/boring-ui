@@ -76,6 +76,13 @@ def int siteOf(Desc child, int i):
         return -2
     i * 2 + 1
 
+# Delivers a semantic action to a native view. (A free function on purpose: `boring build` emits string
+# literals/locals passed straight to a trait-object method as `&str` instead of `Arc<str>`, while a
+# `string` parameter forwarded here works — see events.br.)
+def void fireAction(Mounted n, string action, string arg):
+    if let control = n.control:
+        control.viewAct(action, arg)
+
 # A generation-checked reference to a mounted node.
 pub struct Handle:
     pub int id
@@ -102,11 +109,19 @@ struct Meta:
     int generation
     var mut {string=int} slots = {=}
     var StateBox? state = nil
+    # An `OnTask` node's current run: `taskGen` is the private task-run generation (bumped on every
+    # start and cancellation), `taskId` the restart token the run was started with.
+    var int taskGen = 0
+    var string taskId = ""
+    var bool taskStarted = false
 
 # Scratch lists for one reconciliation: hooks are only emitted after the whole tree committed.
 struct Pass:
     var mut [string] mounts = []
     var mut [Mounted] retiring = []
+    # Ids created by this pass, in structural preorder (outermost modifier first): their `OnMount`
+    # hooks run after the commit.
+    var mut [int] fresh = []
 
 pub struct Runtime:
     pub var Mounted? root = nil
@@ -118,6 +133,8 @@ pub struct Runtime:
     # Keyboard focus (generation-checked; cleared when the focused node unmounts).
     pub var Handle? focus = nil
     pub var int passesRun = 0     # update passes executed by `flush`, over the runtime's lifetime
+    # Ids that still owe their `OnMount` hook (created by a commit, hook not run yet), in order.
+    var mut [int] pendingMount = []
     var int nextId = 1
     var int nextGeneration = 1
     var mut [int] freeIds = []
@@ -145,10 +162,13 @@ pub struct Runtime:
         else:
             root = self.create(d, 0, ctx)
         self.commit(ctx)
+        for id in ctx.fresh:
+            self.pendingMount.push(id)
         true
 
     def start(Builder b):
         _ = self.apply(b.build(self))
+        self.flush(b)
 
     def int fresh():
         if self.freeIds.length > 0:
@@ -167,6 +187,7 @@ pub struct Runtime:
         node.props = d.props
         node.control = d.control
         ctx.mounts.push("mount {d.kind}#{id}")
+        ctx.fresh.push(id)
         if let v = d.view:
             node.view = v
             info.state = v.newState()
@@ -234,6 +255,9 @@ pub struct Runtime:
     # Unmount hooks first (descendants before parents, siblings in reverse), then mount hooks in
     # structural preorder — one transaction's worth of hooks, emitted only after the commit.
     def commit(Pass ctx):
+        # Before the first unmount hook, every scoped task of every retiring subtree is cancelled.
+        for r in ctx.retiring:
+            self.cancelTasks(r)
         var i = ctx.retiring.length - 1
         while i >= 0:
             self.release(ctx.retiring[i])
@@ -250,6 +274,10 @@ pub struct Runtime:
             if f.id == node.id:
                 focus = nil
         events.push("unmount {node.kind}#{node.id}")
+        # The hook runs with the node's own identity (and the inputs it captured) still valid.
+        if node.kind == "OnUnmount":
+            fireAction(node, "unmount", "")
+            self.invalidateRoot()
         meta.remove(node.id)
         freeIds.push(node.id)
 
@@ -352,15 +380,106 @@ pub struct Runtime:
         if depth > 0:
             return true
         var passes = 0
-        while dirty.length > 0:
+        while true:
+            # Hooks of the last commit run first (their writes are batched into the next pass); tasks
+            # only start once the tree is stable, so an `OnMount` that removes its own subtree never
+            # starts work that would be cancelled at once.
+            self.runMountHooks()
+            if dirty.length == 0:
+                self.startTasks()
+            if dirty.length == 0:
+                break
             if passes >= maxPasses:
                 errors.push("update loop: {passes} consecutive passes, still invalidated: {self.dirtyIds().map((i): "{i}").join(",")}")
                 dirty = {}
+                self.pendingMount = []
                 return false
             passes += 1
             passesRun += 1
             dirty = {}
             _ = self.apply(b.build(self))
+        true
+
+    # ── lifecycle hooks and scoped tasks ──────────────────────────────────────
+
+    # `OnMount` hooks of the nodes the last commits created, in structural preorder (outermost
+    # modifier first). A node already gone again is skipped. Typed state is mutated in place by
+    # callbacks, so a hook that ran invalidates the window (like any other action).
+    def void runMountHooks():
+        let ids = self.pendingMount
+        self.pendingMount = []
+        for id in ids:
+            self.runMountHook(id)
+
+    def void runMountHook(int id):
+        if let node = self.find(id):
+            if node.kind == "OnMount":
+                events.push("hook mount {node.kind}#{id}")
+                fireAction(node, "mount", "")
+                self.invalidateRoot()
+
+    # Starts a run for every `OnTask` node that has none yet, or whose `id` changed since its run
+    # started (the old run is cancelled: its generation goes stale first). Preorder; stops as soon as
+    # a body invalidated the window — the rest start after that update is stable.
+    def void startTasks():
+        if let r = root:
+            _ = self.startTasksIn(r)
+
+    def bool startTasksIn(Mounted n):
+        if n.kind == "OnTask":
+            if let info = meta[n.id]:
+                let id = n.props["id"] else ("")
+                if !info.taskStarted or info.taskId != id:
+                    # Read everything off `info` first: it aliases the entry the writes below update.
+                    let previous = info.taskGen
+                    let next = previous + 1
+                    let nodeGeneration = info.generation
+                    if info.taskStarted:
+                        events.push("task cancel {n.kind}#{n.id} run {previous}")
+                    meta[n.id].taskGen = next
+                    meta[n.id].taskStarted = true
+                    meta[n.id].taskId = id
+                    let run = TaskRun(node = n.id, nodeGeneration = nodeGeneration, generation = next, id = id)
+                    events.push("task start {n.kind}#{n.id} run {run.generation}")
+                    if let control = n.control:
+                        control.viewTask(run)
+                    self.invalidateRoot()
+                    return false
+        for c in n.children:
+            if !self.startTasksIn(c):
+                return false
+        true
+
+    # Cancels every started run in a subtree (before its unmount hooks): the generations go stale.
+    def void cancelTasks(Mounted n):
+        if n.kind == "OnTask":
+            if let info = meta[n.id]:
+                if info.taskStarted:
+                    let previous = info.taskGen
+                    meta[n.id].taskGen = previous + 1
+                    events.push("task cancel {n.kind}#{n.id} run {previous}")
+        for c in n.children:
+            self.cancelTasks(c)
+
+    # A run is current only while the node it belongs to is still the same mounted identity AND no
+    # later start/cancellation superseded it. Nothing waits for a task: a stale one just stops
+    # being able to touch state.
+    req bool isCurrent(TaskRun run):
+        if let info = meta[run.node]:
+            return info.generation == run.nodeGeneration and info.taskGen == run.generation
+        false
+
+    # Delivers a task's late result: `action` runs as one event transaction (one update pass) if
+    # the run is still current, and is dropped — and reported — if it is stale. The runtime cannot
+    # intercept a write made outside this call; `deliver` is the contract for continuations.
+    def bool deliver(TaskRun run, Builder b, UIAction action):
+        if !self.isCurrent(run):
+            errors.push("stale task delivery to {run.node} (run {run.generation})")
+            return false
+        self.beginEvent()
+        action()
+        self.invalidateRoot()
+        self.endEvent(b)
         true
 
     req [int] dirtyIds():
