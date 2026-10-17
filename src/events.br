@@ -10,9 +10,35 @@
 # `typeText`). Keyboard focus is generation-checked, kept on the `Runtime`, and cleared when the
 # focused node unmounts.
 #
+# Scroll input (`scrollBy`) moves the `Scroll` offsets kept on the mounted nodes.
+#
 # Not here yet: pointer release / capture / cancel, key capture-target-bubble phases, disabled
-# state, modal routing, focus rings and `.focused` bindings, caret/selection/IME, scroll input,
-# focus restoration, error reporting from callbacks.
+# state, modal routing, focus rings and `.focused` bindings, caret/selection/IME, momentum,
+# scroll-into-view on focus, focus restoration, error reporting from callbacks.
+
+# boring-ui headless event dispatch and keyboard focus (docs/design-notes/boring-ui-draft.md,
+# "UI events and batched refresh", "Event dispatch, capture, and errors", "Button", "TextField",
+# "Focus"). Layer 4. Physical input — a pointer press, a key — is turned into SEMANTIC ACTIONS on a
+# control ("activate", "toggle", "setText", "submit"); a semantic action from an accessibility client
+# takes exactly the same path (`act`). Every action runs inside one event transaction: the control's
+# callback or bound-slot write happens, the window is invalidated, and ONE update pass runs when the
+# outermost event ends.
+#
+# Pointer: `pointerDown` focuses the deepest enabled control under the pointer and CAPTURES it;
+# `pointerUp` activates a Button / toggles a Toggle only when released over the captured control
+# (released elsewhere is a cancel); `pointerCancel` drops the capture; `click` is down + up in place.
+# Disabled: a control inside a `Disabled` subtree takes no focus, no capture, no action.
+# Keys: Tab / ShiftTab traverse the enabled focus order; Space / Enter activate a focused Button,
+# Space toggles a focused Toggle; Enter on a TextField with `onSubmit` submits, otherwise the nearest
+# `DefaultAction` button activates; Escape activates the first enabled `Cancel` button. A focused
+# TextField edits with `typeText` and the keys Backspace, Delete, Left, Right, Home, End (and the
+# Shift variants), SelectAll; caret and selection are mounted control state (ASCII text only:
+# `String.length` differs between the interpreter and `boring build` for other text).
+# Scroll input (`scrollBy`) moves the `Scroll` offsets kept on the mounted nodes.
+#
+# Not here yet: IME / composition, undo, key capture-target-bubble phases, modal routing, focus rings
+# and `.focused` bindings, focus scopes, `List`/`Sheet`, momentum, scroll-into-view on focus, error
+# reporting from callbacks.
 
 use boring.ui.*
 use ui.core.*
@@ -25,19 +51,44 @@ def string propOf(Mounted n, string name):
 def bool isFocusable(string kind):
     kind == "Button" or kind == "Toggle" or kind == "TextField"
 
-def [Handle] collect(Mounted m):
+# ── disabled state ─────────────────────────────────────────────────────────────────────────────
+
+# 1 when node `id` sits inside a `Disabled(true)` subtree, 0 when it does not, -1 when it is absent.
+def int disabledState(Mounted n, int id, bool inherited):
+    var off = inherited
+    if n.kind == "Disabled" and propOf(n, "value") == "true":
+        off = true
+    if n.id == id:
+        if off:
+            return 1
+        return 0
+    for c in n.children:
+        let r = disabledState(c, id, off)
+        if r >= 0:
+            return r
+    -1
+
+pub def bool isDisabled(Runtime rt, int id):
+    if let r = rt.root:
+        return disabledState(r, id, false) == 1
+    false
+
+def [Handle] collect(Mounted m, bool inherited):
     mut [Handle] out = []
-    if isFocusable(m.kind):
+    var off = inherited
+    if m.kind == "Disabled" and propOf(m, "value") == "true":
+        off = true
+    if isFocusable(m.kind) and !off:
         out.push(Handle(id = m.id, generation = m.generation))
     for c in m.children:
-        for h in collect(c):
+        for h in collect(c, off):
             out.push(h)
     out
 
-# The focusable controls in structural (tab) order.
+# The enabled focusable controls in structural (tab) order.
 pub def [Handle] focusOrder(Runtime rt):
     if let r = rt.root:
-        return collect(r)
+        return collect(r, false)
     []
 
 pub def void setFocus(mut Runtime rt, Handle h):
@@ -45,9 +96,11 @@ pub def void setFocus(mut Runtime rt, Handle h):
         rt.focus = h
 
 # Delivers a semantic action to the control behind `h`, as one event transaction. Returns false for
-# a stale handle or a node that is not a native control.
+# a stale handle, a disabled control or a node that is not a native control.
 pub def bool act(mut Runtime rt, Builder host, Handle h, string action, string arg):
     if !rt.valid(h):
+        return false
+    if isDisabled(rt, h.id):
         return false
     let found = rt.find(h.id)
     if found == nil:
@@ -64,24 +117,114 @@ pub def bool act(mut Runtime rt, Builder host, Handle h, string action, string a
 def Handle? handleFor(Runtime rt, int id):
     rt.handle(id)
 
-# A pointer press at (x, y) of the laid-out window `placed`: the deepest control on the hit path
-# takes focus; a Button activates, a Toggle toggles. Returns whether a control was hit.
+# ── text editing state (caret and selection are mounted control state) ──────────────────────────────
+
+def int clampTo(int v, int lo, int hi):
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    v
+
+# The caret index (stored, or the end of the text for a field nobody has edited yet).
+def int caretOf(Runtime rt, Handle h, int len):
+    let c = rt.read(h, "caret") else (-1)
+    if c < 0 or c > len:
+        return len
+    c
+
+# The selection anchor (equal to the caret when nothing is selected).
+def int anchorOf(Runtime rt, Handle h, int len, int caret):
+    let a = rt.read(h, "anchor") else (-1)
+    if a < 0 or a > len:
+        return caret
+    a
+
+# `[caret, anchor]` of a text field as the tests and the semantic layer read them.
+pub def [int] selectionOf(Runtime rt, Handle h):
+    let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    let len = propOf(node, "value").length
+    let caret = caretOf(rt, h, len)
+    [caret, anchorOf(rt, h, len, caret)]
+
+def void moveCaret(mut Runtime rt, Handle h, int caret, int anchor):
+    _ = rt.write(h, "caret", caret)
+    _ = rt.write(h, "anchor", anchor)
+
+# Replaces the text between `a` and `b` with `insert`, leaving the caret after it, as one event.
+def bool replaceRange(mut Runtime rt, Builder host, Handle h, Mounted node, int a, int b, string insert):
+    let text = propOf(node, "value")
+    let len = text.length
+    let next = "{text[0..<a]}{insert}{text[b..<len]}"
+    moveCaret(rt, h, a + insert.length, a + insert.length)
+    act(rt, host, h, "setText", next)
+
+def Handle? focusedField(Runtime rt):
+    if let f = rt.focus:
+        if rt.valid(f):
+            if let node = rt.find(f.id):
+                if node.kind == "TextField":
+                    return f
+    nil
+
+# ── pointer ───────────────────────────────────────────────────────────────────────────────────
+
+# A pointer press at (x, y) of the laid-out window `placed`: the deepest enabled control on the hit path
+# takes focus and captures the pointer (a TextField also places its caret). Nothing activates yet — that
+# happens on release over the same control. Returns whether a control was hit.
 pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, float y):
     let path = hitTest(placed, x, y)
     var i = path.length - 1
     while i >= 0:
         let id = path[i]
         if let node = rt.find(id):
-            if isFocusable(node.kind):
+            if isFocusable(node.kind) and !isDisabled(rt, id):
                 let h = Handle(id = node.id, generation = node.generation)
                 setFocus(rt, h)
-                if node.kind == "Button":
-                    _ = act(rt, host, h, "activate", "")
-                if node.kind == "Toggle":
-                    _ = act(rt, host, h, "toggle", "")
+                rt.capture = h
+                if node.kind == "TextField":
+                    if let at = findPlaced(placed, id):
+                        let len = propOf(node, "value").length
+                        let cell = ((x - at.x - 4.0) / charWidth + 0.5) as int
+                        let caret = clampTo(cell, 0, len)
+                        moveCaret(rt, h, caret, caret)
+                        rt.invalidateRoot()
                 return true
         i -= 1
     false
+
+# A pointer release: a Button activates and a Toggle toggles only when the pointer is still over the
+# control that captured it; released anywhere else it is a cancel. The capture always ends.
+pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    let held = rt.capture
+    rt.capture = nil
+    if held == nil:
+        return false
+    let h = held else (Handle(id = -1, generation = -1))
+    if !rt.valid(h):
+        return false
+    let path = hitTest(placed, x, y)
+    if !path.contains(h.id):
+        return false
+    if let node = rt.find(h.id):
+        if node.kind == "Button":
+            return act(rt, host, h, "activate", "")
+        if node.kind == "Toggle":
+            return act(rt, host, h, "toggle", "")
+        return true
+    false
+
+# The platform cancelled the pointer (window lost, modal opened): the capture ends, nothing happens.
+pub def void pointerCancel(mut Runtime rt):
+    rt.capture = nil
+
+# A press and release at the same point.
+pub def bool click(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    if !pointerDown(rt, host, placed, x, y):
+        return false
+    pointerUp(rt, host, placed, x, y)
+
+# ── keyboard ──────────────────────────────────────────────────────────────────────────────────
 
 def int indexOf([Handle] order, Handle h):
     for i in 0..<order.length:
@@ -89,13 +232,110 @@ def int indexOf([Handle] order, Handle h):
             return i
     -1
 
-# A key press: Tab / ShiftTab move focus through `focusOrder` (wrapping); Enter and Space activate
-# the focused Button; Space toggles the focused Toggle. Returns whether the key was used.
+# The first enabled Button inside `n`, or -1.
+def int firstButton(Mounted n, bool inherited):
+    var off = inherited
+    if n.kind == "Disabled" and propOf(n, "value") == "true":
+        off = true
+    if n.kind == "Button" and !off:
+        return n.id
+    for c in n.children:
+        let r = firstButton(c, off)
+        if r >= 0:
+            return r
+    -1
+
+# The Enter default (the first enabled `DefaultAction` wrapping an enabled Button) or the Escape cancel
+# (the first enabled Button with role Cancel), by `cancel`. -1 when there is none.
+def int findScopeButton(Mounted n, bool inherited, bool cancel):
+    var off = inherited
+    if n.kind == "Disabled" and propOf(n, "value") == "true":
+        off = true
+    if !cancel and n.kind == "DefaultAction" and propOf(n, "enabled") != "false" and !off:
+        let r = firstButton(n, off)
+        if r >= 0:
+            return r
+    if cancel and n.kind == "Button" and propOf(n, "role") == "Cancel" and !off:
+        return n.id
+    for c in n.children:
+        let r = findScopeButton(c, off, cancel)
+        if r >= 0:
+            return r
+    -1
+
+def bool activateScopeButton(mut Runtime rt, Builder host, bool cancel):
+    if let root = rt.root:
+        let id = findScopeButton(root, false, cancel)
+        if id >= 0:
+            if let h = rt.handle(id):
+                return act(rt, host, h, "activate", "")
+    false
+
+# Keys for a focused text field; false when `name` is not an editing key.
+def bool editKey(mut Runtime rt, Builder host, Handle h, string name):
+    let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    let text = propOf(node, "value")
+    let len = text.length
+    let caret = caretOf(rt, h, len)
+    let anchor = anchorOf(rt, h, len, caret)
+    var lo = caret
+    var hi = anchor
+    if anchor < caret:
+        lo = anchor
+        hi = caret
+    let hasSelection = lo != hi
+    if name == "Backspace":
+        if hasSelection:
+            return replaceRange(rt, host, h, node, lo, hi, "")
+        if caret > 0:
+            return replaceRange(rt, host, h, node, caret - 1, caret, "")
+        return true
+    if name == "Delete":
+        if hasSelection:
+            return replaceRange(rt, host, h, node, lo, hi, "")
+        if caret < len:
+            return replaceRange(rt, host, h, node, caret, caret + 1, "")
+        return true
+    var moved = caret
+    var extend = false
+    if name == "Left" or name == "ShiftLeft":
+        moved = clampTo(caret - 1, 0, len)
+        if name == "Left" and hasSelection:
+            moved = lo
+        extend = name == "ShiftLeft"
+    elif name == "Right" or name == "ShiftRight":
+        moved = clampTo(caret + 1, 0, len)
+        if name == "Right" and hasSelection:
+            moved = hi
+        extend = name == "ShiftRight"
+    elif name == "Home" or name == "ShiftHome":
+        moved = 0
+        extend = name == "ShiftHome"
+    elif name == "End" or name == "ShiftEnd":
+        moved = len
+        extend = name == "ShiftEnd"
+    elif name == "SelectAll":
+        moveCaret(rt, h, len, 0)
+        rt.invalidateRoot()
+        return true
+    else:
+        return false
+    if extend:
+        moveCaret(rt, h, moved, anchor)
+    else:
+        moveCaret(rt, h, moved, moved)
+    rt.invalidateRoot()
+    true
+
+# A key press: Tab / ShiftTab move focus through `focusOrder` (wrapping); Escape activates the Cancel
+# button; Enter submits a TextField that has `onSubmit`, else activates the focused Button or the
+# default action; Space activates / toggles the focused control; editing keys edit the focused
+# TextField. Returns whether the key was used.
 pub def bool keyPress(mut Runtime rt, Builder host, string name):
     let order = focusOrder(rt)
-    if order.length == 0:
-        return false
     if name == "Tab" or name == "ShiftTab":
+        if order.length == 0:
+            return false
         var at = -1
         if let f = rt.focus:
             at = indexOf(order, f)
@@ -108,20 +348,90 @@ pub def bool keyPress(mut Runtime rt, Builder host, string name):
                 next = order.length - 1
         setFocus(rt, order[next])
         return true
+    if name == "Escape":
+        return activateScopeButton(rt, host, true)
     if let f = rt.focus:
-        if !rt.valid(f):
-            return false
-        if let node = rt.find(f.id):
-            if node.kind == "Button" and (name == "Enter" or name == "Space"):
-                return act(rt, host, f, "activate", "")
-            if node.kind == "Toggle" and name == "Space":
-                return act(rt, host, f, "toggle", "")
+        if rt.valid(f) and !isDisabled(rt, f.id):
+            if let node = rt.find(f.id):
+                if node.kind == "TextField":
+                    if editKey(rt, host, f, name):
+                        return true
+                    if name == "Enter":
+                        if let control = node.control:
+                            if control.viewHandles("submit"):
+                                return act(rt, host, f, "submit", "")
+                if node.kind == "Button" and (name == "Enter" or name == "Space"):
+                    return act(rt, host, f, "activate", "")
+                if node.kind == "Toggle" and name == "Space":
+                    return act(rt, host, f, "toggle", "")
+    if name == "Enter":
+        return activateScopeButton(rt, host, false)
     false
 
-# Text input for the focused TextField: appends `s` to its current text.
+# Text input for the focused TextField: replaces the selection (or inserts at the caret).
 pub def bool typeText(mut Runtime rt, Builder host, string s):
-    if let f = rt.focus:
-        if let node = rt.find(f.id):
-            if node.kind == "TextField":
-                return act(rt, host, f, "setText", "{propOf(node, "value")}{s}")
+    if let f = focusedField(rt):
+        if isDisabled(rt, f.id):
+            return false
+        let node = rt.find(f.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+        let len = propOf(node, "value").length
+        let caret = caretOf(rt, f, len)
+        let anchor = anchorOf(rt, f, len, caret)
+        var lo = caret
+        var hi = anchor
+        if anchor < caret:
+            lo = anchor
+            hi = caret
+        return replaceRange(rt, host, f, node, lo, hi, s)
     false
+
+def Placed? findPlaced(Placed p, int id):
+    if p.id == id:
+        return p
+    for c in p.children:
+        if let hit = findPlaced(c, id):
+            return hit
+    nil
+
+def float numOf(Placed p, string key):
+    if let s = p.props[key]:
+        return s.parseFloat() else (0.0)
+    0.0
+
+# Wheel / trackpad input: the delta (dx, dy) at (x, y) of the laid-out window `placed`. The deepest
+# `Scroll` under the pointer consumes what it can apply on its own axis (clamped to its content); the
+# remainder bubbles to the next ancestor scrolling the same axis. Each consumed share is one event
+# transaction. Returns whether any offset moved.
+pub def bool scrollBy(mut Runtime rt, Builder host, Placed placed, float x, float y, float dx, float dy):
+    let path = hitTest(placed, x, y)
+    var restX = dx
+    var restY = dy
+    var moved = false
+    var i = path.length - 1
+    while i >= 0:
+        if let node = findPlaced(placed, path[i]):
+            if node.kind == "Scroll":
+                let vertical = (node.props["axis"] else ("Vertical")) == "Vertical"
+                var want = restX
+                if vertical:
+                    want = restY
+                let current = numOf(node, "scroll")
+                let most = numOf(node, "scrollMax")
+                var target = current + want
+                if target < 0.0:
+                    target = 0.0
+                if target > most:
+                    target = most
+                let used = target - current
+                if used != 0.0:
+                    rt.beginEvent()
+                    _ = rt.scrollTo(node.id, target)
+                    rt.invalidateRoot()
+                    rt.endEvent(host)
+                    moved = true
+                    if vertical:
+                        restY -= used
+                    else:
+                        restX -= used
+        i -= 1
+    moved

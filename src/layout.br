@@ -12,8 +12,11 @@
 #
 # Implemented: `Text`, `Padding`, `Frame` (fixed/min/max), `Spacer`, `Priority`, `Row`, `Column`
 # (spacing, cross-axis alignment); composite views and `KeyedGroup` are transparent.
-# Not yet: `fill*`, `Layer`, `clip`, `Scroll`, baseline alignment, idealWidth, adaptive spacing
-# pairs (one default gap), right-to-left, device-pixel rounding, line limits/truncation.
+# Also: `Layer` (overlay stack), `Fill` (accept the proposed size on chosen axes, align the child),
+# `Scroll` (a finite viewport; the offset lives on the mounted node and is clamped here), `Offset`
+# (a paint/hit-test translation that never changes sizes) and `Text` line limits with tail ellipsis.
+# Not yet: baseline alignment, idealWidth, adaptive spacing pairs (one default gap), right-to-left,
+# device-pixel rounding, head/middle truncation.
 
 use ui.core.*
 
@@ -49,8 +52,8 @@ pub struct Span:
 pub struct Placed:
     pub int id
     pub string kind
-    pub float x
-    pub float y
+    pub var float x
+    pub var float y
     pub float w
     pub float h
     pub var mut {string=string} props = {=}
@@ -97,7 +100,7 @@ def bool isTransparent(Mounted n):
 
 # Wrappers that forward all layout to their one child (they only add behaviour elsewhere).
 def [string] transparentKinds():
-    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide"]
+    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction"]
 
 # A stack's children with every `KeyedGroup` replaced by its items, in order.
 def [Mounted] flatten(Mounted n):
@@ -122,6 +125,30 @@ def float alignFraction(Mounted n):
         if a == "Trailing":
             return 1.0
     0.5
+
+# Two-axis alignment (`Layer`, `Fill`): the fraction of the free room before the child, per axis.
+def float xFraction(string a):
+    if a == "TopLeading" or a == "MiddleLeading" or a == "BottomLeading":
+        return 0.0
+    if a == "TopTrailing" or a == "MiddleTrailing" or a == "BottomTrailing":
+        return 1.0
+    0.5
+
+def float yFraction(string a):
+    if a == "TopLeading" or a == "Top" or a == "TopTrailing":
+        return 0.0
+    if a == "BottomLeading" or a == "Bottom" or a == "BottomTrailing":
+        return 1.0
+    0.5
+
+def string alignmentOf(Mounted n):
+    n.props["alignment"] else ("Middle")
+
+def bool flag(Mounted n, string key):
+    (n.props[key] else ("true")) == "true"
+
+def bool isVerticalScroll(Mounted n):
+    (n.props["axis"] else ("Vertical")) == "Vertical"
 
 def float gapOf(Mounted n):
     numProp(n, "spacing") else (defaultSpacing)
@@ -160,9 +187,33 @@ def [string] wrap(string content, float? limit):
     lines.push(current)
     lines
 
+# The visible lines of a text under a width limit and an optional line limit: it wraps first, then
+# the last visible line is truncated with an ellipsis ("..." in the fixture font).
+pub def [string] shownLines(string content, float? limit, int? maxLines):
+    let lines = wrap(content, limit)
+    if let cap = maxLines:
+        if cap >= 1 and lines.length > cap:
+            mut [string] visible = []
+            for i in 0..<cap:
+                visible.push(lines[i])
+            var last = visible[cap - 1]
+            if let room = limit:
+                # The fixture ellipsis is the ASCII "..." (3 cells): a real font engine substitutes the
+                # ellipsis glyph, and `String.length` of a non-ASCII text differs between modes.
+                while last.length > 0 and textWidth(last) + 3.0 * charWidth > room:
+                    last = last[0..<(last.length - 1)]
+            visible[cap - 1] = "{last}..."
+            return visible
+    lines
+
+def int? lineLimitOf(Mounted n):
+    if let s = n.props["lineLimit"]:
+        return s.parseInt()
+    nil
+
 def Size measureText(Mounted n, Prop p):
     let content = n.props["content"] else ("")
-    let lines = wrap(content, p.w)
+    let lines = shownLines(content, p.w, lineLimitOf(n))
     var widest = 0.0
     for l in lines:
         widest = maxOf(widest, textWidth(l))
@@ -221,6 +272,34 @@ def Span span(Mounted n, bool horiz, float? cross):
         return frameSpan(n, horiz, cross)
     if k == "Row" or k == "Column":
         return stackSpan(n, k == "Row", horiz, cross)
+    if k == "Layer":
+        var lo = 0.0
+        var id = 0.0
+        var hi = 0.0
+        for c in flatten(n):
+            let s = span(c, horiz, cross)
+            lo = maxOf(lo, s.min)
+            id = maxOf(id, s.ideal)
+            hi = maxOf(hi, s.max)
+        return Span(min = lo, ideal = id, max = hi)
+    if k == "Fill":
+        let s = span(n.children[0], horiz, cross)
+        var grows = flag(n, "width")
+        if !horiz:
+            grows = flag(n, "height")
+        if grows:
+            return Span(min = s.min, ideal = s.ideal, max = unbounded)
+        return s
+    if k == "Scroll":
+        # The viewport takes whatever it is offered; its content decides the ideal on the scrolling axis.
+        let scrollsThisAxis = isVerticalScroll(n) != horiz
+        var contentCross = cross
+        if scrollsThisAxis:
+            contentCross = cross
+        let s = span(n.children[0], horiz, contentCross)
+        if scrollsThisAxis:
+            return Span(min = 0.0, ideal = s.ideal, max = unbounded)
+        return Span(min = s.min, ideal = s.ideal, max = unbounded)
     fixedSpan(0.0)
 
 def Span frameSpan(Mounted n, bool horiz, float? cross):
@@ -401,6 +480,35 @@ pub def Size measure(Mounted n, Prop p):
         return Size(w = cs.w + 2.0 * i, h = cs.h + 2.0 * i)
     if k == "Frame":
         return measureFrame(n, p)
+    if k == "Layer":
+        var w = 0.0
+        var h = 0.0
+        for c in flatten(n):
+            let cs = measure(c, p)
+            w = maxOf(w, cs.w)
+            h = maxOf(h, cs.h)
+        return Size(w = w, h = h)
+    if k == "Fill":
+        let cs = measure(n.children[0], p)
+        var w = cs.w
+        var h = cs.h
+        let offeredW = p.w else (cs.w)
+        let offeredH = p.h else (cs.h)
+        if flag(n, "width"):
+            w = maxOf(cs.w, offeredW)
+        if flag(n, "height"):
+            h = maxOf(cs.h, offeredH)
+        return Size(w = w, h = h)
+    if k == "Scroll":
+        # The content proposes nothing on the scrolling axis and keeps the viewport's width otherwise;
+        # the viewport itself takes the proposal on both axes (or the content's size when unspecified).
+        var contentProp = Prop(w = p.w, h = nil)
+        if !isVerticalScroll(n):
+            contentProp = Prop(w = nil, h = p.h)
+        let cs = measure(n.children[0], contentProp)
+        let viewW = p.w else (cs.w)
+        let viewH = p.h else (cs.h)
+        return Size(w = viewW, h = viewH)
     if k == "Row" or k == "Column":
         let isRow = k == "Row"
         var mainP = p.h
@@ -451,6 +559,20 @@ def Placed placeChild(Mounted c, float x, float y, Size within):
 pub def Placed place(Mounted n, float x, float y, Size size):
     mut node = Placed(id = n.id, kind = n.kind, x = x, y = y, w = size.w, h = size.h)
     node.props = n.props
+    if n.kind == "Text":
+        # A line-limited text shows its truncated lines (the full content stays in `content`).
+        if let cap = lineLimitOf(n):
+            node.props["shown"] = shownLines(n.props["content"] else (""), size.w, cap).join("\n")
+    if n.kind == "Offset":
+        # A paint/hit-test translation: this node and its subtree move, sizes and siblings do not.
+        let dx = numProp(n, "x") else (0.0)
+        let dy = numProp(n, "y") else (0.0)
+        node.x = x + dx
+        node.y = y + dy
+        if hasChild(n):
+            let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
+            node.children.push(place(n.children[0], x + dx, y + dy, cs))
+        return node
     if isTransparent(n):
         if hasChild(n):
             let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
@@ -461,6 +583,32 @@ pub def Placed place(Mounted n, float x, float y, Size size):
         let i = numProp(n, "insets") else (0.0)
         let cs = measure(n.children[0], Prop(w = nonNeg(size.w - 2.0 * i), h = nonNeg(size.h - 2.0 * i)))
         node.children.push(place(n.children[0], x + i, y + i, cs))
+    elif k == "Layer":
+        let a = alignmentOf(n)
+        for c in flatten(n):
+            let cs = measure(c, Prop(w = size.w, h = size.h))
+            node.children.push(place(c, x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs))
+    elif k == "Fill":
+        let a = alignmentOf(n)
+        let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
+        node.children.push(place(n.children[0], x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs))
+    elif k == "Scroll":
+        let vertical = isVerticalScroll(n)
+        var contentProp = Prop(w = size.w, h = nil)
+        if !vertical:
+            contentProp = Prop(w = nil, h = size.h)
+        let cs = measure(n.children[0], contentProp)
+        var extent = cs.h - size.h
+        if !vertical:
+            extent = cs.w - size.w
+        let most = nonNeg(extent)
+        let offset = clampTo(n.scroll, 0.0, most)
+        node.props["scroll"] = "{offset}"
+        node.props["scrollMax"] = "{most}"
+        if vertical:
+            node.children.push(place(n.children[0], x, y - offset, cs))
+        else:
+            node.children.push(place(n.children[0], x - offset, y, cs))
     elif k == "Frame":
         node.children.push(placeChild(n.children[0], x, y, size))
     elif k == "Row" or k == "Column":

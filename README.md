@@ -169,29 +169,34 @@ subtree without touching layout. An unlabeled `TextField` is a validation error 
 in the tree. Not yet: `Button`/`Toggle`/`Image`/`Video`/`Separator`/`Scroll`/`List`/`Sheet`, live regions,
 `accessibilityValue`, modal scoping, selection actions, and the platform adapter.
 
-## Controls and events — [`src/events.br`](src/events.br) (layer 4, first slice)
+## Controls and events — [`src/events.br`](src/events.br) (layer 4)
 
-`Button(label, onActivate)`, `Toggle(bind bool value, label)` and `TextField(bind string value, label, …)` are native
-facades in `boring.ui`; the runtime owns their interaction and reaches the application through the `onActivate`
-callback or the bound slot (the lowering generates `viewAct(action, arg)` from each facade's shape: `onActivate` →
-"activate", a `bool` bind → "toggle", a `string` bind → "setText"). Input becomes **semantic actions**:
-`pointerDown(rt, host, placed, x, y)` hit-tests, focuses the deepest control on the path and activates/toggles it;
-`keyPress(rt, host, name)` handles `Tab`/`ShiftTab` (focus order = structural, wrapping), `Enter`/`Space`;
-`typeText` appends to the focused field; `act(rt, host, handle, action, arg)` is the accessibility entry and takes
-the same path. Each runs as one event transaction — callback, window invalidation, **one** update pass — and a
-stale handle is ignored. Keyboard focus lives on the `Runtime` (generation-checked, cleared when the node
-unmounts); layout sizes controls from the themed constants, the scene paints them, and the semantic tree gives
-them roles (`button`, `toggle`, `textField`, `focused`). Test: `tests/events_test.br` (a view whose callback
-mutates its typed state, driven by pointer, keyboard and semantic actions).
+`Button(label, onActivate, role)`, `Toggle(bind bool value, label)` and `TextField(bind string value, label, …, onSubmit)` are
+native facades in `boring.ui`; the runtime owns their interaction and reaches the application through the `onActivate` /
+`onSubmit` callbacks or the bound slot (the lowering generates `viewAct(action, arg)` and `viewHandles(action)` from each
+facade's shape). Input becomes **semantic actions**; `act(rt, host, handle, action, arg)` is the accessibility entry and takes
+the same path. Each runs as one event transaction — callback, window invalidation, **one** update pass — and a stale or
+disabled handle is ignored.
 
-Not yet: pointer release/capture/cancel, capture-target-bubble phases, disabled state, modal routing, focus rings
-and `.focused` bindings, caret/selection/IME, scroll input, error reporting from callbacks, per-state-slot
-invalidation (an action invalidates the whole window). Callbacks are written inline
-(`Button(label = "+", onActivate = ():` + an indented body) — closures capture the body's typed state.
+- **Disabled**: `Disabled(value):` (or `.disabled(true)`) — a control inside takes no focus, no capture, no action and
+  is skipped by Tab; it stays in layout, hit testing and the accessibility tree (`SemNode.disabled`, no actions).
+- **Pointer**: `pointerDown` focuses the deepest enabled control and **captures** the pointer (generation-checked, cleared when
+  the control unmounts); nothing activates yet. `pointerUp` activates a Button / toggles a Toggle only when released over the
+  captured control, released elsewhere it is a cancel; `pointerCancel` drops the capture; `click` is down + up in place.
+- **Keys**: Tab / ShiftTab traverse the enabled focus order; Space / Enter activate a focused Button, Space toggles a Toggle;
+  **Enter** on a TextField with `onSubmit` submits (consumed), otherwise the first enabled `DefaultAction` button activates;
+  **Escape** activates the first enabled `role = .Cancel` button.
+- **Text editing**: caret and selection are mounted control state (`selectionOf`). `typeText` replaces the selection or inserts
+  at the caret; `Backspace`, `Delete`, `Left`/`Right`/`Home`/`End`, their `Shift…` variants and `SelectAll` edit; a pointer press
+  places the caret at the clicked cell. ASCII text only: `String.length` differs between the interpreter and `boring build`.
+- Scroll wheel input is `scrollBy` (see "Composition, scrolling and effects").
 
-Not yet: `fill*`, `Layer`, `clip`, `Scroll`, baseline alignment, `idealWidth`, adaptive spacing pairs (one
-default gap), right-to-left, device-pixel rounding, line limits/truncation — and, for the scene: borders, overlays, opacity, shadows, transforms, images, text decorations/carets,
-hit shapes, modal routing.
+Tests: `events_test.br`, `events_extra_test.br` (disabled, capture, editing, Enter/Escape). Behaviour change: a press no longer
+activates (it captures); use `click` (or down + up) where a Button must fire.
+
+Not yet: IME / composition and undo, key capture-target-bubble phases, `.focused(...)` bindings, focus scopes and
+`focusOrder`/`focusable`, modal routing and `Sheet`, `List` selection, focus rings, momentum scrolling, scroll-into-view on
+focus, error reporting from callbacks.
 
 ## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
 

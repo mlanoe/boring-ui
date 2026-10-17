@@ -1,0 +1,54 @@
+# Display-list effects: Border, Shadow, Opacity, Offset and line-limited text
+# (src/scene.br). Run: boring run tests/scene_effects_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed lay(View root, float w, float h):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    let p = layout(rt, w, h)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def string dump(Placed p):
+    mut parts = []
+    for c in displayList(p):
+        parts.push(describe(c))
+    parts.join("; ")
+
+# A border strokes over its child, inside the receiver's bounds.
+let bordered = lay(Border(color = "red", lineWidth = 2.0, children = [Padding(insets = 2.0, children = [Text("hi")])]), 100.0, 100.0)
+assert_eq(dump(bordered), "DrawText 2,2 16x16 'hi'; StrokeRect 0,0 20x20 red 2")
+
+# A shadow paints under its child and does not change the layout.
+let shadowed = lay(Shadow(color = "gray", radius = 3.0, dx = 1.0, dy = 2.0, children = [Text("a")]), 100.0, 100.0)
+assert_eq(dump(shadowed), "DrawShadow 0,0 8x16 gray r=3 d=1,2; DrawText 0,0 8x16 'a'")
+assert_eq(shadowed.w, 8.0)
+
+# Opacity brackets the child's whole result.
+let faded = lay(Opacity(value = 0.5, children = [Row(alignment = .Center, spacing = 0.0, children = [Text("a"), Text("b")])]), 100.0, 100.0)
+assert_eq(dump(faded), "PushOpacity 0,0 16x16 0.5; DrawText 0,0 8x16 'a'; DrawText 8,0 8x16 'b'; PopOpacity 0,0 16x16 0.5")
+
+# Wrapper order matters: the clip outside the shadow clips the shadow; the shadow outside the clip does not.
+let clipOutside = lay(Clip(children = [Shadow(children = [Frame(width = 10.0, height = 10.0, children = [Text("x")])])]), 100.0, 100.0)
+assert_eq(dump(clipOutside), "PushClip 0,0 10x10; DrawShadow 0,0 10x10 black r=4 d=0,2; DrawText 1,-3 8x16 'x'; PopClip 0,0 10x10")
+let clipInside = lay(Shadow(children = [Clip(children = [Frame(width = 10.0, height = 10.0, children = [Text("x")])])]), 100.0, 100.0)
+assert_eq(dump(clipInside), "DrawShadow 0,0 10x10 black r=4 d=0,2; PushClip 0,0 10x10; DrawText 1,-3 8x16 'x'; PopClip 0,0 10x10")
+
+# Offset moves paint and hit geometry, never siblings.
+let moved = lay(Row(alignment = .Center, spacing = 0.0, children = [Offset(x = 5.0, y = 3.0, children = [Text("a")]), Text("b")]), 100.0, 50.0)
+assert_eq(dump(moved), "DrawText 5,3 8x16 'a'; DrawText 8,0 8x16 'b'")
+assert_eq(hitTest(moved, 6.0, 4.0).length, 3)       # Row, Offset, Text (the shifted geometry)
+assert_eq(hitTest(moved, 6.0, 1.0).length, 1)       # Row only: the shifted Text is not there
+
+# A line-limited text paints its truncated lines.
+let limited = lay(Text(content = "aa bb cc dd ee", lineLimit = 2), 40.0, 500.0)
+assert_eq(dump(limited), "DrawText 0,0 40x32 'aa bb\ncc...'")
+
+print "scene effects ok"

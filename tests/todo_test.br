@@ -34,7 +34,7 @@ def Placed nth(Runtime rt, string kind, string key, string want, int n):
     all[n]
 
 def bool press(mut Runtime rt, Builder host, Placed p):
-    pointerDown(rt, host, lay(rt), p.x + 2.0, p.y + 2.0)
+    click(rt, host, lay(rt), p.x + 2.0, p.y + 2.0)
 
 # The row titles in order, read from the TextFields' bound values.
 def string titles(Runtime rt):
@@ -92,6 +92,7 @@ assert(press(rt, host, nth(rt, "Button", "label", "Cancel", 0)))
 # ── edit in place, toggle ────────────────────────────────────────────────────────────────────
 
 assert(press(rt, host, nth(rt, "TextField", "label", "Item title", 1)), "focus row 2")
+assert(keyPress(rt, host, "End"))                                         # the caret goes where the click put it: move it to the end
 assert(typeText(rt, host, "!"))
 assert_eq(titles(rt), "Design boring-ui|Implement the vertical slice!|Write tests")
 assert(press(rt, host, nth(rt, "Toggle", "label", "Completed", 0)))

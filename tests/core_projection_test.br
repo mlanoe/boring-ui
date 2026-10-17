@@ -15,15 +15,10 @@ view TodoRow:
     bind Todo item
 
     body():
-        # (Fields read in separate statements: `boring build` still deadlocks on two reads of one
-        # `'actor` slot inside a single expression — filed as a transpiler task.)
-        let id = item.id
-        let title = item.title
         Row(alignment = .Center, spacing = nil):
-            Text("{id}:{title}")
+            Text("{item.id}:{item.title}")
             Button(label = "rename", onActivate = ():
-                let renamed = "{item.title}!"
-                item.title = renamed)
+                item.title = "{item.title}!")
             Button(label = "complete", onActivate = ():
                 item.completed = true)
 

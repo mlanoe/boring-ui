@@ -3,9 +3,11 @@
 #   - a deterministic, backend-neutral DISPLAY LIST (no GPU, no pixels), and
 #   - HIT-TEST answers (the retained path from the root to the target under a point).
 #
-# Vocabulary of this slice: `FillRect`, `DrawText`, `PushClip`, `PopClip`. A wrapper controls the
-# order of its own effects and its child: `Background` paints, then the child; `Clip` pushes a clip
-# around everything its child emits. Borders, overlays, opacity, shadows, transforms, images and
+# Vocabulary: `FillRect`, `StrokeRect` (inside border), `DrawShadow`, `DrawText`, `PushClip`/`PopClip`
+# (`Clip` and `Scroll` viewports), `PushOpacity`/`PopOpacity`. A wrapper controls the order of its own
+# effects and its child: `Background` paints, then the child; `Border` strokes over the child; `Shadow`
+# paints under it; `Opacity` and `Clip` bracket everything the child emits. `Offset` is a placement
+# change (see layout.br), so it emits nothing. Overlays, transforms beyond translation, images and
 # the accessibility tree are not here yet.
 #
 # Hit region = a node's layout bounds intersected with ancestor clips: visible overflow never enlarges
@@ -22,16 +24,35 @@ pub struct Command:
     pub string text = ""
     pub string color = ""
     pub int node = -1
+    # Border width / opacity / shadow radius, and a shadow's offset.
+    pub var float value = 0.0
+    pub var float dx = 0.0
+    pub var float dy = 0.0
 
 def Command cmd(string kind, Placed p, string text, string color):
     Command(kind = kind, x = p.x, y = p.y, w = p.w, h = p.h, text = text, color = color, node = p.id)
+
+def float num(Placed p, string key, float fallback):
+    if let s = p.props[key]:
+        return s.parseFloat() else (fallback)
+    fallback
 
 # Appends `p`'s commands (and its subtree's) to `out` in paint order.
 pub def paint(Placed p, mut [Command] out):
     if p.kind == "Background":
         out.push(cmd("FillRect", p, "", p.props["color"] else ("")))
+    if p.kind == "Shadow":
+        mut shadow = cmd("DrawShadow", p, "", p.props["color"] else ("black"))
+        shadow.value = num(p, "radius", 4.0)
+        shadow.dx = num(p, "dx", 0.0)
+        shadow.dy = num(p, "dy", 2.0)
+        out.push(shadow)
+    if p.kind == "Opacity":
+        mut open = cmd("PushOpacity", p, "", "")
+        open.value = num(p, "value", 1.0)
+        out.push(open)
     if p.kind == "Text":
-        out.push(cmd("DrawText", p, p.props["content"] else (""), ""))
+        out.push(cmd("DrawText", p, p.props["shown"] else (p.props["content"] else ("")), ""))
     if p.kind == "Button":
         out.push(cmd("FillRect", p, "", "button"))
         let label = p.props["label"] else ("")
@@ -48,12 +69,20 @@ pub def paint(Placed p, mut [Command] out):
         let label = p.props["label"] else ("")
         out.push(Command(kind = "FillRect", x = p.x, y = p.y, w = toggleBox, h = toggleBox, text = "", color = state, node = p.id))
         out.push(Command(kind = "DrawText", x = p.x + toggleBox + controlPadding, y = p.y, w = p.w - toggleBox - controlPadding, h = p.h, text = label, color = "", node = p.id))
-    if p.kind == "Clip":
+    if p.kind == "Clip" or p.kind == "Scroll":
         out.push(cmd("PushClip", p, "", ""))
     for c in p.children:
         paint(c, out)
-    if p.kind == "Clip":
+    if p.kind == "Clip" or p.kind == "Scroll":
         out.push(cmd("PopClip", p, "", ""))
+    if p.kind == "Opacity":
+        mut close = cmd("PopOpacity", p, "", "")
+        close.value = num(p, "value", 1.0)
+        out.push(close)
+    if p.kind == "Border":
+        mut stroke = cmd("StrokeRect", p, "", p.props["color"] else (""))
+        stroke.value = num(p, "lineWidth", 1.0)
+        out.push(stroke)
 
 pub def [Command] displayList(Placed root):
     mut [Command] out = []
@@ -67,6 +96,12 @@ pub def string describe(Command c):
         s = "{s} '{c.text}'"
     if c.kind == "FillRect":
         s = "{s} {c.color}"
+    if c.kind == "StrokeRect":
+        s = "{s} {c.color} {c.value}"
+    if c.kind == "DrawShadow":
+        s = "{s} {c.color} r={c.value} d={c.dx},{c.dy}"
+    if c.kind == "PushOpacity" or c.kind == "PopOpacity":
+        s = "{s} {c.value}"
     s
 
 def bool contains(Placed p, float x, float y):

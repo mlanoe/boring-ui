@@ -50,6 +50,9 @@ pub struct Mounted:
     pub var mut {string=string} props = {=}
     pub var View? view = nil
     pub var View? control = nil
+    # A `Scroll`'s offset along its axis: identity-scoped mounted control state, kept across rebuilds
+    # (reconciliation never touches it) and clamped by layout to the content that is actually there.
+    pub var float scroll = 0.0
 
 # The runtime's view of a tree of lowered `View`s: native views become `Desc`s eagerly, a
 # composite view stays a leaf carrying its `View` until it is expanded against its mounted state.
@@ -125,6 +128,9 @@ pub struct Runtime:
     pub var int maxPasses = 64
     # Keyboard focus (generation-checked; cleared when the focused node unmounts).
     pub var Handle? focus = nil
+    # The control that took the last pointer press: later move/up/cancel go to it wherever the pointer is
+    # (generation-checked; cleared when it unmounts — the draft's "unmounting sends cancellation").
+    pub var Handle? capture = nil
     pub var int passesRun = 0     # update passes executed by `flush`, over the runtime's lifetime
     # Ids that still owe their `OnMount` hook (created by a commit, hook not run yet), in order.
     var mut [int] pendingMount = []
@@ -293,6 +299,9 @@ pub struct Runtime:
         if let f = focus:
             if f.id == node.id:
                 focus = nil
+        if let c = capture:
+            if c.id == node.id:
+                capture = nil
         events.push("unmount {node.kind}#{node.id}")
         # The hook runs with the node's own identity (and the inputs it captured) still valid.
         if node.kind == "OnUnmount":
@@ -423,6 +432,27 @@ pub struct Runtime:
             self.commitProjections()
             _ = self.apply(b.build(self))
         true
+
+    # ── scroll offsets ────────────────────────────────────────────────────────
+
+    # Sets the offset of the `Scroll` node `id` (layout clamps it); false when there is no such node.
+    def bool scrollTo(int id, float offset):
+        if let r = root:
+            if self.find(id) == nil:
+                return false
+            root = self.withScroll(r, id, offset)
+            return true
+        false
+
+    # The tree with one node's scroll offset replaced (a rebuilt copy: nothing is mutated in place).
+    def Mounted withScroll(Mounted n, int id, float offset):
+        mut [Mounted] kids = []
+        for c in n.children:
+            kids.push(self.withScroll(c, id, offset))
+        var next = n.scroll
+        if n.id == id:
+            next = offset
+        Mounted(id = n.id, generation = n.generation, kind = n.kind, site = n.site, key = n.key, children = kids, props = n.props, view = n.view, control = n.control, scroll = next)
 
     # ── bind projections ──────────────────────────────────────────────────────
 

@@ -48,13 +48,13 @@ let placed = relayout(rt)
 let button = placed.children[0].children[0]            # Panel → Column → Button
 assert_eq(button.kind, "Button")
 let passesBefore = rt.passesRun
-assert(pointerDown(rt, host, placed, button.x + 4.0, button.y + 4.0), "hit the button")
+assert(click(rt, host, placed, button.x + 4.0, button.y + 4.0), "hit the button")
 assert_eq(label(rt), "1:")                              # the callback ran against the panel's state
 assert_eq(rt.passesRun, passesBefore + 1)               # one update pass for the whole event
 assert(rt.focus != nil, "pressing a control focuses it")
 
 # A press that hits no control does nothing.
-assert(!pointerDown(rt, host, relayout(rt), 190.0, 190.0))
+assert(!click(rt, host, relayout(rt), 190.0, 190.0))
 assert_eq(label(rt), "1:")
 
 # ── keyboard: tab order, activate, toggle, typing ──────────────────────────────────────────────

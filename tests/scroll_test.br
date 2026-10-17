@@ -1,0 +1,141 @@
+# Scroll viewports: offset as mounted state, clamping, clipping, hit testing and wheel input with
+# bubbling (src/layout.br, src/scene.br, src/events.br). Run: boring run tests/scroll_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+
+view Page:
+    state int taps = 0
+
+    def tap():
+        taps += 1
+
+    req int count():
+        taps
+
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                for i in 0..<9:
+                    Text("l{i}")
+                Button(label = "end", onActivate = ():
+                    self.tap())
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed laid(Runtime rt):
+    let p = layout(rt, 100.0, 48.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Placed scrollOf(Placed root):
+    root.children[0]
+
+def int taps(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    mut st = box as Page__State else (Page__State())
+    Page().count(st)
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+var placed = laid(rt)
+
+# The viewport takes the proposal; its content chose its full extent: 9 lines of 16 and a 32 tall button.
+let s0 = scrollOf(placed)
+assert_eq(s0.kind, "Scroll")
+assert_eq(s0.w, 100.0)
+assert_eq(s0.h, 48.0)
+assert_eq(s0.props["scroll"], "0")
+assert_eq(s0.props["scrollMax"], "128")
+assert_eq(s0.children[0].y, 0.0)
+
+# The display list clips to the viewport.
+let cmds = displayList(placed)
+assert_eq(describe(cmds[0]), "PushClip 0,0 100x48")
+assert_eq(describe(cmds[cmds.length - 1]), "PopClip 0,0 100x48")
+
+# The button is below the fold: not reachable, so a press at its (scrolled-out) place does nothing.
+assert_eq(hitTest(placed, 10.0, 160.0).length, 0)
+assert(!click(rt, host, placed, 10.0, 160.0))
+assert_eq(taps(rt), 0)
+
+# Wheel input moves the offset by what it can apply, and the content follows.
+assert(scrollBy(rt, host, placed, 10.0, 10.0, 0.0, 40.0))
+placed = laid(rt)
+assert_eq(scrollOf(placed).props["scroll"], "40")
+assert_eq(scrollOf(placed).children[0].y, -40.0)
+
+# Clamped to the content: asking for more only moves to the end, and a second try moves nothing.
+assert(scrollBy(rt, host, placed, 10.0, 10.0, 0.0, 1000.0))
+placed = laid(rt)
+assert_eq(scrollOf(placed).props["scroll"], "128")
+assert(!scrollBy(rt, host, placed, 10.0, 10.0, 0.0, 5.0))
+assert(scrollBy(rt, host, placed, 10.0, 10.0, 0.0, -28.0))
+placed = laid(rt)
+assert_eq(scrollOf(placed).props["scroll"], "100")
+
+# At the end the button is inside the viewport and takes the press; offsets survive the rebuild it caused.
+assert(scrollBy(rt, host, placed, 10.0, 10.0, 0.0, 100.0))
+placed = laid(rt)
+assert(click(rt, host, placed, 10.0, 40.0))
+assert_eq(taps(rt), 1)
+placed = laid(rt)
+assert_eq(scrollOf(placed).props["scroll"], "128")
+
+# Offsets are identity-scoped state: they live on the mounted node, not in the description.
+assert_eq(rt.errors.length, 0)
+
+# ── nested scroll containers: the deepest consumes what it can, the remainder bubbles ──────────
+
+view Nested:
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                Frame(height = 32.0):
+                    Scroll(axis = .Vertical):
+                        Column(alignment = .Leading, spacing = 0.0):
+                            for i in 0..<4:
+                                Text("in{i}")
+                for j in 0..<6:
+                    Text("out{j}")
+
+struct NestedBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Nested()
+
+def [Placed] scrolls(Placed p):
+    mut out = []
+    if p.kind == "Scroll":
+        out.push(p)
+    for c in p.children:
+        for s in scrolls(c):
+            out.push(s)
+    out
+
+let nhost = ViewRoot(inner = NestedBuilder())
+mut nrt = Runtime()
+nrt.start(nhost)
+var nplaced = laid(nrt)
+let both = scrolls(nplaced)
+assert_eq(both.length, 2)
+assert_eq(both[0].props["scrollMax"], "80")        # outer: 32 + 96 = 128 content, 48 viewport
+assert_eq(both[1].props["scrollMax"], "32")        # inner: 64 content, 32 viewport
+
+# A wheel delta over the inner viewport: it takes its 32, the other 18 scrolls the outer one.
+assert(scrollBy(nrt, nhost, nplaced, 10.0, 10.0, 0.0, 50.0))
+nplaced = laid(nrt)
+let after = scrolls(nplaced)
+assert_eq(after[1].props["scroll"], "32")
+assert_eq(after[0].props["scroll"], "18")
+
+# Over the outer-only region, only the outer one moves.
+assert(scrollBy(nrt, nhost, nplaced, 10.0, 40.0, 0.0, 10.0))
+nplaced = laid(nrt)
+assert_eq(scrolls(nplaced)[1].props["scroll"], "32")
+assert_eq(scrolls(nplaced)[0].props["scroll"], "28")
+
+print "scroll ok"
