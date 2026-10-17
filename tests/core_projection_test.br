@@ -1,0 +1,121 @@
+# `bind` projections of keyed collection elements through the core: a child's `bind Todo item` edits the
+# parent's `state [Todo]` element for its KEY, so a reorder between edits cannot redirect a write, an
+# untouched projection never overwrites a parent-side change, and a removed key is reported.
+# Run: boring run tests/core_projection_test.br
+
+use boring.ui.*
+use ui.core.*
+
+pub struct Todo:
+    pub int id
+    pub var string title
+    pub var bool completed
+
+view TodoRow:
+    bind Todo item
+
+    body():
+        # (Fields read in separate statements: `boring build` still deadlocks on two reads of one
+        # `'actor` slot inside a single expression — filed as a transpiler task.)
+        let id = item.id
+        let title = item.title
+        Row(alignment = .Center, spacing = nil):
+            Text("{id}:{title}")
+            Button(label = "rename", onActivate = ():
+                let renamed = "{item.title}!"
+                item.title = renamed)
+            Button(label = "complete", onActivate = ():
+                item.completed = true)
+
+view TodoList:
+    state [Todo] items = [Todo(id = 1, title = "a", completed = false), Todo(id = 2, title = "b", completed = false), Todo(id = 3, title = "c", completed = false)]
+
+    def moveFirstToEnd():
+        let first = items[0]
+        items.removeIndices([0])
+        items.push(first)
+
+    def dropId(int id):
+        mut kept = []
+        for t in items:
+            if t.id != id:
+                kept.push(t)
+        items = kept
+
+    def retitle(int id, string title):
+        for i in 0..<items.length:
+            if items[i].id == id:
+                items[i].title = title
+
+    req string summary():
+        mut parts = []
+        for t in items:
+            parts.push("{t.id}:{t.title}:{t.completed}")
+        parts.join(",")
+
+    body():
+        Column(alignment = .Center, spacing = nil):
+            for item in items with item.id:
+                TodoRow(item = item)
+
+struct ListBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): TodoList()
+
+def TodoList__State listState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as TodoList__State else (TodoList__State())
+
+def string summary(Runtime rt):
+    TodoList().summary(listState(rt))
+
+# The ids of every Button labelled `label`, in preorder.
+def [int] buttons(Mounted m, string label):
+    mut out = []
+    if m.kind == "Button" and (m.props["label"] else ("")) == label:
+        out.push(m.id)
+    for c in m.children:
+        for id in buttons(c, label):
+            out.push(id)
+    out
+
+def press(mut Runtime rt, Builder host, string label, int n):
+    let root = rt.root else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    let ids = buttons(root, label)
+    assert(ids.length > n, "button {label}#{n} exists")
+    let id = ids[n]
+    let h = rt.handle(id) else (Handle(id = -1, generation = -1))
+    rt.beginEvent()
+    let node = rt.find(id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    if let control = node.control:
+        control.viewAct("activate", "")
+    rt.invalidateRoot()
+    rt.endEvent(host)
+
+let host = ViewRoot(inner = ListBuilder())
+mut rt = Runtime()
+rt.start(host)
+assert_eq(summary(rt), "1:a:false,2:b:false,3:c:false")
+
+# Editing the second row writes element 2 (by key), not "the second element".
+press(rt, host, "rename", 1)
+assert_eq(summary(rt), "1:a:false,2:b!:false,3:c:false")
+
+# Reorder in the parent, then edit the SAME logical row again: the write still lands on key 2.
+mut st = listState(rt)
+TodoList().moveFirstToEnd(st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+assert_eq(summary(rt), "2:b!:false,3:c:false,1:a:false")
+press(rt, host, "complete", 0)
+assert_eq(summary(rt), "2:b!:true,3:c:false,1:a:false")
+
+# A parent-side change to an element that no child touched survives the update.
+mut st2 = listState(rt)
+TodoList().retitle(3, "parent", st2)
+rt.invalidateRoot()
+assert(rt.flush(host))
+assert_eq(summary(rt), "2:b!:true,3:parent:false,1:a:false")
+assert_eq(rt.errors.length, 0)
+
+print "core projection ok"

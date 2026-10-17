@@ -418,8 +418,31 @@ pub struct Runtime:
             passes += 1
             passesRun += 1
             dirty = {}
+            # Child writes through `bind` projections land in their parents' collections (by key)
+            # before anything is rebuilt from them.
+            self.commitProjections()
             _ = self.apply(b.build(self))
         true
+
+    # ── bind projections ──────────────────────────────────────────────────────
+
+    # Asks every mounted composite view (preorder) to write its projections back by key. A projection
+    # whose key is gone is dropped and reported (the draft's stale-handle rule: the write is a no-op).
+    def void commitProjections():
+        if let r = root:
+            let stale = self.commitProjectionsIn(r)
+            if stale > 0:
+                errors.push("stale bind projection: {stale} write(s) dropped, the element's key is gone")
+
+    def int commitProjectionsIn(Mounted n):
+        var stale = 0
+        if let v = n.view:
+            if let info = meta[n.id]:
+                if let st = info.state:
+                    stale += v.commitProjectionsIn(st)
+        for c in n.children:
+            stale += self.commitProjectionsIn(c)
+        stale
 
     # ── lifecycle hooks and scoped tasks ──────────────────────────────────────
 

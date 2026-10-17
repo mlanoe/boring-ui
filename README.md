@@ -93,6 +93,33 @@ Ordered wrapper views in `boring.ui` (layout/paint-transparent, like every modif
 - **State seeds**: `Counter(title = t, count = expensive())` seeds that identity's `state` on its first mount only; the
   argument is a lazy closure evaluated once by `newState()`, never when a description is built or on a rebuild.
 
+## `bind` projections of keyed collection elements
+
+```boring
+view TodoList:
+    state [Todo] items = [...]
+    body():
+        Column:
+            for item in items with item.id:
+                TodoRow(item = item)          # TodoRow declares `bind Todo item`
+```
+
+A child's `bind Todo item` is still a `Slot<Todo>'actor`; the parent passes a **projection slot** for the keyed element.
+The lowering (`boring/src/lower_view.rs`, "bind projections") adds, per site, a hidden typed array to the parent's state
+holding `{ collection slot, projection slot, base copy, key }` records. At the end of each event, before the update pass
+rebuilds anything, the core asks every mounted composite view to `commitProjectionsIn` (`Runtime.commitProjections`): a
+projection whose printed form differs from its base copy is written back into the collection at the element whose KEY
+still matches — never an index, so a reorder between two edits cannot redirect a write. A key that is gone is a stale
+projection: the write is dropped and reported in `errors`. A projection nobody edited never overwrites a parent-side
+change. The registries are rebuilt by every `body()`.
+
+- Needs a keyed loop (`for … with <key>`), a `state [T]` collection with a named element type, and a key expression that
+  only uses the loop variable; otherwise a compile error explains what to write.
+- Deviations from the draft: the write-back is transactional (the collection is updated at commit, not at the child's
+  write), a child's change wins over a parent change to the same element in the same event, and a field projection
+  (`item.title` into a native control's `bind string`) is still not a projection — `examples/todo` keeps its per-field
+  `Slot`s for that. Test: `tests/core_projection_test.br` (interpreter and `boring build`).
+
 ## Layout — [`src/layout.br`](src/layout.br) (layer 3, first slice)
 
 Headless size negotiation and placement over the mounted tree, with a deterministic fixture font
