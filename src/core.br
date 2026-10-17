@@ -350,13 +350,9 @@ pub struct Runtime:
         # An `AnimationScope` whose trigger value changed (never on its first mount) fires its animation.
         if node.kind == "AnimationScope":
             if (node.props["value"] else ("")) != (d.props["value"] else ("")):
-                # (Each prop bound to a local first: `boring build` cannot parse a parenthesized `else` result.)
-                let durationText = d.props["duration"] else ("200")
-                let responseText = d.props["response"] else ("300")
-                let dampingText = d.props["damping"] else ("0.8")
-                let duration = durationText.parseFloat() else (200.0)
-                let response = responseText.parseFloat() else (300.0)
-                let damping = dampingText.parseFloat() else (0.8)
+                let duration = (d.props["duration"] else ("200")).parseFloat() else (200.0)
+                let response = (d.props["response"] else ("300")).parseFloat() else (300.0)
+                let damping = (d.props["damping"] else ("0.8")).parseFloat() else (0.8)
                 triggers.push(Trigger(node = node.id, animation = animationNamed(d.props["curve"] else ("EaseInOut"), duration, response, damping)))
         node.props = d.props
         node.control = d.control
@@ -738,18 +734,13 @@ pub struct Runtime:
 
     # The same, explicitly snapping: it overrides an inherited animation and any triggered scope.
     def void withoutAnimation(Builder host, UIAction body):
-        self.beginEvent()
-        body()
-        self.invalidateRoot()
-        lastAnimation = Animation()
-        self.endEvent(host)
+        self.animate(Animation(), host, body)
 
     # The animation of the last transaction that tagged one (clears it).
     def Animation? takeAnimation():
-        if let a = lastAnimation:
-            lastAnimation = nil
-            return a
-        nil
+        let a = lastAnimation
+        lastAnimation = nil
+        a
 
     # The `AnimationScope` triggers recorded since the last call (clears them).
     def [Trigger] takeTriggers():

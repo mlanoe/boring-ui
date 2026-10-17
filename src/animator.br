@@ -43,19 +43,16 @@ def Placed emptyPlaced():
 
 # ── commit ────────────────────────────────────────────────────────────────────────────────────────
 
-# (`has` + `inherited` rather than an optional: `boring build` does not wrap an assignment to an optional `var`.)
-def void collectScopes(Placed p, [Trigger] triggers, bool has, Animation inherited, mut [NodeAnim] out):
-    var hasHere = has
+def void collectScopes(Placed p, [Trigger] triggers, Animation? inherited, mut [NodeAnim] out):
     var here = inherited
     for t in triggers:
         if t.node == p.id:
-            hasHere = true
             here = t.animation
     for c in p.children:
-        collectScopes(c, triggers, hasHere, here, out)
-    # (After the children: pushing `here` moves it, and `boring build` does not clone before a last use.)
-    if hasHere:
-        out.push(NodeAnim(id = p.id, animation = here))
+        collectScopes(c, triggers, here, out)
+    # (After the children: `if let` on an optional moves it under `boring build`, so it must be the last use.)
+    if let a = here:
+        out.push(NodeAnim(id = p.id, animation = a))
 
 # A new committed layout `target` at time `now`. See the module comment for how metadata is applied.
 pub def void commit(mut Animator a, Placed target, Animation? transaction, [Trigger] triggers, float now):
@@ -75,7 +72,7 @@ pub def void commit(mut Animator a, Placed target, Animation? transaction, [Trig
         else:
             a.base = t
     mut [NodeAnim] scopes = []
-    collectScopes(target, triggers, false, Animation(), scopes)
+    collectScopes(target, triggers, nil, scopes)
     a.scopes = scopes
 
 def Animation animationFor(Animator a, int id):
@@ -117,10 +114,8 @@ def string valueOf(Placed p, string key, string fallback):
 
 def PropValue? liveBlend(Placed f, Placed t, float p):
     if t.kind == "Opacity":
-        let aText = valueOf(f, "value", "1")
-        let bText = valueOf(t, "value", "1")
-        let a = aText.parseFloat() else (1.0)
-        let b = bText.parseFloat() else (1.0)
+        let a = valueOf(f, "value", "1").parseFloat() else (1.0)
+        let b = valueOf(t, "value", "1").parseFloat() else (1.0)
         if a != b:
             return PropValue(key = "value", value = "{lerp(a, b, p)}")
     if t.kind == "Background":
@@ -134,10 +129,8 @@ def PropValue? liveBlend(Placed f, Placed t, float p):
 def [PropValue] offsetLive(Placed f, Placed t, float p):
     mut [PropValue] out = []
     for key in ["x", "y"]:
-        let aText = valueOf(f, key, "0")
-        let bText = valueOf(t, key, "0")
-        let a = aText.parseFloat() else (0.0)
-        let b = bText.parseFloat() else (0.0)
+        let a = valueOf(f, key, "0").parseFloat() else (0.0)
+        let b = valueOf(t, key, "0").parseFloat() else (0.0)
         if a != b:
             out.push(PropValue(key = key, value = "{lerp(a, b, p)}"))
     out
@@ -185,8 +178,7 @@ def string kindOf(Placed t, string key):
     t.props[key] else ("Fade")
 
 def float numberOf(Placed t, string key, float fallback):
-    let text = t.props[key] else ("")
-    text.parseFloat() else (fallback)
+    (t.props[key] else ("")).parseFloat() else (fallback)
 
 # `t` with its geometry scaled about its own center and translated, recursively (hit testing and painting
 # follow the presentation geometry).
