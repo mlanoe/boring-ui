@@ -1,0 +1,247 @@
+# The animator end to end: transactions, scopes, retargeting, transitions with ghosts, reduced motion,
+# colors (src/animator.br, anim.br, core.br). Run: boring run tests/animator_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.semantics.*
+use ui.anim.*
+use ui.animator.*
+
+view Panel:
+    state bool wide = false
+    state string tag = "a"
+    state bool shown = false
+    state bool faded = false
+    state bool light = false
+
+    def setWide(bool v):
+        wide = v
+
+    def setTag(string v):
+        tag = v
+
+    def setShown(bool v):
+        shown = v
+
+    def setFaded(bool v):
+        faded = v
+
+    def setLight(bool v):
+        light = v
+
+    body():
+        var width = 100.0
+        if wide:
+            width = 300.0
+        var inner = 100.0
+        if tag == "b":
+            inner = 200.0
+        var tint = "#000000"
+        if light:
+            tint = "#FFFFFF"
+        Column(alignment = .Leading, spacing = 0.0):
+            Frame(width = width, height = 20.0):
+                Text("bar")
+            AnimationScope(curve = "Linear", duration = 100.0, value = tag):
+                Frame(width = inner, height = 20.0):
+                    Text("scoped")
+            Background(color = tint):
+                Frame(width = 40.0, height = 20.0):
+                    Text("c")
+            if shown:
+                Transition(insertion = .Scale, removal = .Slide, amount = 0.5, dx = 40.0):
+                    Frame(width = 50.0, height = 20.0):
+                        Text("pop")
+            if faded:
+                Transition():
+                    Frame(width = 60.0, height = 20.0):
+                        Text("fade")
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Panel__State panelState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+def Placed layedOut(Runtime rt):
+    let p = layout(rt, 400.0, 400.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.001 and d > 0.0 - 0.001
+
+# The first placed node of a kind whose given prop matches (preorder), or an empty one.
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+# The bar Frame (first Frame) and the scoped one (second).
+def Placed frameAt(Placed root, int n):
+    ofKind(root, "Frame")[n]
+
+def string hexOf([Command] cmds, string kind, int n):
+    var seen = 0
+    var found = ""
+    for c in cmds:
+        if c.kind == kind:
+            if seen == n:
+                found = c.hex
+            seen += 1
+    found
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+mut an = Animator()
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 0.0)
+mut st = panelState(rt)
+
+# ── nothing animates by default ───────────────────────────────────────────────────────────────────
+
+Panel().setWide(true, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 10.0)
+assert(near(frameAt(presentation(an, 10.0), 0).w, 300.0))
+assert(!isAnimating(an, 10.0))
+
+# ── animate: the target is committed at once, the presentation eases there ───────────────────────
+
+rt.animate(easeInOut(200.0), host, ():
+    Panel().setWide(false, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 1000.0)
+assert(near(frameAt(presentation(an, 1000.0), 0).w, 300.0))      # starts where it was
+assert(near(frameAt(presentation(an, 1100.0), 0).w, 200.0))      # easeInOut(0.5) = 0.5
+assert(near(frameAt(presentation(an, 1200.0), 0).w, 100.0))      # and arrives
+assert(isAnimating(an, 1100.0))
+assert(!isAnimating(an, 1200.0))
+# the layout itself (what body() and callbacks see) is already the target
+assert(near(frameAt(layedOut(rt), 0).w, 100.0))
+
+# Hit testing follows the presentation geometry, not the committed one.
+let midway = presentation(an, 1100.0)
+assert(hitTest(midway, 150.0, 5.0).length > 0)
+assert(hitTest(midway, 250.0, 5.0).length == 0)
+
+# ── retargeting mid-flight starts from the current presentation ──────────────────────────────────
+
+rt.animate(easeInOut(200.0), host, ():
+    Panel().setWide(true, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 1100.0)
+assert(near(frameAt(presentation(an, 1100.0), 0).w, 200.0))      # from the in-flight value, not from 100
+assert(near(frameAt(presentation(an, 1200.0), 0).w, 250.0))
+assert(near(frameAt(presentation(an, 1300.0), 0).w, 300.0))
+
+# A non-animated update snaps, cancelling the interpolation.
+Panel().setWide(false, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 1350.0)
+assert(near(frameAt(presentation(an, 1350.0), 0).w, 100.0))
+
+# ── AnimationScope: only what is inside it animates, and only when its value changed ─────────────
+
+Panel().setTag("b", st)
+Panel().setWide(true, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 2000.0)
+assert(near(frameAt(presentation(an, 2000.0), 0).w, 300.0))      # outside the scope: snapped
+assert(near(frameAt(presentation(an, 2000.0), 1).w, 100.0))      # inside: starts from the old width
+assert(near(frameAt(presentation(an, 2050.0), 1).w, 150.0))      # linear, 100 ms
+assert(near(frameAt(presentation(an, 2100.0), 1).w, 200.0))
+# An ancestor rebuilding does not animate it: no trigger, no motion.
+Panel().setWide(false, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 2200.0)
+assert(near(frameAt(presentation(an, 2200.0), 1).w, 200.0))
+assert(!isAnimating(an, 2200.0))
+# withoutAnimation beats a triggered scope.
+rt.withoutAnimation(host, ():
+    Panel().setTag("a", st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 2300.0)
+assert(near(frameAt(presentation(an, 2300.0), 1).w, 100.0))
+
+# ── colors blend in linear light ──────────────────────────────────────────────────────────────────
+
+rt.animate(linear(100.0), host, ():
+    Panel().setLight(true, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 3000.0)
+assert_eq(hexOf(displayList(presentation(an, 3000.0)), "FillRect", 0), "#000000")
+assert_eq(hexOf(displayList(presentation(an, 3050.0)), "FillRect", 0), "#BCBCBC")
+assert_eq(hexOf(displayList(presentation(an, 3100.0)), "FillRect", 0), "#FFFFFF")
+
+# ── transitions: Scale in, Slide out, with a ghost that is presentation only ─────────────────────
+
+rt.animate(linear(100.0), host, ():
+    Panel().setShown(true, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 4000.0)
+let enter0 = ofKind(presentation(an, 4000.0), "Transition")[0]
+let rest = ofKind(layedOut(rt), "Transition")[0]
+assert(near(enter0.w, rest.w * 0.5))                           # scaled about its center at p = 0
+assert(near(enter0.x + enter0.w / 2.0, rest.x + rest.w / 2.0))
+let enter1 = ofKind(presentation(an, 4100.0), "Transition")[0]
+assert(near(enter1.w, rest.w))
+
+rt.animate(linear(100.0), host, ():
+    Panel().setShown(false, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 5000.0)
+assert_eq(ofKind(layedOut(rt), "Transition").length, 0)         # gone from the committed layout
+let ghosts = ofKind(presentation(an, 5050.0), "Transition")
+assert_eq(ghosts.length, 1)                                     # but still displayed
+assert(ghosts[0].ghost)
+assert(near(ghosts[0].x, rest.x + 20.0))                        # sliding out: halfway through dx = 40
+assert(!hitTest(presentation(an, 5050.0), ghosts[0].x + 5.0, ghosts[0].y + 5.0).contains(ghosts[0].id))   # never a hit target
+assert_eq(describeTree(semantics(presentation(an, 5050.0)).roots, 0).join("\n").contains("pop"), false)
+assert_eq(ofKind(presentation(an, 5100.0), "Transition").length, 0)   # finished
+# Removal without an animated transaction leaves no ghost.
+rt.animate(linear(100.0), host, ():
+    Panel().setShown(true, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 6000.0)
+Panel().setShown(false, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 6200.0)
+assert_eq(ofKind(presentation(an, 6200.0), "Transition").length, 0)
+
+# ── Fade is group opacity ──────────────────────────────────────────────────────────────────────────
+
+rt.animate(linear(100.0), host, ():
+    Panel().setFaded(true, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 7000.0)
+let fading = presentation(an, 7050.0)
+assert(near(ofKind(fading, "Transition")[0].alpha, 0.5))
+mut fadeCmds = []
+for c in displayList(fading):
+    if c.kind == "PushOpacity":
+        fadeCmds.push(describe(c))
+assert_eq(fadeCmds.length, 1)
+assert(fadeCmds[0].contains("0.5"))
+
+# ── reduced motion: geometry snaps, motion becomes a short fade ───────────────────────────────────
+
+an.reducedMotion = true
+rt.animate(easeInOut(400.0), host, ():
+    Panel().setWide(true, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 8000.0)
+assert(near(frameAt(presentation(an, 8000.0), 0).w, 300.0))     # geometry did not animate
+rt.animate(easeInOut(400.0), host, ():
+    Panel().setShown(true, st))
+commit(an, layedOut(rt), rt.takeAnimation(), rt.takeTriggers(), 9000.0)
+let reducedEnter = ofKind(presentation(an, 9050.0), "Transition")
+assert(near(reducedEnter[0].w, 50.0))                           # Scale became a fade: no scaling
+assert(near(reducedEnter[0].alpha, 0.5))                        # 100 ms linear cross-fade
+assert_eq(rt.errors.length, 0)
+
+print "animator ok"

@@ -1,0 +1,195 @@
+# boring-ui animation primitives (docs/design-notes/boring-ui-draft.md, "Animation and transitions"):
+# curves, durations, interpolation and color blending — pure functions of time, no clock, no tree.
+# A leaf module (it imports nothing), so the core can carry an `Animation` on a transaction.
+#
+# An `Animation` is data: a curve name (`None` = snap, `Linear`, `EaseIn`, `EaseOut`, `EaseInOut`,
+# `Spring`), a duration in milliseconds (a spring derives its own settle time from `response` and
+# `damping`). Durations and parameters are finite and non-negative; a zero duration is a valid
+# immediate change. `progress` maps elapsed time to 0...1 (a spring may overshoot above 1).
+#
+# Colors blend in LINEAR light with premultiplied alpha (the draft's working space): `#RRGGBB[AA]`
+# strings in, string out; anything that is not a hex color switches at the end instead.
+#
+# Reduced motion (`reduced`): every animation becomes a short linear one (capped at 100 ms) that
+# the animator applies to opacity only; geometry snaps.
+
+pub struct Animation:
+    pub string curve = "None"
+    pub float duration = 0.0
+    # Spring only: the natural period in milliseconds, and the damping ratio (1 = critical).
+    pub float response = 300.0
+    pub float damping = 0.8
+
+# A change of an `AnimationScope` value: which mounted node's wrapper fired and with what animation.
+pub struct Trigger:
+    pub int node
+    pub Animation animation
+
+pub def Animation snap():
+    Animation()
+
+pub def Animation linear(float ms):
+    Animation(curve = "Linear", duration = ms)
+
+pub def Animation easeIn(float ms):
+    Animation(curve = "EaseIn", duration = ms)
+
+pub def Animation easeOut(float ms):
+    Animation(curve = "EaseOut", duration = ms)
+
+pub def Animation easeInOut(float ms):
+    Animation(curve = "EaseInOut", duration = ms)
+
+pub def Animation spring(float response, float damping):
+    Animation(curve = "Spring", response = response, damping = damping)
+
+# The animation named by a curve string (an `AnimationScope`'s props); unknown names snap.
+pub def Animation animationNamed(string curve, float duration, float response, float damping):
+    if curve == "Linear" or curve == "EaseIn" or curve == "EaseOut" or curve == "EaseInOut":
+        return Animation(curve = curve, duration = duration)
+    if curve == "Spring":
+        return Animation(curve = curve, response = response, damping = damping)
+    Animation()
+
+pub def float clamp01(float v):
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    v
+
+pub def float lerp(float a, float b, float p):
+    a + (b - a) * p
+
+# ── curves ──────────────────────────────────────────────────────────────────────────────────────
+
+def float twoPi():
+    6.283185307179586
+
+# The time (ms) a spring needs until its envelope is under 0.1 %.
+def float springDuration(Animation a):
+    let zeta = a.damping
+    if zeta >= 1.0:
+        return a.response * 7.0 / twoPi()
+    a.response * 6.907755278982137 / (zeta * twoPi())
+
+# How long the animation runs, in milliseconds.
+pub def float totalDuration(Animation a):
+    if a.curve == "Spring":
+        return springDuration(a)
+    if a.curve == "None":
+        return 0.0
+    a.duration
+
+pub def bool isDone(Animation a, float elapsed):
+    elapsed >= totalDuration(a)
+
+def float springAt(Animation a, float elapsed):
+    let tau = elapsed / a.response
+    let omega = twoPi()
+    let zeta = a.damping
+    if zeta >= 1.0:
+        return 1.0 - (1.0 + omega * tau) * exp(0.0 - omega * tau)
+    let damped = omega * sqrt(1.0 - zeta * zeta)
+    let envelope = exp(0.0 - zeta * omega * tau)
+    1.0 - envelope * (cos(damped * tau) + (zeta * omega / damped) * sin(damped * tau))
+
+# The eased progress at `elapsed` ms: 0 at the start, 1 when done (a spring may overshoot).
+pub def float progress(Animation a, float elapsed):
+    let total = totalDuration(a)
+    if a.curve == "None" or total <= 0.0 or elapsed >= total:
+        return 1.0
+    if elapsed <= 0.0:
+        return 0.0
+    if a.curve == "Spring":
+        return springAt(a, elapsed)
+    let t = elapsed / total
+    if a.curve == "EaseIn":
+        return t * t
+    if a.curve == "EaseOut":
+        return 1.0 - (1.0 - t) * (1.0 - t)
+    if a.curve == "EaseInOut":
+        if t < 0.5:
+            return 2.0 * t * t
+        return 1.0 - 2.0 * (1.0 - t) * (1.0 - t)
+    t
+
+# Reduced motion: a short opacity-only cross-fade instead of the requested motion.
+pub def Animation reduced(Animation a):
+    if a.curve == "None":
+        return a
+    var ms = totalDuration(a)
+    if ms > 100.0:
+        ms = 100.0
+    Animation(curve = "Linear", duration = ms)
+
+# ── colors (linear light, premultiplied) ──────────────────────────────────────────────────────────
+
+def int hexValue(string c):
+    let digits = "0123456789abcdef"
+    let lower = c.lower()
+    for i in 0..<16:
+        if digits[i..<(i + 1)] == lower:
+            return i
+    0
+
+def float colorChannel(string hex, int at):
+    let hi = hexValue(hex[at..<(at + 1)])
+    let lo = hexValue(hex[(at + 1)..<(at + 2)])
+    let raw = hi * 16 + lo
+    (raw as float) / 255.0
+
+def float toLinear(float c):
+    if c <= 0.04045:
+        return c / 12.92
+    pow((c + 0.055) / 1.055, 2.4)
+
+def float toSrgb(float c):
+    if c <= 0.0031308:
+        return c * 12.92
+    1.055 * pow(c, 1.0 / 2.4) - 0.055
+
+def string hex2(float c):
+    let digits = "0123456789ABCDEF"
+    var v = ((clamp01(c) * 255.0) + 0.5) as int
+    if v > 255:
+        v = 255
+    "{digits[(v / 16)..<(v / 16 + 1)]}{digits[(v % 16)..<(v % 16 + 1)]}"
+
+pub def bool isHex(string s):
+    if s.length != 7 and s.length != 9:
+        return false
+    if s[0..<1] != "#":
+        return false
+    let digits = "0123456789abcdefABCDEF"
+    for i in 1..<s.length:
+        if !digits.contains(s[i..<(i + 1)]):
+            return false
+    true
+
+# Blends two colors at progress `p`: premultiplied, in linear light, back to sRGB. Non-hex colors switch
+# at the end (`p >= 1`).
+pub def string lerpColor(string a, string b, float p):
+    if !isHex(a) or !isHex(b):
+        if p >= 1.0:
+            return b
+        return a
+    var aa = 1.0
+    if a.length == 9:
+        aa = colorChannel(a, 7)
+    var ba = 1.0
+    if b.length == 9:
+        ba = colorChannel(b, 7)
+    let alpha = lerp(aa, ba, p)
+    var out = "#"
+    for at in [1, 3, 5]:
+        let pa = toLinear(colorChannel(a, at)) * aa
+        let pb = toLinear(colorChannel(b, at)) * ba
+        let mixed = lerp(pa, pb, p)
+        var straight = 0.0
+        if alpha > 0.0:
+            straight = mixed / alpha
+        out = "{out}{hex2(toSrgb(clamp01(straight)))}"
+    if alpha < 1.0:
+        out = "{out}{hex2(alpha)}"
+    out

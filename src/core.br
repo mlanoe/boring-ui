@@ -1,5 +1,6 @@
 use boring.ui.*
 use ui.theme.*
+use ui.anim.*
 
 # boring-ui headless reactive core (docs/design-notes/boring-ui-draft.md, "Runtime architecture",
 # "Mounted tree and update pass", "Identity & lifecycle", "UI events and batched refresh").
@@ -136,6 +137,13 @@ pub struct Runtime:
     # The control that took the last pointer press: later move/up/cancel go to it wherever the pointer is
     # (generation-checked; cleared when it unmounts — the draft's "unmounting sends cancellation").
     pub var Handle? capture = nil
+    # Animation metadata of the transactions (draft: "An ordinary library function establishes animation
+    # metadata on the current UI transaction"): `animate` / `withoutAnimation` record theirs in
+    # `lastAnimation` (`None` curve = an explicit snap), an `AnimationScope` whose `value` changed records a
+    # `Trigger`. A host reads both after the update pass (`takeAnimation`, `takeTriggers`) and hands them to
+    # the `Animator`; nothing animates by default.
+    pub var Animation? lastAnimation = nil
+    pub var [Trigger] triggers = []
     pub var int passesRun = 0     # update passes executed by `flush`, over the runtime's lifetime
     # Ids that still owe their `OnMount` hook (created by a commit, hook not run yet), in order.
     var mut [int] pendingMount = []
@@ -262,6 +270,17 @@ pub struct Runtime:
 
     # Same identity, same kind: keep the node (and its slots and state), reconcile its children.
     def reconcileNode(mut Mounted node, Desc d, mut Pass ctx, [EnvValue] scope):
+        # An `AnimationScope` whose trigger value changed (never on its first mount) fires its animation.
+        if node.kind == "AnimationScope":
+            if (node.props["value"] else ("")) != (d.props["value"] else ("")):
+                # (Each prop bound to a local first: `boring build` cannot parse a parenthesized `else` result.)
+                let durationText = d.props["duration"] else ("200")
+                let responseText = d.props["response"] else ("300")
+                let dampingText = d.props["damping"] else ("0.8")
+                let duration = durationText.parseFloat() else (200.0)
+                let response = responseText.parseFloat() else (300.0)
+                let damping = dampingText.parseFloat() else (0.8)
+                triggers.push(Trigger(node = node.id, animation = animationNamed(d.props["curve"] else ("EaseInOut"), duration, response, damping)))
         node.props = d.props
         node.control = d.control
         node.theme = themeIn(scope)
@@ -450,6 +469,38 @@ pub struct Runtime:
             self.commitProjections()
             _ = self.apply(b.build(self))
         true
+
+    # ── animation transactions ────────────────────────────────────────────────
+
+    # Runs `body` as one event transaction tagged with `a`: every write in it, and the update pass it
+    # causes, are eligible to animate with `a` (the innermost `animate` of a nested call wins).
+    def void animate(Animation a, Builder host, UIAction body):
+        self.beginEvent()
+        body()
+        self.invalidateRoot()
+        lastAnimation = a
+        self.endEvent(host)
+
+    # The same, explicitly snapping: it overrides an inherited animation and any triggered scope.
+    def void withoutAnimation(Builder host, UIAction body):
+        self.beginEvent()
+        body()
+        self.invalidateRoot()
+        lastAnimation = Animation()
+        self.endEvent(host)
+
+    # The animation of the last transaction that tagged one (clears it).
+    def Animation? takeAnimation():
+        if let a = lastAnimation:
+            lastAnimation = nil
+            return a
+        nil
+
+    # The `AnimationScope` triggers recorded since the last call (clears them).
+    def [Trigger] takeTriggers():
+        let t = triggers
+        triggers = []
+        t
 
     # ── scroll offsets ────────────────────────────────────────────────────────
 

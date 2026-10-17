@@ -51,6 +51,12 @@ pub struct Span:
 
 # A placed node, in window coordinates. Transparent nodes (composite views) share their body's frame;
 # `KeyedGroup` nodes do not appear — their items are the stack's children directly.
+# An interpolated override of one of a node's props (an `Opacity`'s value, a `Background`'s color) while an
+# animation is running; painting reads it before the prop.
+pub struct PropValue:
+    pub string key
+    pub string value
+
 pub struct Placed:
     pub int id
     pub string kind
@@ -62,6 +68,12 @@ pub struct Placed:
     pub var mut [Placed] children = []
     # The theme this node resolved against (the nearest provider above it), for painting.
     pub var Theme theme = Theme()
+    # Presentation state (see animator.br): the group-opacity multiplier of a transition in flight, whether
+    # this subtree is a retiring ghost kept only for display (no hit testing, no semantics), and the
+    # interpolated prop overrides. A committed layout always has the defaults.
+    pub var float alpha = 1.0
+    pub var bool ghost = false
+    pub var [PropValue] live = []
 
 struct Neg:
     var mut [Mounted] items = []
@@ -104,7 +116,7 @@ def bool isTransparent(Mounted n):
 
 # Wrappers that forward all layout to their one child (they only add behaviour elsewhere).
 def [string] transparentKinds():
-    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction"]
+    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition"]
 
 # A stack's children with every `KeyedGroup` replaced by its items, in order.
 def [Mounted] flatten(Mounted n):

@@ -38,7 +38,7 @@ def Command cmd(string kind, Placed p, string text, string color):
 
 # A color token against the node's theme: a `ColorRole` name resolves through the theme, a `#RRGGBB[AA]`
 # value is itself, anything else is left for the renderer (a named color such as "red").
-def string resolveColor(Placed p, string token):
+pub def string resolveColor(Placed p, string token):
     if isHexColor(token):
         return token
     let resolved = p.theme.colorNamed(token)
@@ -46,15 +46,35 @@ def string resolveColor(Placed p, string token):
         return resolved
     token
 
+# A prop as the painter sees it: the animation's live value when there is one, else the prop.
+pub def string propOrLive(Placed p, string key, string fallback):
+    for v in p.live:
+        if v.key == key:
+            return v.value
+    p.props[key] else (fallback)
+
 def float num(Placed p, string key, float fallback):
-    if let s = p.props[key]:
-        return s.parseFloat() else (fallback)
-    fallback
+    let text = propOrLive(p, key, "")
+    if text == "":
+        return fallback
+    text.parseFloat() else (fallback)
 
 # Appends `p`'s commands (and its subtree's) to `out` in paint order.
 pub def paint(Placed p, mut [Command] out):
+    # A subtree with a group-opacity multiplier (a transition in flight) is composited as one.
+    if p.alpha < 1.0:
+        mut fade = cmd("PushOpacity", p, "", "")
+        fade.value = p.alpha
+        out.push(fade)
+    paintNode(p, out)
+    if p.alpha < 1.0:
+        mut unfade = cmd("PopOpacity", p, "", "")
+        unfade.value = p.alpha
+        out.push(unfade)
+
+def paintNode(Placed p, mut [Command] out):
     if p.kind == "Background":
-        let token = p.props["color"] else ("")
+        let token = propOrLive(p, "color", "")
         mut fill = cmd("FillRect", p, "", token)
         fill.hex = resolveColor(p, token)
         out.push(fill)
@@ -163,7 +183,7 @@ def descend(Placed p, float x, float y, mut [int] path):
     var i = p.children.length - 1
     while i >= 0:
         let c = p.children[i]
-        if contains(c, x, y):
+        if contains(c, x, y) and !c.ghost:
             path.push(c.id)
             descend(c, x, y, path)
             return

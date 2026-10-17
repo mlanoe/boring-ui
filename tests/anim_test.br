@@ -1,0 +1,73 @@
+# Curves, durations, springs, color blending and reduced motion (src/anim.br).
+# Run: boring run tests/anim_test.br
+
+use ui.anim.*
+
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.0001 and d > 0.0 - 0.0001
+
+# Snap and zero duration are immediate.
+assert_eq(progress(snap(), 0.0), 1.0)
+assert_eq(progress(linear(0.0), 0.0), 1.0)
+assert_eq(totalDuration(snap()), 0.0)
+
+# The named curves over 100 ms.
+let l = linear(100.0)
+assert(near(progress(l, 0.0), 0.0))
+assert(near(progress(l, 25.0), 0.25))
+assert(near(progress(l, 100.0), 1.0))
+assert(near(progress(l, 400.0), 1.0))
+assert(near(progress(easeIn(100.0), 50.0), 0.25))
+assert(near(progress(easeOut(100.0), 50.0), 0.75))
+assert(near(progress(easeInOut(100.0), 25.0), 0.125))
+assert(near(progress(easeInOut(100.0), 50.0), 0.5))
+assert(near(progress(easeInOut(100.0), 75.0), 0.875))
+assert(isDone(l, 100.0))
+assert(!isDone(l, 99.0))
+
+# A spring starts at 0, overshoots when underdamped, settles at 1 and derives its own duration.
+let s = spring(300.0, 0.5)
+assert(near(progress(s, 0.0), 0.0))
+var peak = 0.0
+var t = 0.0
+while t < totalDuration(s):
+    let v = progress(s, t)
+    if v > peak:
+        peak = v
+    t += 5.0
+assert(peak > 1.05)                      # underdamped: overshoot
+assert(near(progress(s, totalDuration(s) + 1.0), 1.0))
+let critical = spring(300.0, 1.0)
+var over = 0.0
+t = 0.0
+while t < totalDuration(critical):
+    let v = progress(critical, t)
+    if v > over:
+        over = v
+    t += 5.0
+assert(over < 1.0001)                    # critical damping never overshoots
+
+# Names from props.
+assert_eq(animationNamed("EaseOut", 150.0, 0.0, 0.0).curve, "EaseOut")
+assert_eq(animationNamed("Spring", 0.0, 400.0, 0.7).response, 400.0)
+assert_eq(animationNamed("Wobble", 150.0, 0.0, 0.0).curve, "None")
+
+# Reduced motion: short linear (capped at 100 ms); snap stays snap.
+assert_eq(reduced(spring(300.0, 0.5)).curve, "Linear")
+assert_eq(reduced(spring(300.0, 0.5)).duration, 100.0)
+assert_eq(reduced(easeInOut(40.0)).duration, 40.0)
+assert_eq(reduced(snap()).curve, "None")
+
+# Colors blend in linear light: black <-> white at 0.5 is NOT the sRGB midpoint #808080.
+assert_eq(lerpColor("#000000", "#FFFFFF", 0.0), "#000000")
+assert_eq(lerpColor("#000000", "#FFFFFF", 1.0), "#FFFFFF")
+assert_eq(lerpColor("#000000", "#FFFFFF", 0.5), "#BCBCBC")
+assert_eq(lerpColor("#FF0000", "#FF0000", 0.37), "#FF0000")
+# Alpha is premultiplied: fading a color out keeps its hue.
+assert_eq(lerpColor("#FF0000FF", "#FF000000", 0.5), "#FF000080")
+# Non-hex colors switch at the end.
+assert_eq(lerpColor("red", "blue", 0.5), "red")
+assert_eq(lerpColor("red", "blue", 1.0), "blue")
+
+print "anim ok"

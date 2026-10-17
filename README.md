@@ -169,6 +169,36 @@ subtree without touching layout. An unlabeled `TextField` is a validation error 
 in the tree. Not yet: `Button`/`Toggle`/`Image`/`Video`/`Separator`/`Scroll`/`List`/`Sheet`, live regions,
 `accessibilityValue`, modal scoping, selection actions, and the platform adapter.
 
+## Animation — [`src/anim.br`](src/anim.br), [`src/animator.br`](src/animator.br)
+
+Headless and deterministic: nothing owns a clock, the host passes `now` (milliseconds). The application and the runtime always see the
+TARGET; painting, hit testing and accessibility bounds use the animator's **presentation** between two committed layouts.
+
+- **Primitives** (`anim.br`, a leaf module): `Animation { curve, duration, response, damping }` with `snap()`, `linear`, `easeIn`,
+  `easeOut`, `easeInOut`, `spring(response, damping)`; `progress(animation, elapsed)` (a spring may overshoot and derives its own settle
+  time), `reduced(animation)`, `lerp`, and `lerpColor` — colors blend in **linear light, premultiplied** (`#000000` ↔ `#FFFFFF` at 0.5 is `#BCBCBC`).
+- **Transactions** (core): `rt.animate(animation, host, ():)` tags one event transaction; `rt.withoutAnimation(host, ():)` is an explicit snap that
+  beats everything; `rt.takeAnimation()` / `rt.takeTriggers()` hand the metadata to the host after the update pass. `AnimationScope(curve,
+  duration, value = "{x}")` fires only when its `value` changes after the first mount (never because an ancestor merely rebuilt).
+  Precedence: `withoutAnimation`, then a triggered scope, then the `animate` transaction, then nothing.
+- **Animator**: `commit(animator, layout, transaction, triggers, now)` per update pass, `presentation(animator, now)`, `isAnimating`.
+  Retained nodes are matched by mounted id (a keyed move interpolates, it is not remove + insert) and blend x, y, w, h; an `Opacity` value,
+  an `Offset` x/y and a `Background` color blend as live prop overrides. A new target arriving mid-flight starts from the CURRENT presentation;
+  a non-animated update snaps.
+- **Transitions**: `Transition(insertion, removal, amount, dx, dy)` with `TransitionKind` `Identity`/`Fade`/`Scale`/`Slide`. An entering
+  subtree presents from its insertion state; a removed one stays as a presentation-only **ghost** (no hit testing, no semantics) until its removal
+  finishes. Fade = group opacity (`Placed.alpha`, painted as `PushOpacity`/`PopOpacity`), Scale = about the subtree's center, Slide = translation.
+- **Reduced motion** (`animator.reducedMotion`): animations become a short (≤ 100 ms) opacity-only cross-fade; geometry snaps; scale and slide
+  transitions become fades.
+
+Deviations from the draft: the retiring phase only keeps the DISPLAY of a removal (ghosts) — the runtime still unmounts at once, so `onUnmount`
+and slot teardown are not delayed; `TransitionKind` is `Fade`/`Slide` (an `Opacity`/`Offset` variant would shadow the views); an `AnimationScope`
+trigger is a string; compound transitions and a ghost retargeted mid-removal restart from their rest state; layout properties are interpolated as
+placements between committed layouts rather than by re-running layout per frame. Not yet: completion callbacks, keyframes, matched geometry, `Sheet`
+presentation transitions.
+
+Tests: `anim_test.br` (curves, springs, colors, reduced motion), `animator_test.br` (transactions, scopes, retargeting, transitions, ghosts, colors).
+
 ## Theme — [`src/theme.br`](src/theme.br)
 
 A concrete, immutable `Theme` value (not a trait, not a global) that holds only **overrides** on a built-in base, light or dark:

@@ -48,6 +48,9 @@ def bool isModifier(string kind):
 
 def walk(Placed p, mut [mut SemNode] out, mut [string] errors, bool off):
     let k = p.kind
+    # A retiring ghost (see animator.br) is presentation only: not in the accessibility tree.
+    if p.ghost:
+        return
     if k == "AccessibilityHidden":
         return
     if k == "Text":
