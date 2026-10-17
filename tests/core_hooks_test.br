@@ -19,15 +19,8 @@ view Page:
         log.push("task {run.id}")
         runs.push(run)
 
-    # (A loop, not `log.join(",")`: `boring build` mis-emits `join` on a state field.)
     req string lines():
-        var out = ""
-        for l in log:
-            if out == "":
-                out = l
-            else:
-                out = "{out},{l}"
-        out
+        log.join(",")
 
     req int runCount():
         runs.length

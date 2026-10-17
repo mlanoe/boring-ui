@@ -76,13 +76,6 @@ def int siteOf(Desc child, int i):
         return -2
     i * 2 + 1
 
-# Delivers a semantic action to a native view. (A free function on purpose: `boring build` emits string
-# literals/locals passed straight to a trait-object method as `&str` instead of `Arc<str>`, while a
-# `string` parameter forwarded here works — see events.br.)
-def void fireAction(Mounted n, string action, string arg):
-    if let control = n.control:
-        control.viewAct(action, arg)
-
 # A generation-checked reference to a mounted node.
 pub struct Handle:
     pub int id
@@ -276,8 +269,9 @@ pub struct Runtime:
         events.push("unmount {node.kind}#{node.id}")
         # The hook runs with the node's own identity (and the inputs it captured) still valid.
         if node.kind == "OnUnmount":
-            fireAction(node, "unmount", "")
-            self.invalidateRoot()
+            if let control = node.control:
+                control.viewAct("unmount", "")
+                self.invalidateRoot()
         meta.remove(node.id)
         freeIds.push(node.id)
 
@@ -414,9 +408,10 @@ pub struct Runtime:
     def void runMountHook(int id):
         if let node = self.find(id):
             if node.kind == "OnMount":
-                events.push("hook mount {node.kind}#{id}")
-                fireAction(node, "mount", "")
-                self.invalidateRoot()
+                if let control = node.control:
+                    events.push("hook mount {node.kind}#{id}")
+                    control.viewAct("mount", "")
+                    self.invalidateRoot()
 
     # Starts a run for every `OnTask` node that has none yet, or whose `id` changed since its run
     # started (the old run is cancelled: its generation goes stale first). Preorder; stops as soon as
