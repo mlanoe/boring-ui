@@ -147,13 +147,13 @@ pub struct Runtime:
         if let current = root:
             if current.kind == d.kind:
                 mut updated = current
-                self.reconcileNode(updated, d, ctx)
+                self.reconcileNode(updated, d, ctx, [])
                 root = updated
             else:
                 ctx.retiring.push(current)
-                root = self.create(d, 0, ctx)
+                root = self.create(d, 0, ctx, [])
         else:
-            root = self.create(d, 0, ctx)
+            root = self.create(d, 0, ctx, [])
         self.commit(ctx)
         for id in ctx.fresh:
             self.pendingMount.push(id)
@@ -172,7 +172,7 @@ pub struct Runtime:
         nextId += 1
         id
 
-    def Mounted create(Desc d, int site, mut Pass ctx):
+    def Mounted create(Desc d, int site, mut Pass ctx, [EnvValue] scope):
         let id = self.fresh()
         mut node = Mounted(id = id, generation = nextGeneration, kind = d.kind, site = site, key = d.key)
         mut info = Meta(generation = nextGeneration)
@@ -185,22 +185,48 @@ pub struct Runtime:
             node.view = v
             info.state = v.newState()
         meta[id] = info
-        let kids = self.childrenOf(id, d)
+        let kids = self.childrenOf(id, d, scope)
+        let below = self.scopeBelow(d, scope)
         if self.checked(kids, d.kind):
             for i in 0..<kids.length:
                 let child = kids[i]
-                node.children.push(self.create(child, siteOf(child, i), ctx))
+                node.children.push(self.create(child, siteOf(child, i), ctx, below))
         node
 
     # The children to reconcile under `node`: a native node's own, or — for a composite view —
     # its body, expanded against the state this identity has kept since it mounted.
-    def [Desc] childrenOf(int id, Desc d):
+    def [Desc] childrenOf(int id, Desc d, [EnvValue] scope):
         if let v = d.view:
             if let info = meta[id]:
                 if let st = info.state:
-                    return [describe(v.expand(st))]
-            return [describe(v.expand(NoState()))]
+                    return [self.expanded(v, st, scope)]
+            return [self.expanded(v, NoState(), scope)]
         d.children
+
+    # One composite's body as a `Desc`. A view with `env` gets the providers in scope for it (nearest
+    # ancestor first); one whose `env` is unsatisfied renders `EnvMissing`, reported once.
+    def Desc expanded(View v, StateBox st, [EnvValue] scope):
+        let d = describe(self.expandBody(v, st, scope))
+        if d.kind == "EnvMissing":
+            let message = "missing environment value: {d.props["what"] else ("?")}"
+            if !errors.contains(message):
+                errors.push(message)
+        d
+
+    def View expandBody(View v, StateBox st, [EnvValue] scope):
+        if v.usesEnv():
+            return v.expandIn(st, scope)
+        v.expand(st)
+
+    # The scope the children of `d` see: a `Provide` adds its value in front (nearest wins).
+    def [EnvValue] scopeBelow(Desc d, [EnvValue] scope):
+        if let control = d.control:
+            if let provided = control.viewProvides():
+                mut out = [provided]
+                for v in scope:
+                    out.push(v)
+                return out
+        scope
 
     # A composite's expansion is only known while reconciling, so its keys are checked here, per
     # children list, before that list mutates. A failing subtree is left as it was (draft: "the
@@ -212,12 +238,13 @@ pub struct Runtime:
         problems.length == 0
 
     # Same identity, same kind: keep the node (and its slots and state), reconcile its children.
-    def reconcileNode(mut Mounted node, Desc d, mut Pass ctx):
+    def reconcileNode(mut Mounted node, Desc d, mut Pass ctx, [EnvValue] scope):
         node.props = d.props
         node.control = d.control
         if let v = d.view:
             node.view = v
-        let kids = self.childrenOf(node.id, d)
+        let kids = self.childrenOf(node.id, d, scope)
+        let below = self.scopeBelow(d, scope)
         if !self.checked(kids, d.kind):
             return
         mut {string=Mounted} byIdentity = {=}
@@ -233,13 +260,13 @@ pub struct Runtime:
                 _ = used.add(identity)
                 if old.kind == child.kind:
                     mut kept = old
-                    self.reconcileNode(kept, child, ctx)
+                    self.reconcileNode(kept, child, ctx, below)
                     next.push(kept)
                 else:
                     ctx.retiring.push(old)
-                    next.push(self.create(child, site, ctx))
+                    next.push(self.create(child, site, ctx, below))
             else:
-                next.push(self.create(child, site, ctx))
+                next.push(self.create(child, site, ctx, below))
         for old in node.children:
             if !used.contains("{old.site}|{old.key}"):
                 ctx.retiring.push(old)

@@ -82,6 +82,17 @@ Ordered wrapper views in `boring.ui` (layout/paint-transparent, like every modif
   `TaskRun` and calls `deliver` when the result arrives (what a host will do). Not done: `Future.cancel()` wiring,
   error reporting from hooks/tasks, teardown-only (read-only) state access in `OnUnmount`, animated removal.
 
+## Environment (`env`, `Provide`) and parent-supplied seeds
+
+- **`env T name`** views are expandable. `Provide(value = x):` + children installs `x` (a struct that declares
+  `as EnvValue`) for every descendant `env` field of that type; the nearest provider wins. The core threads the
+  provider scope (nearest first) through reconciliation and expands a view that has `env` with `expandIn`; an
+  unsatisfied `env` renders an `EnvMissing` placeholder and is reported once in `errors`. Deviations from the draft:
+  providers are matched by downcast (so `T` must be a struct conforming to `EnvValue`, no primitive `env`), and there
+  is no `Theme` library type or `runUI(theme = …)` yet. Test: `tests/core_env_test.br`.
+- **State seeds**: `Counter(title = t, count = expensive())` seeds that identity's `state` on its first mount only; the
+  argument is a lazy closure evaluated once by `newState()`, never when a description is built or on a rebuild.
+
 ## Layout — [`src/layout.br`](src/layout.br) (layer 3, first slice)
 
 Headless size negotiation and placement over the mounted tree, with a deterministic fixture font
