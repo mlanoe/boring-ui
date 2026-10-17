@@ -90,6 +90,73 @@ pub struct Handle:
     pub int id
     pub int generation
 
+def string propText(Mounted n, string name):
+    n.props[name] else ("")
+
+pub def bool isFocusableKind(string kind):
+    kind == "Button" or kind == "Toggle" or kind == "TextField"
+
+# 1 when node `id` sits inside a `Disabled(true)` subtree, 0 when it does not, -1 when it is absent.
+pub def int disabledState(Mounted n, int id, bool inherited):
+    var off = inherited
+    if n.kind == "Disabled" and propText(n, "value") == "true":
+        off = true
+    if n.id == id:
+        if off:
+            return 1
+        return 0
+    for c in n.children:
+        let r = disabledState(c, id, off)
+        if r >= 0:
+            return r
+    -1
+
+# The enabled focusable controls under `m`, in structural (tab) order.
+pub def [Handle] focusablesIn(Mounted m, bool inherited):
+    mut [Handle] out = []
+    var off = inherited
+    if m.kind == "Disabled" and propText(m, "value") == "true":
+        off = true
+    if isFocusableKind(m.kind) and !off:
+        out.push(Handle(id = m.id, generation = m.generation))
+    for c in m.children:
+        for h in focusablesIn(c, off):
+            out.push(h)
+    out
+
+# The keys of a `List`'s rows, in displayed order (one per keyed `for` iteration).
+pub def [string] rowKeysOf(Mounted list):
+    mut [string] keys = []
+    for c in list.children:
+        if c.kind == "KeyedGroup":
+            keys.push(c.key)
+    keys
+
+# Delivers a semantic action to a native node's control (string parameters, as `boring build` needs).
+pub def void deliver(Mounted n, string action, string arg):
+    if let control = n.control:
+        control.viewAct(action, arg)
+
+# The first `DefaultFocus` descendant of `m` that wraps an enabled control, or nil.
+def Handle? defaultFocusIn(Mounted m):
+    if m.kind == "DefaultFocus" and propText(m, "enabled") != "false":
+        let inside = focusablesIn(m, false)
+        if inside.length > 0:
+            return inside[0]
+    for c in m.children:
+        if let h = defaultFocusIn(c):
+            return h
+    nil
+
+# Where focus goes when a scope (a presented sheet) activates: its `DefaultFocus`, else its first control.
+pub def Handle? initialFocusIn(Mounted scope):
+    if let d = defaultFocusIn(scope):
+        return d
+    let all = focusablesIn(scope, false)
+    if all.length > 0:
+        return all[0]
+    nil
+
 # Produces a fresh description of the whole window. May invalidate through `rt` while building;
 # such invalidations are queued for the next pass instead of re-entering.
 pub trait Builder:
@@ -137,6 +204,10 @@ pub struct Runtime:
     # The control that took the last pointer press: later move/up/cancel go to it wherever the pointer is
     # (generation-checked; cleared when it unmounts — the draft's "unmounting sends cancellation").
     pub var Handle? capture = nil
+    # Modal presentation: the ids of the `Sheet` nodes that are presented, outermost first, and the focus
+    # each one displaced (restored on dismissal while that control still exists and is enabled).
+    pub var [int] openSheets = []
+    pub var [Handle] focusReturn = []
     # Animation metadata of the transactions (draft: "An ordinary library function establishes animation
     # metadata on the current UI transaction"): `animate` / `withoutAnimation` record theirs in
     # `lastAnimation` (`None` curve = an explicit snap), an `AnimationScope` whose `value` changed records a
@@ -180,6 +251,9 @@ pub struct Runtime:
 
     def start(Builder b):
         _ = self.apply(b.build(self))
+        self.syncModal()
+        self.syncFocusBindings()
+        self.pruneSelection()
         self.flush(b)
 
     def int fresh():
@@ -221,6 +295,9 @@ pub struct Runtime:
                 if let st = info.state:
                     return [self.expanded(v, st, scope)]
             return [self.expanded(v, NoState(), scope)]
+        if d.kind == "Sheet":
+            if (d.props["isPresented"] else ("false")) != "true":
+                return []
         d.children
 
     # One composite's body as a `Desc`. A view with `env` gets the providers in scope for it (nearest
@@ -468,7 +545,185 @@ pub struct Runtime:
             # before anything is rebuilt from them.
             self.commitProjections()
             _ = self.apply(b.build(self))
+            self.syncModal()
+            self.syncFocusBindings()
+            self.pruneSelection()
         true
+
+    # ── modal presentation and focus restoration ─────────────────────────────
+
+    # Presented sheets (preorder, so a later one is nested deeper or comes later = on top).
+    req [int] presentedSheets():
+        mut out = []
+        if let r = root:
+            self.sheetsIn(r, out)
+        out
+
+    req void sheetsIn(Mounted n, mut [int] out):
+        if n.kind == "Sheet" and (n.props["isPresented"] else ("false")) == "true" and n.children.length > 0:
+            out.push(n.id)
+        for c in n.children:
+            self.sheetsIn(c, out)
+
+    # After every update pass: when a sheet opened, remember the focus, drop any pointer capture and move
+    # focus into it (a `DefaultFocus`, else its first enabled control); when one closed, give the focus
+    # back if that control still exists and is enabled, else clear it (no automatic replacement).
+    def void syncModal():
+        let now = self.presentedSheets()
+        if now.length == openSheets.length:
+            openSheets = now
+            return
+        if now.length > openSheets.length:
+            capture = nil
+            if let f = focus:
+                if self.valid(f):
+                    focusReturn.push(f)
+            if let top = self.find(now[now.length - 1]):
+                if let first = initialFocusIn(top):
+                    focus = first
+                else:
+                    focus = nil
+        else:
+            var Handle? restored = nil
+            if focusReturn.length > 0:
+                let back = focusReturn[focusReturn.length - 1]
+                focusReturn.removeIndices([focusReturn.length - 1])
+                if self.valid(back) and !self.disabledAt(back.id):
+                    restored = back
+            focus = restored
+        openSheets = now
+
+    # ── `.focused(...)` bindings ───────────────────────────────────────────────
+
+    # Every `Focused` / `FocusedAs` node, preorder.
+    req [Mounted] focusBindings():
+        mut out = []
+        if let r = root:
+            self.collectBindings(r, out)
+        out
+
+    req void collectBindings(Mounted n, mut [Mounted] out):
+        if n.kind == "Focused" or n.kind == "FocusedAs":
+            out.push(n)
+        for c in n.children:
+            self.collectBindings(c, out)
+
+    # Synchronizes native focus and the bound values, both ways, once per update pass (draft, "Requests,
+    # default focus, and synchronization"). Per binding, with `f` = its control holds focus, `w` = its bound
+    # value asks for focus (true / its own token), `h` = we last wrote it as focused:
+    #   f and w            consistent
+    #   f, not w, not h    focus arrived natively: write the binding on
+    #   f, not w, h        the application cleared it: focus is dropped
+    #   not f, w, not h    the application asked: focus moves there (first request wins; later ones are
+    #                      written back off); if the control is not eligible (disabled, outside the active
+    #                      sheet) the request stays pending and is retried each pass
+    #   not f, w, h        focus left natively: write the binding off
+    def void syncFocusBindings():
+        var granted = false
+        for n in self.focusBindings():
+            let mine = focusablesIn(n, false)
+            var f = false
+            var Handle? target = nil
+            if mine.length > 0:
+                target = mine[0]
+                if let cur = focus:
+                    if self.valid(cur):
+                        for m in mine:
+                            if m.id == cur.id:
+                                f = true
+            let isToken = n.kind == "FocusedAs"
+            let current = propText(n, "value")
+            var w = current == "true"
+            if isToken:
+                w = current != "" and current == propText(n, "token")
+            let handle = Handle(id = n.id, generation = n.generation)
+            var h = false
+            let stored = self.read(handle, "syncedOn") else (0)
+            if stored == 1:
+                h = true
+            if f and w:
+                if !h:
+                    _ = self.write(handle, "syncedOn", 1)
+            elif f and !w and !h:
+                self.bindFocused(n, isToken, true)
+                _ = self.write(handle, "syncedOn", 1)
+            elif f and !w and h:
+                focus = nil
+                _ = self.write(handle, "syncedOn", 0)
+            elif !f and w and !h:
+                if granted:
+                    self.bindFocused(n, isToken, false)
+                else:
+                    # (The option is opened first: `boring build` moves a `Handle?` passed to a method.)
+                    if let t = target:
+                        if self.eligible(t):
+                            focus = t
+                            granted = true
+                            _ = self.write(handle, "syncedOn", 1)
+            elif !f and w and h:
+                self.bindFocused(n, isToken, false)
+                _ = self.write(handle, "syncedOn", 0)
+            elif stored == 1:
+                _ = self.write(handle, "syncedOn", 0)
+
+    # ── list selection ─────────────────────────────────────────────────────────
+
+    req [Mounted] lists():
+        mut out = []
+        if let r = root:
+            self.collectLists(r, out)
+        out
+
+    req void collectLists(Mounted n, mut [Mounted] out):
+        if n.kind == "List":
+            out.push(n)
+        for c in n.children:
+            self.collectLists(c, out)
+
+    # After every update pass a selected key that no longer exists is cleared (draft: "During update, a
+    # single selected key that no longer exists is cleared").
+    def void pruneSelection():
+        for l in self.lists():
+            let chosen = propText(l, "selection")
+            if chosen != "":
+                if !rowKeysOf(l).contains(chosen):
+                    deliver(l, "select", "")
+                    self.invalidateRoot()
+
+    # Writes a binding on (true / its token) or off (false / "") through its control.
+    def void bindFocused(Mounted n, bool isToken, bool on):
+        if isToken:
+            if on:
+                deliver(n, "setText", propText(n, "token"))
+            else:
+                if propText(n, "value") == propText(n, "token"):
+                    deliver(n, "setText", "")
+        else:
+            if on:
+                deliver(n, "setBool", "true")
+            else:
+                deliver(n, "setBool", "false")
+        self.invalidateRoot()
+
+    # Whether a control may take focus now: mounted, enabled, and inside the active modal scope if any.
+    req bool eligible(Handle t):
+        if !self.valid(t):
+            return false
+        if self.disabledAt(t.id):
+            return false
+        if openSheets.length > 0:
+            if let top = self.find(openSheets[openSheets.length - 1]):
+                for m in focusablesIn(top, false):
+                    if m.id == t.id:
+                        return true
+            return false
+        true
+
+    # Whether node `id` sits inside a `Disabled(true)` subtree.
+    req bool disabledAt(int id):
+        if let r = root:
+            return disabledState(r, id, false) == 1
+        false
 
     # ── animation transactions ────────────────────────────────────────────────
 

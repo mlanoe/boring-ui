@@ -169,6 +169,32 @@ subtree without touching layout. An unlabeled `TextField` is a validation error 
 in the tree. Not yet: `Button`/`Toggle`/`Image`/`Video`/`Separator`/`Scroll`/`List`/`Sheet`, live regions,
 `accessibilityValue`, modal scoping, selection actions, and the platform adapter.
 
+## Sheet, focus bindings and List (layer 4/5)
+
+Facades in `boring.ui`; tests `sheet_test.br`, `focus_binding_test.br`, `list_test.br`, and the whole acceptance app in `todo_test.br`.
+
+- **`Sheet(isPresented = flag):`** — modal presentation in the window's presentation layer. Closed, its content is NOT mounted and it takes no
+  room; presented, its content is mounted, centered in the window, and painted last (scrim, surface, content). It blocks pointer input underneath
+  (`hitTest` only reaches its subtree), exposes only a `dialog` to the accessibility tree, **traps focus traversal**, and on opening remembers the
+  focused control, drops pointer capture and moves focus to a `DefaultFocus` (else its first enabled control); on dismissal focus returns to the
+  remembered control while it still exists and is enabled (`Runtime.openSheets`, `focusReturn`, `syncModal`). Enter / Escape and `DefaultAction` /
+  `Cancel` buttons are scoped to the sheet; with no Cancel button Escape performs the ordinary dismissal (writes `false` through `isPresented`).
+  Dismissing destroys the content's identity-scoped state, so a draft is fresh each time.
+- **`Focused(value = flag)` / `FocusedAs(value = token, token = "a")`** wrap a control (`.focused(...)`). Per binding, after every update pass the core
+  reconciles native focus and the bound value both ways: native arrival writes the binding on, an application write of `true` / the token requests focus
+  (a request for an ineligible control — disabled, outside the active sheet — stays pending and is retried), the application clearing it drops focus, focus
+  leaving writes it off, and with several simultaneous requests the first by structural order wins while the others are written back off. A binding
+  initialised to `true` is the cross-platform initial request. Tokens are strings (the draft's enum tokens with payload are not supported).
+- **`List(selection = key, onMove = …, onDelete = …):`** + a keyed `for` — a scrolling viewport over keyed rows (rows are stacked without spacing; the
+  placed rows carry their iteration `key`). Single selection by key (`""` = none): a press that hits no control selects the row, Up / Down move it,
+  and the update clears a selected key that no longer exists. With `onDelete` supplied Delete / Backspace call it with `[index]`; with `onMove` AltUp / AltDown
+  call `onMove(from, to)` (final index); with no callback the command is not offered. Editing keys in a focused TextField win over the list commands.
+  Rows keep their mounted identity across a keyed move, so row state and focus survive. The list scrolls like `Scroll` (wheel input, offset on the node).
+- **Todo** (`examples/todo`): the draft's acceptance app on these pieces — `List` with selection / reorder / delete, a `Sheet` with its own draft state, `Focused` for the
+  title field, `DefaultAction` (Add, disabled while the title is blank via `Disabled`) and `Cancel` (Escape). Deviations: a row's native controls bind the `Slot` fields of
+  `Todo` (projecting one FIELD of a keyed element into a native control's bind is not supported), `selection` is a string key, there is no `Separator`, and a row has a
+  Delete button whose callback also keeps `boring build` from deriving `PartialEq` for the view.
+
 ## Animation — [`src/anim.br`](src/anim.br), [`src/animator.br`](src/animator.br)
 
 Headless and deterministic: nothing owns a clock, the host passes `now` (milliseconds). The application and the runtime always see the
@@ -252,9 +278,8 @@ disabled handle is ignored.
 Tests: `events_test.br`, `events_extra_test.br` (disabled, capture, editing, Enter/Escape). Behaviour change: a press no longer
 activates (it captures); use `click` (or down + up) where a Button must fire.
 
-Not yet: IME / composition and undo, key capture-target-bubble phases, `.focused(...)` bindings, focus scopes and
-`focusOrder`/`focusable`, modal routing and `Sheet`, `List` selection, focus rings, momentum scrolling, scroll-into-view on
-focus, error reporting from callbacks.
+Not yet: IME / composition and undo, key capture-target-bubble phases, non-modal focus scopes and `focusOrder`/`focusable`, focus rings,
+momentum scrolling, scroll-into-view on focus, multiple selection, error reporting from callbacks.
 
 ## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
 

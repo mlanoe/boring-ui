@@ -10,7 +10,7 @@ view Label:
     body():
         Text(text)
 
-view List:
+view Rows:
     [string] items
     body():
         Column(alignment = .Leading, spacing = 2.0):
@@ -24,11 +24,11 @@ struct Fixed as ViewBuilder:
     req View buildView(mut Runtime rt): root
 
 mut rt = Runtime()
-rt.start(ViewRoot(inner = Fixed(root = List(items = ["ab", "cde"]))))
+rt.start(ViewRoot(inner = Fixed(root = Rows(items = ["ab", "cde"]))))
 
 # A composite view shares its body's frame; KeyedGroups vanish so their items are Column children.
 let placed = layout(rt, 100.0, 100.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
-assert_eq(placed.kind, "List")
+assert_eq(placed.kind, "Rows")
 let column = placed.children[0]
 assert_eq(column.kind, "Column")
 assert_eq(column.children.length, 4)             # title, two labels, the spacer

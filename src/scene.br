@@ -73,6 +73,9 @@ pub def paint(Placed p, mut [Command] out):
         out.push(unfade)
 
 def paintNode(Placed p, mut [Command] out):
+    # A presented sheet paints in the presentation layer, after everything else (see `displayList`).
+    if p.kind == "Sheet":
+        return
     if p.kind == "Background":
         let token = propOrLive(p, "color", "")
         mut fill = cmd("FillRect", p, "", token)
@@ -130,11 +133,11 @@ def paintNode(Placed p, mut [Command] out):
         mut text = Command(kind = "DrawText", x = p.x + box + gap, y = p.y, w = p.w - box - gap, h = p.h, text = label, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
-    if p.kind == "Clip" or p.kind == "Scroll":
+    if p.kind == "Clip" or p.kind == "Scroll" or p.kind == "List":
         out.push(cmd("PushClip", p, "", ""))
     for c in p.children:
         paint(c, out)
-    if p.kind == "Clip" or p.kind == "Scroll":
+    if p.kind == "Clip" or p.kind == "Scroll" or p.kind == "List":
         out.push(cmd("PopClip", p, "", ""))
     if p.kind == "Opacity":
         mut close = cmd("PopOpacity", p, "", "")
@@ -146,9 +149,25 @@ def paintNode(Placed p, mut [Command] out):
         stroke.value = num(p, "lineWidth", 1.0)
         out.push(stroke)
 
+# The presentation layer: for each presented sheet (outermost first) a scrim over the window, a surface
+# behind its content, then the content itself.
+def void paintSheets(Placed p, mut [Command] out):
+    if p.kind == "Sheet" and p.children.length > 0:
+        mut scrim = cmd("FillRect", p, "", "scrim")
+        scrim.hex = p.theme.color(ColorRole.ShadowColor)
+        out.push(scrim)
+        for c in p.children:
+            mut surface = cmd("FillRect", c, "", "sheet")
+            surface.hex = p.theme.color(ColorRole.ElevatedSurface)
+            out.push(surface)
+            paint(c, out)
+    for c in p.children:
+        paintSheets(c, out)
+
 pub def [Command] displayList(Placed root):
     mut [Command] out = []
     paint(root, out)
+    paintSheets(root, out)
     out
 
 # One line per command, for golden tests.
@@ -171,8 +190,25 @@ def bool contains(Placed p, float x, float y):
 
 # The ids from the root down to the deepest node under (x, y), or [] when the point hits nothing.
 # A point outside a `Clip`'s bounds reaches nothing beneath it.
+# The ids from the root down to node `id` (inclusive); false, leaving `path` as it was, when absent.
+def bool pathTo(Placed p, int id, mut [int] path):
+    path.push(p.id)
+    if p.id == id:
+        return true
+    for c in p.children:
+        if pathTo(c, id, path):
+            return true
+    _ = path.pop()
+    false
+
 pub def [int] hitTest(Placed root, float x, float y):
     mut [int] path = []
+    # A presented sheet is modal: only its subtree can be hit (the scrim itself hits the sheet node), so
+    # nothing underneath it receives pointer input.
+    if let sheet = topSheet(root):
+        if pathTo(root, sheet.id, path):
+            descend(sheet, x, y, path)
+            return path
     if contains(root, x, y):
         path.push(root.id)
         descend(root, x, y, path)

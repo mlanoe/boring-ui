@@ -1,0 +1,187 @@
+# Sheet: modal presentation (mounting, presentation layer, pointer and focus trap, accessibility,
+# focus restoration, Escape) — src/core.br syncModal, layout.br withSheets, scene.br, events.br.
+# Run: boring run tests/sheet_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.semantics.*
+use ui.events.*
+
+view Editor:
+    bind bool isPresented
+    state string draft = ""
+    state int oks = 0
+
+    def ok():
+        oks += 1
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            DefaultFocus:
+                TextField(value = draft, label = "Draft")
+            Row(alignment = .Center, spacing = 8.0):
+                Button(label = "Cancel", role = .Cancel, onActivate = ():
+                    isPresented = false)
+                DefaultAction:
+                    Button(label = "OK", onActivate = ():
+                        self.ok())
+
+view Bare:
+    state string note = ""
+    body():
+        TextField(value = note, label = "Bare")
+
+view Page:
+    state bool shown = false
+    state bool bare = false
+    state string text = ""
+
+    def present(bool useBare):
+        bare = useBare
+        shown = true
+
+    req bool isShown():
+        shown
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            Button(label = "Open", onActivate = ():
+                self.present(false))
+            TextField(value = text, label = "Note")
+            Sheet(isPresented = shown):
+                if bare:
+                    Bare()
+                else:
+                    Editor(isPresented = shown)
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 200.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] findAll(Placed p, string kind, string key, string want):
+    mut out = []
+    if p.kind == kind and (p.props[key] else ("")) == want:
+        out.push(p)
+    for c in p.children:
+        for f in findAll(c, kind, key, want):
+            out.push(f)
+    out
+
+def Placed named(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want)[0]
+
+def int count(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want).length
+
+def Page__State pageState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Page__State else (Page__State())
+
+def int focusedId(Runtime rt):
+    if let f = rt.focus:
+        return f.id
+    -1
+
+def bool shown(Runtime rt):
+    Page().isShown(pageState(rt))
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# ── closed: the content is not mounted and the sheet takes no room ───────────────────────────────
+
+assert_eq(count(rt, "TextField", "label", "Draft"), 0)
+assert_eq(count(rt, "Sheet", "isPresented", "false"), 1)
+assert_eq(named(rt, "Sheet", "isPresented", "false").w, 0.0)
+assert_eq(rt.openSheets.length, 0)
+assert_eq(focusOrder(rt).length, 2)                           # Open, Note
+
+# ── open it: mounted, focus moves to the DefaultFocus control, traversal and pointer are trapped ──
+
+let openButton = named(rt, "Button", "label", "Open")
+let openId = openButton.id
+assert(click(rt, host, lay(rt), openButton.x + 2.0, openButton.y + 2.0))
+assert(shown(rt))
+assert_eq(rt.openSheets.length, 1)
+assert_eq(count(rt, "TextField", "label", "Draft"), 1)
+let draft = named(rt, "TextField", "label", "Draft")
+assert_eq(focusedId(rt), draft.id)                            # default focus
+assert_eq(focusOrder(rt).length, 3)                           # Draft, Cancel, OK — not Open, Note
+assert_eq(rt.focusReturn.length, 1)                           # the Open button is remembered
+
+# The presented sheet fills the window and centers its content; it is the topmost, modal layer.
+let sheet = named(rt, "Sheet", "isPresented", "true")
+assert_eq(sheet.w, 300.0)
+assert_eq(sheet.h, 200.0)
+assert_eq(draft.x, (300.0 - named(rt, "Column", "alignment", "Leading").w) / 2.0)  # (a sanity check of centering)
+
+# Pointer input underneath is blocked: the press lands on the sheet, not on the Open button.
+assert(!pointerDown(rt, host, lay(rt), openButton.x + 2.0, openButton.y + 2.0))
+assert(!hitTest(lay(rt), openButton.x + 2.0, openButton.y + 2.0).contains(openId))
+
+# Accessibility exposes only the dialog.
+let tree = semantics(lay(rt))
+assert_eq(tree.roots.length, 1)
+assert_eq(tree.roots[0].role, "dialog")
+assert(!describeTree(tree.roots, 0).join("\n").contains("'Open'"))
+
+# The sheet paints last, over everything else: scrim, surface, content.
+let cmds = displayList(lay(rt))
+var scrims = 0
+for c in cmds:
+    if c.color == "scrim":
+        scrims += 1
+assert_eq(scrims, 1)
+assert_eq(cmds[cmds.length - 1].kind, "DrawText")
+
+# Tab stays inside the sheet and wraps.
+assert(keyPress(rt, host, "Tab"))                             # Draft -> Cancel
+assert(keyPress(rt, host, "Tab"))                             # -> OK
+assert(keyPress(rt, host, "Tab"))                             # wraps to Draft
+assert_eq(focusedId(rt), draft.id)
+
+# ── editing, the default action and Escape, all scoped to the sheet ──────────────────────────────
+
+assert(typeText(rt, host, "abc"))
+assert_eq(named(rt, "TextField", "label", "Draft").props["value"], "abc")
+assert(keyPress(rt, host, "Enter"))                           # the sheet's DefaultAction: OK
+assert(keyPress(rt, host, "Escape"))                          # the sheet's Cancel button writes `false`
+assert(!shown(rt))
+assert_eq(rt.openSheets.length, 0)
+assert_eq(count(rt, "TextField", "label", "Draft"), 0)        # the content (and its draft state) is gone
+
+# Focus is restored to the control that had it, and the page is reachable again.
+assert_eq(focusedId(rt), openId)
+assert_eq(focusOrder(rt).length, 2)
+assert_eq(semantics(lay(rt)).roots.length, 2)                 # Open, Note: a closed sheet exposes nothing
+assert_eq(rt.focusReturn.length, 0)
+
+# ── a later presentation is a new lifetime: the draft starts empty ───────────────────────────────
+
+assert(click(rt, host, lay(rt), openButton.x + 2.0, openButton.y + 2.0))
+assert(typeText(rt, host, "x"))
+assert_eq(named(rt, "TextField", "label", "Draft").props["value"], "x")   # not "abcx"
+assert(keyPress(rt, host, "Escape"))
+
+# ── without a Cancel button, Escape performs the sheet's ordinary dismissal ──────────────────────
+
+mut st = pageState(rt)
+Page().present(true, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+assert(shown(rt))
+assert_eq(count(rt, "TextField", "label", "Bare"), 1)
+assert_eq(focusOrder(rt).length, 1)
+assert(keyPress(rt, host, "Escape"))
+assert(!shown(rt))
+assert_eq(count(rt, "TextField", "label", "Bare"), 0)
+assert_eq(rt.errors.length, 0)
+
+print "sheet ok"

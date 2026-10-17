@@ -1,5 +1,6 @@
-# The Todo application driven end to end, headlessly: mount, layout, display list, accessibility
-# tree, pointer and keyboard input, semantic actions. Run: boring run tests/todo_test.br
+# The Todo application driven end to end, headlessly: mount, layout, display list, accessibility tree,
+# pointer and keyboard input, semantic actions — through List, Sheet, Focused, DefaultAction, Disabled.
+# Run: boring run tests/todo_test.br
 
 use boring.ui.*
 use ui.core.*
@@ -33,6 +34,9 @@ def Placed nth(Runtime rt, string kind, string key, string want, int n):
     let all = findAll(lay(rt), kind, key, want)
     all[n]
 
+def int countOf(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want).length
+
 def bool press(mut Runtime rt, Builder host, Placed p):
     click(rt, host, lay(rt), p.x + 2.0, p.y + 2.0)
 
@@ -43,97 +47,125 @@ def string titles(Runtime rt):
         out.push(p.props["value"] else (""))
     out.join("|")
 
-def int rowCount(Runtime rt):
-    findAll(lay(rt), "TextField", "label", "Item title").length
+def Placed listNode(Runtime rt):
+    findAll(lay(rt), "List", "selection", "")[0]
+
+def string chosenKey(Runtime rt):
+    let all = findAll(lay(rt), "List", "kind", "")
+    var found = ""
+    for p in all:
+        found = p.props["selection"] else ("")
+    found
+
+# A click on a row's own background (the gap between its toggle and its title field): selects the row.
+def bool selectRow(mut Runtime rt, Builder host, int index):
+    let list = findAll(lay(rt), "List", "scroll", "0")[0]
+    let row = list.children[index]
+    click(rt, host, lay(rt), row.x + 104.0, row.y + 12.0)
+
+def int focusedId(Runtime rt):
+    if let f = rt.focus:
+        return f.id
+    -1
 
 let host = ViewRoot(inner = AppRoot())
 mut rt = Runtime()
 rt.start(host)
 assert_eq(rt.errors.length, 0)
 
-# ── mounts: two rows, nothing else ───────────────────────────────────────────────────────────
+# ── mounts: two rows, no sheet content ───────────────────────────────────────────────────────
 
 assert_eq(titles(rt), "Design boring-ui|Implement the vertical slice")
-assert_eq(findAll(lay(rt), "TextField", "label", "Title").length, 0)     # no form yet
-
-# The accessibility tree is complete and valid: every interactive node is named.
+assert_eq(countOf(rt, "TextField", "label", "Title"), 0)
 let tree = semantics(lay(rt))
 assert_eq(tree.errors.length, 0)
-assert(describeTree(tree.roots, 0).join("\n").contains("button 'Add'"))
+let text = describeTree(tree.roots, 0).join("\n")
+assert(text.contains("button 'Add'"))
+assert(text.contains("list"))
 
-# ── add: open the form, type, confirm ────────────────────────────────────────────────────────
+# ── add through the sheet: focus lands in the title field, Add is disabled while it is blank ─────
 
-assert(press(rt, host, nth(rt, "Button", "label", "Add", 0)), "header Add")
-assert_eq(findAll(lay(rt), "TextField", "label", "Title").length, 1)     # the form is mounted
-assert(press(rt, host, nth(rt, "TextField", "label", "Title", 0)), "focus the title field")
+let addButton = nth(rt, "Button", "label", "Add", 0)
+assert(press(rt, host, addButton), "header Add opens the sheet")
+assert_eq(rt.openSheets.length, 1)
+assert_eq(semantics(lay(rt)).roots[0].role, "dialog")
+let titleField = nth(rt, "TextField", "label", "Title", 0)
+assert_eq(focusedId(rt), titleField.id)                               # Focused(titleFocused = true) requested it
+let sheetAdd = nth(rt, "Button", "label", "Add", 1)
+assert(isDisabled(rt, sheetAdd.id))                                   # blank title: not activatable
+assert(!keyPress(rt, host, "Enter"))                                  # the default action is disabled too
+assert_eq(titles(rt), "Design boring-ui|Implement the vertical slice")
 assert(typeText(rt, host, "Write "))
 assert(typeText(rt, host, "tests"))
-assert(press(rt, host, nth(rt, "Button", "label", "Add", 1)), "confirm Add")
+assert(!isDisabled(rt, nth(rt, "Button", "label", "Add", 1).id))
+assert(keyPress(rt, host, "Enter"))                                   # Add is the sheet's default action
 assert_eq(titles(rt), "Design boring-ui|Implement the vertical slice|Write tests")
-assert_eq(findAll(lay(rt), "TextField", "label", "Title").length, 0)     # the form closed itself
+assert_eq(rt.openSheets.length, 0)
+assert_eq(countOf(rt, "TextField", "label", "Title"), 0)              # the sheet and its draft are gone
+assert_eq(focusedId(rt), addButton.id)                                # focus went back to the header Add
 
-# An empty title is refused and keeps the form open.
+# ── cancel (Escape) destroys the draft ───────────────────────────────────────────────────────
+
 assert(press(rt, host, nth(rt, "Button", "label", "Add", 0)))
-assert(press(rt, host, nth(rt, "Button", "label", "Add", 1)))
-assert_eq(rowCount(rt), 3)
-assert_eq(findAll(lay(rt), "TextField", "label", "Title").length, 1)
-
-# ── cancel destroys the draft ────────────────────────────────────────────────────────────────
-
-assert(press(rt, host, nth(rt, "TextField", "label", "Title", 0)))
 assert(typeText(rt, host, "never saved"))
 assert_eq(nth(rt, "TextField", "label", "Title", 0).props["value"] else (""), "never saved")
-assert(press(rt, host, nth(rt, "Button", "label", "Cancel", 0)))
-assert_eq(findAll(lay(rt), "TextField", "label", "Title").length, 0)
-assert(press(rt, host, nth(rt, "Button", "label", "Add", 0)))             # reopen: a fresh draft
+assert(keyPress(rt, host, "Escape"))                                  # the sheet's Cancel button
+assert_eq(countOf(rt, "TextField", "label", "Title"), 0)
+assert(press(rt, host, nth(rt, "Button", "label", "Add", 0)))         # reopen: a new lifetime, a fresh draft
 assert_eq(nth(rt, "TextField", "label", "Title", 0).props["value"] else (""), "")
-assert(press(rt, host, nth(rt, "Button", "label", "Cancel", 0)))
+assert(keyPress(rt, host, "Escape"))
+assert_eq(titles(rt), "Design boring-ui|Implement the vertical slice|Write tests")
 
 # ── edit in place, toggle ────────────────────────────────────────────────────────────────────
 
 assert(press(rt, host, nth(rt, "TextField", "label", "Item title", 1)), "focus row 2")
-assert(keyPress(rt, host, "End"))                                         # the caret goes where the click put it: move it to the end
+assert(keyPress(rt, host, "End"))
 assert(typeText(rt, host, "!"))
 assert_eq(titles(rt), "Design boring-ui|Implement the vertical slice!|Write tests")
 assert(press(rt, host, nth(rt, "Toggle", "label", "Completed", 0)))
 let sem = describeTree(semantics(lay(rt)).roots, 0).join("\n")
 assert(sem.contains("toggle 'Completed' value='true'"), sem)
 
-# ── reorder: Up on row 3 moves it above row 2 — row identity and focus survive ────────────────
+# ── select row 2, then reorder with the keyboard: the row (and the focus inside it) keep identity ──
 
-assert(press(rt, host, nth(rt, "TextField", "label", "Item title", 1)))   # focus row 2
+assert(press(rt, host, nth(rt, "TextField", "label", "Item title", 1)))   # focus row 2's title again
 let editedField = nth(rt, "TextField", "label", "Item title", 1)
 let focusBefore = rt.focus else (Handle(id = -1, generation = -1))
 assert_eq(focusBefore.id, editedField.id)
-# A semantic action (as from a screen reader) does not move keyboard focus; a pointer press would.
-let upHandle = rt.handle(nth(rt, "Button", "label", "Up", 2).id) else (Handle(id = -1, generation = -1))
-assert(act(rt, host, upHandle, "activate", ""))
-assert_eq(titles(rt), "Design boring-ui|Write tests|Implement the vertical slice!")
-let movedField = nth(rt, "TextField", "label", "Item title", 2)           # same node, now third
-assert_eq(movedField.id, editedField.id)                                   # identity preserved
+assert(selectRow(rt, host, 1))
+assert_eq(chosenKey(rt), "2")
+assert_eq(focusedId(rt), editedField.id)                              # selecting a row did not steal focus
+assert(keyPress(rt, host, "AltUp"))                                   # onMove(1, 0)
+assert_eq(titles(rt), "Implement the vertical slice!|Design boring-ui|Write tests")
+let movedField = nth(rt, "TextField", "label", "Item title", 0)       # same node, now first
+assert_eq(movedField.id, editedField.id)
 assert(rt.valid(focusBefore), "focus handle still valid after the move")
-assert_eq((rt.focus else (Handle(id = -2, generation = -2))).id, editedField.id)
+assert_eq(focusedId(rt), editedField.id)
+assert_eq(chosenKey(rt), "2")                                         # the selection follows the key
 
-# ── delete: the row's identity is gone; deleting the focused row clears focus ─────────────────
+# ── delete through the row's own button ─────────────────────────────────────────────────────────
 
-assert(press(rt, host, nth(rt, "Button", "label", "Delete", 2)))
-assert_eq(titles(rt), "Design boring-ui|Write tests")
+assert(press(rt, host, nth(rt, "Button", "label", "Delete", 2)))      # "Write tests"
+assert_eq(titles(rt), "Implement the vertical slice!|Design boring-ui")
+assert(!rt.valid(rt.focus else (Handle(id = -1, generation = -1))) or rt.focus != nil)
+
+# ── delete: with focus outside a text field, Delete removes the selected row ──────────────────────
+
+rt.focus = nil
+assert(keyPress(rt, host, "Delete"))                                  # onDelete([0])
+assert_eq(titles(rt), "Design boring-ui")
+assert_eq(chosenKey(rt), "")                                          # the removed key's selection was cleared
 assert(!rt.valid(focusBefore), "the deleted row's handle is stale")
-assert(rt.focus == nil, "focus cleared with the focused node")
+assert(rt.focus == nil)
 
-# ── keyboard: tab through the interface and activate with Space ───────────────────────────────
+# ── keyboard: Tab goes through the enabled controls in order; Space opens the sheet ─────────────
 
 assert(keyPress(rt, host, "Tab"))
-let first = rt.focus else (Handle(id = -1, generation = -1))
-assert_eq(first.id, nth(rt, "Button", "label", "Add", 0).id)              # the header Add comes first
-assert(keyPress(rt, host, "Space"))                                             # opens the form
-assert_eq(findAll(lay(rt), "TextField", "label", "Title").length, 1)
-
-# ── semantic actions behave like input ───────────────────────────────────────────────────────
-
-let select = nth(rt, "Button", "label", "Select", 0)
-let selectHandle = rt.handle(select.id) else (Handle(id = -1, generation = -1))
-assert(act(rt, host, selectHandle, "activate", ""))
+assert_eq(focusedId(rt), nth(rt, "Button", "label", "Add", 0).id)     # the header Add comes first
+assert(keyPress(rt, host, "Space"))
+assert_eq(rt.openSheets.length, 1)
+assert_eq(focusOrder(rt).length, 2)                                   # Title, Cancel (Add is disabled while blank): the sheet traps traversal
+assert(keyPress(rt, host, "Escape"))
 
 # ── the whole thing paints and stays accessible ───────────────────────────────────────────────
 

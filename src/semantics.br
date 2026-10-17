@@ -114,6 +114,19 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors, bool off):
                 errors.push("AccessibilityHeading (node {p.id}) applies to static text, not '{target.role}'")
         out.push(target)
         return
+    if k == "List":
+        mut l = node(p, "list")
+        l.value = p.props["selection"] else ("")
+        for c in p.children:
+            walk(c, l.children, errors, off)
+        out.push(l)
+        return
+    if k == "Sheet" and p.children.length > 0:
+        mut d = node(p, "dialog")
+        for c in p.children:
+            walk(c, d.children, errors, off)
+        out.push(d)
+        return
     if k == "Disabled":
         let nowOff = off or (p.props["value"] else ("true")) == "true"
         for c in p.children:
@@ -126,6 +139,10 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors, bool off):
 # The semantic tree of one placed window.
 pub def Semantics semantics(Placed root):
     mut s = Semantics()
+    # A presented sheet is modal for assistive technology too: only the dialog is exposed.
+    if let sheet = topSheet(root):
+        walk(sheet, s.roots, s.errors, false)
+        return s
     walk(root, s.roots, s.errors, false)
     s
 

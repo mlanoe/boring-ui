@@ -1,0 +1,195 @@
+# List: keyed rows, single selection (click and keys), onMove / onDelete, selection pruning, scrolling
+# (src/layout.br, src/events.br, src/core.br pruneSelection). Run: boring run tests/list_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.semantics.*
+use ui.events.*
+
+pub struct Item:
+    pub int id
+    pub string title
+
+view Todos:
+    state [Item] items = [Item(id = 1, title = "a"), Item(id = 2, title = "b"), Item(id = 3, title = "c"), Item(id = 4, title = "d")]
+    state string selection = ""
+
+    def moveItem(int fromIndex, int toIndex):
+        items.move(fromIndex, toIndex)
+
+    def dropAt([int] indices):
+        items.removeIndices(indices)
+
+    def forget(int id):
+        var at = -1
+        for i in 0..<items.length:
+            if items[i].id == id:
+                at = i
+        if at >= 0:
+            items.removeIndices([at])
+
+    req string order():
+        mut [string] ids = []
+        for i in items:
+            ids.push("{i.id}")
+        ids.join(",")
+
+    req string chosen():
+        selection
+
+    body():
+        Frame(height = 48.0):
+            List(selection = selection, onMove = (a, b): self.moveItem(a, b), onDelete = (indices): self.dropAt(indices)):
+                for item in items with item.id:
+                    Text(item.title)
+
+view Plain:
+    state string selection = ""
+    state [Item] items = [Item(id = 1, title = "a"), Item(id = 2, title = "b")]
+
+    req string chosen():
+        selection
+
+    body():
+        List(selection = selection):
+            for item in items with item.id:
+                Text(item.title)
+
+struct TodosBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Todos()
+
+struct PlainBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Plain()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 200.0, 200.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Placed listOf(Runtime rt):
+    ofKind(lay(rt), "List")[0]
+
+def Todos__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Todos__State else (Todos__State())
+
+def string order(Runtime rt):
+    Todos().order(state(rt))
+
+def string chosen(Runtime rt):
+    Todos().chosen(state(rt))
+
+# The mounted id of the row group with a key (a keyed move must keep it).
+def int groupId(Mounted m, string key):
+    if m.kind == "KeyedGroup" and m.key == key:
+        return m.id
+    for c in m.children:
+        let r = groupId(c, key)
+        if r >= 0:
+            return r
+    -1
+
+def int rowId(Runtime rt, string key):
+    let root = rt.root else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    groupId(root, key)
+
+let host = ViewRoot(inner = TodosBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# ── layout: a scrolling viewport over rows that carry their keys ─────────────────────────────────
+
+let list = listOf(rt)
+assert_eq(list.h, 48.0)                                    # the Frame's height is the viewport
+assert_eq(list.children.length, 4)
+assert_eq(list.children[0].key, "1")
+assert_eq(list.children[3].key, "4")
+assert_eq(list.children[1].y, 16.0)                        # rows are stacked without spacing
+assert_eq(list.props["scrollMax"], "16")                   # 4 rows of 16 in a 48 viewport
+
+# Wheel input scrolls the viewport (the same mechanics as `Scroll`); rows keep their keys while moving.
+assert(scrollBy(rt, host, lay(rt), 10.0, 10.0, 0.0, 100.0))
+assert_eq(listOf(rt).props["scroll"], "16")
+assert_eq(listOf(rt).children[0].y, -16.0)
+assert_eq(listOf(rt).children[0].key, "1")
+assert(scrollBy(rt, host, lay(rt), 10.0, 10.0, 0.0, -100.0))
+assert_eq(listOf(rt).props["scroll"], "0")
+
+# ── selection: a click on a row selects it by key; the semantic tree reports it ──────────────────
+
+let second = list.children[1]
+assert(click(rt, host, lay(rt), second.x + 2.0, second.y + 2.0))
+assert_eq(chosen(rt), "2")
+let tree = semantics(lay(rt))
+assert_eq(tree.roots[0].role, "list")
+assert_eq(tree.roots[0].value, "2")
+
+# Down / Up move the selection and stop at the ends.
+assert(keyPress(rt, host, "Down"))
+assert_eq(chosen(rt), "3")
+assert(keyPress(rt, host, "Up"))
+assert(keyPress(rt, host, "Up"))
+assert_eq(chosen(rt), "1")
+assert(keyPress(rt, host, "Up"))
+assert_eq(chosen(rt), "1")
+
+# ── reorder: the model moves, the rows keep their identity ──────────────────────────────────────
+
+let rowBefore = rowId(rt, "1")
+assert(keyPress(rt, host, "AltDown"))                      # onMove(0, 1)
+assert_eq(order(rt), "2,1,3,4")
+assert_eq(chosen(rt), "1")                                 # the selection follows the key
+assert_eq(rowId(rt, "1"), rowBefore)                       # same mounted row: state and focus would survive
+assert_eq(listOf(rt).children[1].key, "1")
+assert(keyPress(rt, host, "AltUp"))                        # and back up
+assert_eq(order(rt), "1,2,3,4")
+assert(!keyPress(rt, host, "AltUp"))                       # at the top: nothing to do
+assert_eq(order(rt), "1,2,3,4")
+
+# ── delete: onDelete([index]); the removed row's selection is cleared by the update ─────────────
+
+assert(keyPress(rt, host, "Down"))                         # select "2"
+assert(keyPress(rt, host, "Delete"))                       # onDelete([1])
+assert_eq(order(rt), "1,3,4")
+assert_eq(chosen(rt), "")                                  # the selected key no longer exists: cleared
+assert(!keyPress(rt, host, "Delete"))                      # nothing selected
+
+# A key removed by the model itself clears the selection in the same way.
+assert(click(rt, host, lay(rt), listOf(rt).children[2].x + 2.0, listOf(rt).children[2].y + 2.0))
+assert_eq(chosen(rt), "4")
+mut st = state(rt)
+Todos().forget(4, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+assert_eq(chosen(rt), "")
+
+# ── the viewport shrinks to what is left ───────────────────────────────────────────────────────
+
+assert_eq(listOf(rt).props["scrollMax"], "0")              # 2 rows now fit
+Todos().forget(3, st)
+rt.invalidateRoot()
+assert(rt.flush(host))
+assert_eq(order(rt), "1")
+assert_eq(rt.errors.length, 0)
+
+# ── without callbacks the keyboard commands are not offered ─────────────────────────────────────
+
+mut prt = Runtime()
+prt.start(ViewRoot(inner = PlainBuilder()))
+let plainList = ofKind(layout(prt, 200.0, 200.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0)), "List")[0]
+assert(click(prt, ViewRoot(inner = PlainBuilder()), layout(prt, 200.0, 200.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0)), plainList.children[0].x + 2.0, plainList.children[0].y + 2.0))
+assert(!keyPress(prt, ViewRoot(inner = PlainBuilder()), "Delete"))
+assert(!keyPress(prt, ViewRoot(inner = PlainBuilder()), "AltDown"))
+
+print "list ok"

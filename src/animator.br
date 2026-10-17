@@ -177,7 +177,7 @@ def Placed blendNode(Animator a, Placed f, Placed t, float now, bool inGhost):
     if t.kind == "Offset":
         for v in offsetLive(f, t, p):
             live.push(v)
-    Placed(id = t.id, kind = t.kind, x = lerp(f.x, t.x, pg), y = lerp(f.y, t.y, pg), w = lerp(f.w, t.w, pg), h = lerp(f.h, t.h, pg), props = t.props, children = kids, theme = t.theme, alpha = t.alpha, ghost = t.ghost, live = live)
+    Placed(id = t.id, kind = t.kind, x = lerp(f.x, t.x, pg), y = lerp(f.y, t.y, pg), w = lerp(f.w, t.w, pg), h = lerp(f.h, t.h, pg), props = t.props, children = kids, theme = t.theme, key = t.key, alpha = t.alpha, ghost = t.ghost, live = live)
 
 # ── transitions ────────────────────────────────────────────────────────────────────────────────────
 
@@ -194,7 +194,7 @@ def Placed moved(Placed t, float cx, float cy, float scale, float dx, float dy):
     mut [Placed] kids = []
     for c in t.children:
         kids.push(moved(c, cx, cy, scale, dx, dy))
-    Placed(id = t.id, kind = t.kind, x = cx + (t.x - cx) * scale + dx, y = cy + (t.y - cy) * scale + dy, w = t.w * scale, h = t.h * scale, props = t.props, children = kids, theme = t.theme, alpha = t.alpha, ghost = t.ghost, live = t.live)
+    Placed(id = t.id, kind = t.kind, x = cx + (t.x - cx) * scale + dx, y = cy + (t.y - cy) * scale + dy, w = t.w * scale, h = t.h * scale, props = t.props, children = kids, theme = t.theme, key = t.key, alpha = t.alpha, ghost = t.ghost, live = t.live)
 
 # A transition at `state` (0 = at its rest, committed state; 1 = fully at its insertion / removal state).
 def Placed transitioned(Animator a, Placed t, string kind, float state, bool ghost):
@@ -215,7 +215,7 @@ def Placed transitioned(Animator a, Placed t, string kind, float state, bool gho
         dx = numberOf(t, "dx", 0.0) * state
         dy = numberOf(t, "dy", 0.0) * state
     let shifted = moved(t, cx, cy, scale, dx, dy)
-    Placed(id = shifted.id, kind = shifted.kind, x = shifted.x, y = shifted.y, w = shifted.w, h = shifted.h, props = shifted.props, children = shifted.children, theme = shifted.theme, alpha = alpha, ghost = ghost, live = shifted.live)
+    Placed(id = shifted.id, kind = shifted.kind, x = shifted.x, y = shifted.y, w = shifted.w, h = shifted.h, props = shifted.props, children = shifted.children, theme = shifted.theme, key = shifted.key, alpha = alpha, ghost = ghost, live = shifted.live)
 
 # A node new in this commit: a `Transition` presents from its insertion state toward its rest; anything
 # else appears as committed (its parent's transition, if any, carries it).

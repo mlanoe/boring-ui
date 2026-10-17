@@ -68,6 +68,8 @@ pub struct Placed:
     pub var mut [Placed] children = []
     # The theme this node resolved against (the nearest provider above it), for painting.
     pub var Theme theme = Theme()
+    # A `List` row: the identity key of the keyed `for` iteration this node came from ("" elsewhere).
+    pub var string key = ""
     # Presentation state (see animator.br): the group-opacity multiplier of a transition in flight, whether
     # this subtree is a retiring ghost kept only for display (no hit testing, no semantics), and the
     # interpolated prop overrides. A committed layout always has the defaults.
@@ -116,7 +118,7 @@ def bool isTransparent(Mounted n):
 
 # Wrappers that forward all layout to their one child (they only add behaviour elsewhere).
 def [string] transparentKinds():
-    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition"]
+    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition", "DefaultFocus", "Focused", "FocusedAs"]
 
 # A stack's children with every `KeyedGroup` replaced by its items, in order.
 def [Mounted] flatten(Mounted n):
@@ -167,7 +169,20 @@ def bool isVerticalScroll(Mounted n):
     (n.props["axis"] else ("Vertical")) == "Vertical"
 
 def float gapOf(Mounted n):
+    if n.kind == "List":
+        return 0.0
     numProp(n, "spacing") else (n.theme.metric(MetricRole.StackSpacing))
+
+# The key of the keyed iteration each item of `flatten(n)` came from, in the same order ("" for plain items).
+def [string] flattenKeys(Mounted n):
+    mut [string] out = []
+    for c in n.children:
+        if c.kind == "KeyedGroup":
+            for i in flatten(c):
+                out.push(c.key)
+        else:
+            out.push("")
+    out
 
 # ── text (fixture font) ───────────────────────────────────────────────────────────────────────
 
@@ -345,6 +360,12 @@ def Span span(Mounted n, bool horiz, float? cross):
         if grows:
             return Span(min = s.min, ideal = s.ideal, max = unbounded)
         return s
+    if k == "List":
+        # A scroll viewport over a vertical stack of its rows.
+        let s = stackSpan(n, false, horiz, cross)
+        if !horiz:
+            return Span(min = 0.0, ideal = s.ideal, max = unbounded)
+        return Span(min = s.min, ideal = s.ideal, max = unbounded)
     if k == "Scroll":
         # The viewport takes whatever it is offered; its content decides the ideal on the scrolling axis.
         let scrollsThisAxis = isVerticalScroll(n) != horiz
@@ -554,6 +575,11 @@ pub def Size measure(Mounted n, Prop p):
         if flag(n, "height"):
             h = maxOf(cs.h, offeredH)
         return Size(w = w, h = h)
+    if k == "List":
+        let neg = negotiate(n, false, nil, p.w)
+        let listW = p.w else (neg.cross)
+        let listH = p.h else (neg.total)
+        return Size(w = listW, h = listH)
     if k == "Scroll":
         # The content proposes nothing on the scrolling axis and keeps the viewport's width otherwise;
         # the viewport itself takes the proposal on both axes (or the content's size when unspecified).
@@ -638,6 +664,11 @@ pub def Placed place(Mounted n, float x, float y, Size size):
         let i = numProp(n, "insets") else (0.0)
         let cs = measure(n.children[0], Prop(w = nonNeg(size.w - 2.0 * i), h = nonNeg(size.h - 2.0 * i)))
         node.children.push(place(n.children[0], x + i, y + i, cs))
+    elif k == "Sheet":
+        # Contributes no bounds: its content is placed at its own size (centered in the window later).
+        for c in n.children:
+            let cs = measure(c, Prop(w = nil, h = nil))
+            node.children.push(place(c, x, y, cs))
     elif k == "Layer":
         let a = alignmentOf(n)
         for c in flatten(n):
@@ -647,6 +678,20 @@ pub def Placed place(Mounted n, float x, float y, Size size):
         let a = alignmentOf(n)
         let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
         node.children.push(place(n.children[0], x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs))
+    elif k == "List":
+        let neg = negotiate(n, false, nil, size.w)
+        let keys = flattenKeys(n)
+        let most = nonNeg(neg.total - size.h)
+        let offset = clampTo(n.scroll, 0.0, most)
+        node.props["scroll"] = "{offset}"
+        node.props["scrollMax"] = "{most}"
+        var rowY = y - offset
+        for i in 0..<neg.items.length:
+            let sz = neg.sizes[i]
+            mut row = place(neg.items[i], x, rowY, sz)
+            row.key = keys[i]
+            node.children.push(row)
+            rowY += neg.mains[i] + neg.gap
     elif k == "Scroll":
         let vertical = isVerticalScroll(n)
         var contentProp = Prop(w = size.w, h = nil)
@@ -691,9 +736,40 @@ pub def Placed place(Mounted n, float x, float y, Size size):
             offset += neg.mains[i] + neg.gap
     node
 
+# `t` translated by (dx, dy), recursively.
+def Placed translated(Placed t, float dx, float dy):
+    mut [Placed] kids = []
+    for c in t.children:
+        kids.push(translated(c, dx, dy))
+    Placed(id = t.id, kind = t.kind, x = t.x + dx, y = t.y + dy, w = t.w, h = t.h, props = t.props, children = kids, theme = t.theme, key = t.key, alpha = t.alpha, ghost = t.ghost, live = t.live)
+
+# The presentation layer: a presented `Sheet`'s bounds become the whole window and its content is centered
+# in it (the sheet itself took no room in its parent's layout).
+def Placed withSheets(Placed p, float width, float height):
+    mut [Placed] kids = []
+    let presented = p.kind == "Sheet" and p.children.length > 0
+    for c in p.children:
+        if presented:
+            kids.push(translated(c, (width - c.w) / 2.0 - c.x, (height - c.h) / 2.0 - c.y))
+        else:
+            kids.push(withSheets(c, width, height))
+    if presented:
+        return Placed(id = p.id, kind = p.kind, x = 0.0, y = 0.0, w = width, h = height, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = p.live)
+    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = p.live)
+
+# The topmost presented `Sheet` of a placed tree (the last one in preorder), if any.
+pub def Placed? topSheet(Placed p):
+    var Placed? found = nil
+    if p.kind == "Sheet" and p.children.length > 0:
+        found = p
+    for c in p.children:
+        if let deeper = topSheet(c):
+            found = deeper
+    found
+
 # Lays out the whole window: the root gets the window as its proposal.
 pub def Placed? layout(Runtime rt, float width, float height):
     if let r = rt.root:
         let size = measure(r, Prop(w = width, h = height))
-        return place(r, 0.0, 0.0, size)
+        return withSheets(place(r, 0.0, 0.0, size), width, height)
     nil

@@ -49,51 +49,35 @@ def string propOf(Mounted n, string name):
     n.props[name] else ("")
 
 def bool isFocusable(string kind):
-    kind == "Button" or kind == "Toggle" or kind == "TextField"
+    isFocusableKind(kind)
 
 # ── disabled state ─────────────────────────────────────────────────────────────────────────────
 
-# 1 when node `id` sits inside a `Disabled(true)` subtree, 0 when it does not, -1 when it is absent.
-def int disabledState(Mounted n, int id, bool inherited):
-    var off = inherited
-    if n.kind == "Disabled" and propOf(n, "value") == "true":
-        off = true
-    if n.id == id:
-        if off:
-            return 1
-        return 0
-    for c in n.children:
-        let r = disabledState(c, id, off)
-        if r >= 0:
-            return r
-    -1
-
 pub def bool isDisabled(Runtime rt, int id):
-    if let r = rt.root:
-        return disabledState(r, id, false) == 1
-    false
+    rt.disabledAt(id)
 
-def [Handle] collect(Mounted m, bool inherited):
-    mut [Handle] out = []
-    var off = inherited
-    if m.kind == "Disabled" and propOf(m, "value") == "true":
-        off = true
-    if isFocusable(m.kind) and !off:
-        out.push(Handle(id = m.id, generation = m.generation))
-    for c in m.children:
-        for h in collect(c, off):
-            out.push(h)
-    out
-
-# The enabled focusable controls in structural (tab) order.
+# The enabled focusable controls in structural (tab) order — inside the topmost presented sheet when there
+# is one (a modal scope traps traversal).
 pub def [Handle] focusOrder(Runtime rt):
+    if rt.openSheets.length > 0:
+        if let top = rt.find(rt.openSheets[rt.openSheets.length - 1]):
+            return focusablesIn(top, false)
     if let r = rt.root:
-        return collect(r, false)
+        return focusablesIn(r, false)
     []
 
 pub def void setFocus(mut Runtime rt, Handle h):
     if rt.valid(h):
         rt.focus = h
+
+# Moves keyboard focus to `h` as one event, so `.focused(...)` bindings are synchronized in the same
+# transaction (the previous control's binding goes off, this one's on).
+pub def void focusControl(mut Runtime rt, Builder host, Handle h):
+    if rt.valid(h):
+        rt.focus = h
+        rt.beginEvent()
+        rt.invalidateRoot()
+        rt.endEvent(host)
 
 # Delivers a semantic action to the control behind `h`, as one event transaction. Returns false for
 # a stale handle, a disabled control or a node that is not a native control.
@@ -180,7 +164,7 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
         if let node = rt.find(id):
             if isFocusable(node.kind) and !isDisabled(rt, id):
                 let h = Handle(id = node.id, generation = node.generation)
-                setFocus(rt, h)
+                focusControl(rt, host, h)
                 rt.capture = h
                 if node.kind == "TextField":
                     if let at = findPlaced(placed, id):
@@ -191,7 +175,7 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
                         rt.invalidateRoot()
                 return true
         i -= 1
-    false
+    selectRowAt(rt, host, placed, path)
 
 # A pointer release: a Button activates and a Toggle toggles only when the pointer is still over the
 # control that captured it; released anywhere else it is a cancel. The capture always ends.
@@ -222,9 +206,83 @@ pub def void pointerCancel(mut Runtime rt):
 pub def bool click(mut Runtime rt, Builder host, Placed placed, float x, float y):
     if !pointerDown(rt, host, placed, x, y):
         return false
+    # A press that captured nothing (a list row selected on press) has no release to deliver.
+    if rt.capture == nil:
+        return true
     pointerUp(rt, host, placed, x, y)
 
 # ── keyboard ──────────────────────────────────────────────────────────────────────────────────
+
+# A press that hit no control but a row of a `List` selects that row (by its key).
+def bool selectRowAt(mut Runtime rt, Builder host, Placed placed, [int] path):
+    var listId = -1
+    var rowKey = ""
+    for id in path:
+        if let node = findPlaced(placed, id):
+            if node.kind == "List":
+                listId = id
+                rowKey = ""
+            elif listId >= 0 and rowKey == "" and node.key != "":
+                rowKey = node.key
+    if listId >= 0 and rowKey != "":
+        if let h = rt.handle(listId):
+            return act(rt, host, h, "select", rowKey)
+    false
+
+# The first `List` of the window (the one keyboard commands address).
+def Mounted? firstList(Runtime rt):
+    let all = rt.lists()
+    if all.length > 0:
+        return all[0]
+    nil
+
+def int indexOfKey([string] keys, string key):
+    for i in 0..<keys.length:
+        if keys[i] == key:
+            return i
+    -1
+
+# List keyboard commands: Up / Down move the selection, Delete / Backspace delete the selected row
+# (`onDelete([index])`), AltUp / AltDown move it one place (`onMove(from, to)`). The callbacks must be
+# given (`viewHandles`); the application mutates its model and the next pass restores identity by key.
+def bool listKey(mut Runtime rt, Builder host, string name):
+    let found = firstList(rt)
+    if found == nil:
+        return false
+    let list = found else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    let keys = rowKeysOf(list)
+    if keys.length == 0:
+        return false
+    let at = indexOfKey(keys, propOf(list, "selection"))
+    guard let h = rt.handle(list.id) else:
+        return false
+    if name == "Up" or name == "Down":
+        var next = 0
+        if name == "Up":
+            next = keys.length - 1
+            if at > 0:
+                next = at - 1
+            if at == 0:
+                next = 0
+        else:
+            if at >= 0:
+                next = clampTo(at + 1, 0, keys.length - 1)
+        return act(rt, host, h, "select", keys[next])
+    if at < 0:
+        return false
+    if let control = list.control:
+        if name == "Delete" or name == "Backspace":
+            if control.viewHandles("delete"):
+                return act(rt, host, h, "delete", "{at}")
+            return false
+        if control.viewHandles("move"):
+            var to = at - 1
+            if name == "AltDown":
+                to = at + 1
+            if to < 0 or to >= keys.length:
+                return false
+            return act(rt, host, h, "move", "{at},{to}")
+    false
 
 def int indexOf([Handle] order, Handle h):
     for i in 0..<order.length:
@@ -263,9 +321,13 @@ def int findScopeButton(Mounted n, bool inherited, bool cancel):
             return r
     -1
 
+# Activates the scope's default / cancel button. A presented sheet is the scope when there is one.
 def bool activateScopeButton(mut Runtime rt, Builder host, bool cancel):
-    if let root = rt.root:
-        let id = findScopeButton(root, false, cancel)
+    var scope = rt.root
+    if rt.openSheets.length > 0:
+        scope = rt.find(rt.openSheets[rt.openSheets.length - 1])
+    if let top = scope:
+        let id = findScopeButton(top, false, cancel)
         if id >= 0:
             if let h = rt.handle(id):
                 return act(rt, host, h, "activate", "")
@@ -346,10 +408,16 @@ pub def bool keyPress(mut Runtime rt, Builder host, string name):
             next = (at - 1 + order.length) % order.length
             if at < 0:
                 next = order.length - 1
-        setFocus(rt, order[next])
+        focusControl(rt, host, order[next])
         return true
     if name == "Escape":
-        return activateScopeButton(rt, host, true)
+        if activateScopeButton(rt, host, true):
+            return true
+        # No Cancel button: the presented sheet performs its ordinary dismissal (writes `false`).
+        if rt.openSheets.length > 0:
+            if let h = rt.handle(rt.openSheets[rt.openSheets.length - 1]):
+                return act(rt, host, h, "dismiss", "")
+        return false
     if let f = rt.focus:
         if rt.valid(f) and !isDisabled(rt, f.id):
             if let node = rt.find(f.id):
@@ -364,6 +432,9 @@ pub def bool keyPress(mut Runtime rt, Builder host, string name):
                     return act(rt, host, f, "activate", "")
                 if node.kind == "Toggle" and name == "Space":
                     return act(rt, host, f, "toggle", "")
+    if name == "Up" or name == "Down" or name == "Delete" or name == "Backspace" or name == "AltUp" or name == "AltDown":
+        if listKey(rt, host, name):
+            return true
     if name == "Enter":
         return activateScopeButton(rt, host, false)
     false
@@ -410,7 +481,7 @@ pub def bool scrollBy(mut Runtime rt, Builder host, Placed placed, float x, floa
     var i = path.length - 1
     while i >= 0:
         if let node = findPlaced(placed, path[i]):
-            if node.kind == "Scroll":
+            if node.kind == "Scroll" or node.kind == "List":
                 let vertical = (node.props["axis"] else ("Vertical")) == "Vertical"
                 var want = restX
                 if vertical:

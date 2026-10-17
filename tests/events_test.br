@@ -50,7 +50,7 @@ assert_eq(button.kind, "Button")
 let passesBefore = rt.passesRun
 assert(click(rt, host, placed, button.x + 4.0, button.y + 4.0), "hit the button")
 assert_eq(label(rt), "1:")                              # the callback ran against the panel's state
-assert_eq(rt.passesRun, passesBefore + 1)               # one update pass for the whole event
+assert_eq(rt.passesRun, passesBefore + 2)               # press (focus) and release (activation) are two events, one pass each
 assert(rt.focus != nil, "pressing a control focuses it")
 
 # A press that hits no control does nothing.
