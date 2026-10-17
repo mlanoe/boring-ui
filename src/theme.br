@@ -1,0 +1,368 @@
+# boring-ui theme (docs/design-notes/boring-ui-draft.md, "Environment, theme, and control styles",
+# "Semantic tokens", "Component styles", "Theme validation and fallback"). Layer 3/4 support: a
+# concrete, immutable library value — not a trait, not a global. A `Theme` holds only OVERRIDES on
+# top of a built-in base (light, or dark): a missing entry inherits from the base, so
+# `Theme()` is the complete system theme and `Theme().withColor(...)` replaces one token. Builders
+# return a new theme (the old one is untouched). A theme is installed for a subtree with
+# `Provide(value = theme)`; the nearest provider wins (the core resolves it onto every mounted node,
+# see `Mounted.theme` in core.br).
+#
+# Roles: `ColorRole`, `MetricRole` (below) and `FontRole` / `ButtonRole` / `ButtonStyle` (boring.ui).
+# Deviations from the draft, each deliberate: the destructive roles are `Danger`/`OnDanger` (a
+# `.Destructive` dot-prefix would be ambiguous with `ButtonRole.Destructive`) and `Text`, `Border`,
+# `Shadow` are `PrimaryText`, `ControlBorder`, `ShadowColor` (an enum variant named like a view would
+# shadow `Text(...)` in every module that imports the theme); a few headless
+# metrics are added (`ControlPadding`, `ToggleSize`, `TextFieldWidth`, `TextFieldHeight`,
+# `StackSpacing`) because the fixture layout needs them; `MinimumHitSize` defaults to 0 (touch
+# themes raise it); colors are `#RRGGBB` / `#RRGGBBAA` strings, not a `Color` type; token values
+# live in entry lists rather than dictionaries (dictionary iteration differs under `boring build`).
+# Not here yet: adaptive spacing pairs, text scale, light/dark/contrast variants per token,
+# custom style traits (`<View> body(Context)`), inherited `.buttonStyle(...)` providers.
+
+use boring.ui.*
+
+pub enum ColorRole:
+    WindowBackground
+    Surface
+    ElevatedSurface
+    PrimaryText
+    SecondaryText
+    PlaceholderText
+    DisabledText
+    Accent
+    OnAccent
+    Danger
+    OnDanger
+    ControlBorder
+    Separator
+    FocusRing
+    Selection
+    ShadowColor
+
+pub enum MetricRole:
+    ControlPadding
+    ToggleSize
+    TextFieldWidth
+    TextFieldHeight
+    StackSpacing
+    SpacerMinimum
+    ControlRadius
+    ControlBorderWidth
+    FocusRingWidth
+    SeparatorThickness
+    MinimumHitSize
+    ScrollbarThickness
+    SheetCornerRadius
+    ShadowRadius
+
+pub struct ColorEntry:
+    pub string role
+    pub string hex
+
+pub struct MetricEntry:
+    pub string role
+    pub float value
+
+pub struct StyleEntry:
+    pub string role
+    pub string style
+
+# What a button looks like under a built-in style: background / text color roles, extra padding
+# (added to the theme's ControlPadding), and whether it is drawn at all.
+pub struct ButtonSpec:
+    pub string background
+    pub string text
+    pub float padding
+    pub bool filled
+
+# ── the built-in base ────────────────────────────────────────────────────────────────────────────
+
+def string lightColor(string role):
+    if role == "WindowBackground":
+        return "#FFFFFF"
+    if role == "Surface":
+        return "#F5F5F7"
+    if role == "ElevatedSurface":
+        return "#FFFFFF"
+    if role == "PrimaryText":
+        return "#1D1D1F"
+    if role == "SecondaryText":
+        return "#6E6E73"
+    if role == "PlaceholderText":
+        return "#A1A1A6"
+    if role == "DisabledText":
+        return "#C7C7CC"
+    if role == "Accent":
+        return "#0A84FF"
+    if role == "OnAccent":
+        return "#FFFFFF"
+    if role == "Danger":
+        return "#FF3B30"
+    if role == "OnDanger":
+        return "#FFFFFF"
+    if role == "ControlBorder":
+        return "#D2D2D7"
+    if role == "Separator":
+        return "#E5E5EA"
+    if role == "FocusRing":
+        return "#0A84FF"
+    if role == "Selection":
+        return "#B3D7FF"
+    "#00000033"
+
+def string darkColor(string role):
+    if role == "WindowBackground":
+        return "#1C1C1E"
+    if role == "Surface":
+        return "#2C2C2E"
+    if role == "ElevatedSurface":
+        return "#3A3A3C"
+    if role == "PrimaryText":
+        return "#F5F5F7"
+    if role == "SecondaryText":
+        return "#A1A1A6"
+    if role == "PlaceholderText":
+        return "#6E6E73"
+    if role == "DisabledText":
+        return "#48484A"
+    if role == "Accent":
+        return "#0A84FF"
+    if role == "OnAccent":
+        return "#FFFFFF"
+    if role == "Danger":
+        return "#FF453A"
+    if role == "OnDanger":
+        return "#FFFFFF"
+    if role == "ControlBorder":
+        return "#48484A"
+    if role == "Separator":
+        return "#38383A"
+    if role == "FocusRing":
+        return "#64D2FF"
+    if role == "Selection":
+        return "#2F5C9C"
+    "#00000066"
+
+# The fixture metrics the headless layout always used (see layout.br), now named.
+def float systemMetric(string role):
+    if role == "ControlPadding":
+        return 8.0
+    if role == "ToggleSize":
+        return 20.0
+    if role == "TextFieldWidth":
+        return 160.0
+    if role == "TextFieldHeight":
+        return 24.0
+    if role == "StackSpacing":
+        return 8.0
+    if role == "SpacerMinimum":
+        return 8.0
+    if role == "ControlRadius":
+        return 6.0
+    if role == "ControlBorderWidth":
+        return 1.0
+    if role == "FocusRingWidth":
+        return 2.0
+    if role == "SeparatorThickness":
+        return 1.0
+    if role == "MinimumHitSize":
+        return 0.0
+    if role == "ScrollbarThickness":
+        return 8.0
+    if role == "SheetCornerRadius":
+        return 12.0
+    4.0
+
+# Font sizes in logical units; the fixture font is `size / 2` wide and `size` tall per cell, so
+# `Body` (16) is exactly the 8 x 16 cell every layout test already assumes.
+def float systemFontSize(string role):
+    if role == "LargeTitle":
+        return 32.0
+    if role == "Title":
+        return 24.0
+    if role == "Headline":
+        return 18.0
+    if role == "Label":
+        return 14.0
+    if role == "Caption":
+        return 12.0
+    16.0
+
+def string systemButtonStyle(string buttonRole):
+    if buttonRole == "Destructive":
+        return "Primary"
+    if buttonRole == "Cancel":
+        return "Plain"
+    "Secondary"
+
+pub def ButtonSpec buttonSpec(string style):
+    if style == "Primary":
+        return ButtonSpec(background = "Accent", text = "OnAccent", padding = 0.0, filled = true)
+    if style == "Plain":
+        return ButtonSpec(background = "WindowBackground", text = "Accent", padding = 0.0, filled = false)
+    if style == "Compact":
+        return ButtonSpec(background = "Surface", text = "PrimaryText", padding = -4.0, filled = true)
+    ButtonSpec(background = "Surface", text = "PrimaryText", padding = 0.0, filled = true)
+
+# ── the theme value ──────────────────────────────────────────────────────────────────────────────
+
+pub struct Theme as EnvValue:
+    pub string name = "system"
+    pub bool dark = false
+    pub [ColorEntry] colors = []
+    pub [MetricEntry] metrics = []
+    pub [MetricEntry] fontSizes = []
+    pub [StyleEntry] buttonStyles = []
+
+    # The resolved color of a role (`#RRGGBB[AA]`): an override, else the base.
+    pub req string color(ColorRole role):
+        let key = "{role}"
+        for e in colors:
+            if e.role == key:
+                return e.hex
+        if dark:
+            return darkColor(key)
+        lightColor(key)
+
+    pub req float metric(MetricRole role):
+        let key = "{role}"
+        for e in metrics:
+            if e.role == key:
+                return e.value
+        systemMetric(key)
+
+    pub req float fontSize(FontRole role):
+        let key = "{role}"
+        for e in fontSizes:
+            if e.role == key:
+                return e.value
+        systemFontSize(key)
+
+    # String-keyed lookups for callers that only have a prop (layout and painting read mounted props).
+    pub req string colorNamed(string key):
+        for e in colors:
+            if e.role == key:
+                return e.hex
+        if dark:
+            return darkColor(key)
+        lightColor(key)
+
+    pub req float fontSizeNamed(string key):
+        for e in fontSizes:
+            if e.role == key:
+                return e.value
+        systemFontSize(key)
+
+    pub req string buttonStyleNamed(string roleKey):
+        for e in buttonStyles:
+            if e.role == roleKey:
+                return e.style
+        systemButtonStyle(roleKey)
+
+    # The built-in style a role maps to (`Primary`, `Secondary`, `Plain`, `Compact`).
+    pub req string buttonStyleName(ButtonRole role):
+        let key = "{role}"
+        for e in buttonStyles:
+            if e.role == key:
+                return e.style
+        systemButtonStyle(key)
+
+    # Builders: a new theme with one entry replaced (the receiver is untouched).
+    pub req Theme withColor(ColorRole role, string hex):
+        let key = "{role}"
+        mut [ColorEntry] next = []
+        for e in colors:
+            if e.role != key:
+                next.push(e)
+        next.push(ColorEntry(role = key, hex = hex))
+        Theme(name = name, dark = dark, colors = next, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+
+    pub req Theme withMetric(MetricRole role, float value):
+        let key = "{role}"
+        mut [MetricEntry] next = []
+        for e in metrics:
+            if e.role != key:
+                next.push(e)
+        next.push(MetricEntry(role = key, value = value))
+        Theme(name = name, dark = dark, colors = colors, metrics = next, fontSizes = fontSizes, buttonStyles = buttonStyles)
+
+    pub req Theme withFontSize(FontRole role, float size):
+        let key = "{role}"
+        mut [MetricEntry] next = []
+        for e in fontSizes:
+            if e.role != key:
+                next.push(e)
+        next.push(MetricEntry(role = key, value = size))
+        Theme(name = name, dark = dark, colors = colors, metrics = metrics, fontSizes = next, buttonStyles = buttonStyles)
+
+    pub req Theme withButtonStyle(ButtonRole role, string style):
+        let key = "{role}"
+        mut [StyleEntry] next = []
+        for e in buttonStyles:
+            if e.role != key:
+                next.push(e)
+        next.push(StyleEntry(role = key, style = style))
+        Theme(name = name, dark = dark, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = next)
+
+    # The built-in dark base with the same overrides.
+    pub req Theme asDark():
+        Theme(name = "{name}.dark", dark = true, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+
+    # Validation (run once when a theme is installed): colors are `#RRGGBB` / `#RRGGBBAA`, metrics are
+    # finite and non-negative, font sizes are positive, style names are built in. Empty = valid.
+    pub req [string] issues():
+        mut [string] problems = []
+        for e in colors:
+            if !isHexColor(e.hex):
+                problems.push("color {e.role}: '{e.hex}' is not #RRGGBB or #RRGGBBAA")
+        for e in metrics:
+            if !(e.value >= 0.0) or e.value > 1000000.0:
+                problems.push("metric {e.role}: {e.value} is not a finite non-negative length")
+        for e in fontSizes:
+            if !(e.value > 0.0) or e.value > 1000000.0:
+                problems.push("font {e.role}: {e.value} is not a positive size")
+        for e in buttonStyles:
+            if !isBuiltInStyle(e.style):
+                problems.push("button style for {e.role}: '{e.style}' is not Primary, Secondary, Plain or Compact")
+        problems
+
+def bool isBuiltInStyle(string s):
+    s == "Primary" or s == "Secondary" or s == "Plain" or s == "Compact"
+
+def bool isHexDigit(string c):
+    "0123456789abcdefABCDEF".contains(c)
+
+pub def bool isHexColor(string s):
+    if s.length != 7 and s.length != 9:
+        return false
+    if s[0..<1] != "#":
+        return false
+    for i in 1..<s.length:
+        if !isHexDigit(s[i..<(i + 1)]):
+            return false
+    true
+
+# The complete built-in themes.
+pub def Theme systemTheme():
+    Theme()
+
+pub def Theme darkTheme():
+    Theme(name = "system.dark", dark = true)
+
+# The `Theme` nearest in a provider scope (nearest first), or the system theme.
+pub def Theme themeIn([EnvValue] scope):
+    for v in scope:
+        if let t = v as Theme:
+            return t
+    Theme()
+
+# The first `Theme` among provided values, if any (a provider's own value, for validation).
+pub def Theme? firstTheme([EnvValue] values):
+    for v in values:
+        if let t = v as Theme:
+            return t
+    nil
+
+# `Theme.validate()` as a free function (callable on any binding, including an `if let` one).
+pub def [string] themeProblems(Theme t):
+    t.issues()

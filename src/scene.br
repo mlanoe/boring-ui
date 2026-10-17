@@ -14,6 +14,8 @@
 # it. Children are tested front to back (reverse paint order), so the topmost wins.
 
 use ui.layout.*
+use ui.theme.*
+use boring.ui.*
 
 pub struct Command:
     pub string kind
@@ -25,12 +27,24 @@ pub struct Command:
     pub string color = ""
     pub int node = -1
     # Border width / opacity / shadow radius, and a shadow's offset.
+    # The color token resolved against the node's theme (`#RRGGBB[AA]`); `color` keeps the semantic token.
+    pub var string hex = ""
     pub var float value = 0.0
     pub var float dx = 0.0
     pub var float dy = 0.0
 
 def Command cmd(string kind, Placed p, string text, string color):
     Command(kind = kind, x = p.x, y = p.y, w = p.w, h = p.h, text = text, color = color, node = p.id)
+
+# A color token against the node's theme: a `ColorRole` name resolves through the theme, a `#RRGGBB[AA]`
+# value is itself, anything else is left for the renderer (a named color such as "red").
+def string resolveColor(Placed p, string token):
+    if isHexColor(token):
+        return token
+    let resolved = p.theme.colorNamed(token)
+    if token == "WindowBackground" or token == "Surface" or token == "ElevatedSurface" or token == "PrimaryText" or token == "SecondaryText" or token == "PlaceholderText" or token == "DisabledText" or token == "Accent" or token == "OnAccent" or token == "Danger" or token == "OnDanger" or token == "ControlBorder" or token == "Separator" or token == "FocusRing" or token == "Selection" or token == "ShadowColor":
+        return resolved
+    token
 
 def float num(Placed p, string key, float fallback):
     if let s = p.props[key]:
@@ -40,10 +54,14 @@ def float num(Placed p, string key, float fallback):
 # Appends `p`'s commands (and its subtree's) to `out` in paint order.
 pub def paint(Placed p, mut [Command] out):
     if p.kind == "Background":
-        out.push(cmd("FillRect", p, "", p.props["color"] else ("")))
+        let token = p.props["color"] else ("")
+        mut fill = cmd("FillRect", p, "", token)
+        fill.hex = resolveColor(p, token)
+        out.push(fill)
     if p.kind == "Shadow":
         mut shadow = cmd("DrawShadow", p, "", p.props["color"] else ("black"))
-        shadow.value = num(p, "radius", 4.0)
+        shadow.hex = resolveColor(p, "ShadowColor")
+        shadow.value = num(p, "radius", p.theme.metric(MetricRole.ShadowRadius))
         shadow.dx = num(p, "dx", 0.0)
         shadow.dy = num(p, "dy", 2.0)
         out.push(shadow)
@@ -52,23 +70,46 @@ pub def paint(Placed p, mut [Command] out):
         open.value = num(p, "value", 1.0)
         out.push(open)
     if p.kind == "Text":
-        out.push(cmd("DrawText", p, p.props["shown"] else (p.props["content"] else ("")), ""))
+        mut text = cmd("DrawText", p, p.props["shown"] else (p.props["content"] else ("")), "")
+        text.hex = p.theme.color(ColorRole.PrimaryText)
+        out.push(text)
     if p.kind == "Button":
-        out.push(cmd("FillRect", p, "", "button"))
+        let spec = buttonSpec(buttonStyleOf(p.theme, p.props))
+        let pad = buttonPaddingOf(p.theme, p.props)
+        let body = p.theme.fontSizeNamed("Body")
+        if spec.filled:
+            mut face = cmd("FillRect", p, "", "button")
+            face.hex = p.theme.colorNamed(spec.background)
+            out.push(face)
         let label = p.props["label"] else ("")
-        out.push(Command(kind = "DrawText", x = p.x + controlPadding, y = p.y + controlPadding, w = p.w - 2.0 * controlPadding, h = lineHeight, text = label, color = "", node = p.id))
+        mut text = Command(kind = "DrawText", x = p.x + pad, y = p.y + pad, w = p.w - 2.0 * pad, h = body, text = label, color = "", node = p.id)
+        text.hex = p.theme.colorNamed(spec.text)
+        out.push(text)
     if p.kind == "TextField":
-        let text = p.props["value"] else ("")
-        out.push(cmd("FillRect", p, "", "field"))
-        out.push(Command(kind = "DrawText", x = p.x + 4.0, y = p.y + 4.0, w = p.w - 8.0, h = lineHeight, text = text, color = "", node = p.id))
+        let value = p.props["value"] else ("")
+        mut field = cmd("FillRect", p, "", "field")
+        field.hex = p.theme.color(ColorRole.Surface)
+        out.push(field)
+        mut text = Command(kind = "DrawText", x = p.x + 4.0, y = p.y + 4.0, w = p.w - 8.0, h = p.theme.fontSizeNamed("Body"), text = value, color = "", node = p.id)
+        text.hex = p.theme.color(ColorRole.PrimaryText)
+        out.push(text)
     if p.kind == "Toggle":
         var state = "off"
         let value = p.props["value"] else ("false")
         if value == "true":
             state = "on"
         let label = p.props["label"] else ("")
-        out.push(Command(kind = "FillRect", x = p.x, y = p.y, w = toggleBox, h = toggleBox, text = "", color = state, node = p.id))
-        out.push(Command(kind = "DrawText", x = p.x + toggleBox + controlPadding, y = p.y, w = p.w - toggleBox - controlPadding, h = p.h, text = label, color = "", node = p.id))
+        let box = p.theme.metric(MetricRole.ToggleSize)
+        let gap = p.theme.metric(MetricRole.ControlPadding)
+        mut mark = Command(kind = "FillRect", x = p.x, y = p.y, w = box, h = box, text = "", color = state, node = p.id)
+        if state == "on":
+            mark.hex = p.theme.color(ColorRole.Accent)
+        else:
+            mark.hex = p.theme.color(ColorRole.ControlBorder)
+        out.push(mark)
+        mut text = Command(kind = "DrawText", x = p.x + box + gap, y = p.y, w = p.w - box - gap, h = p.h, text = label, color = "", node = p.id)
+        text.hex = p.theme.color(ColorRole.PrimaryText)
+        out.push(text)
     if p.kind == "Clip" or p.kind == "Scroll":
         out.push(cmd("PushClip", p, "", ""))
     for c in p.children:
@@ -81,6 +122,7 @@ pub def paint(Placed p, mut [Command] out):
         out.push(close)
     if p.kind == "Border":
         mut stroke = cmd("StrokeRect", p, "", p.props["color"] else (""))
+        stroke.hex = resolveColor(p, p.props["color"] else (""))
         stroke.value = num(p, "lineWidth", 1.0)
         out.push(stroke)
 

@@ -185,7 +185,7 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
                 if node.kind == "TextField":
                     if let at = findPlaced(placed, id):
                         let len = propOf(node, "value").length
-                        let cell = ((x - at.x - 4.0) / charWidth + 0.5) as int
+                        let cell = ((x - at.x - 4.0) / (at.theme.fontSizeNamed("Body") / 2.0) + 0.5) as int
                         let caret = clampTo(cell, 0, len)
                         moveCaret(rt, h, caret, caret)
                         rt.invalidateRoot()

@@ -5,21 +5,21 @@
 use boring.ui.*
 use ui.core.*
 
-struct Theme as EnvValue:
+struct Palette as EnvValue:
     string name
 
 struct Locale as EnvValue:
     string code
 
 view Label:
-    env Theme theme
+    env Palette theme
     string text
 
     body():
         Text("{text}:{theme.name}")
 
 view Both:
-    env Theme theme
+    env Palette theme
     env Locale locale
 
     body():
@@ -30,11 +30,11 @@ view Page:
 
     body():
         Column(alignment = .Center, spacing = nil):
-            Provide(value = Theme(name = "dark")):
+            Provide(value = Palette(name = "dark")):
                 Provide(value = Locale(code = "fr")):
                     Both()
                 Label(text = "outer")
-                Provide(value = Theme(name = "light")):
+                Provide(value = Palette(name = "light")):
                     Label(text = "inner")
             Label(text = "bare")
 
@@ -56,10 +56,10 @@ mut rt = Runtime()
 rt.start(host)
 let root = rt.root else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
 
-# Nearest provider wins (the inner light Theme shadows the outer dark one for "inner" only), a Locale
-# provider is found next to a Theme one, and "bare" sits under no provider: it renders EnvMissing.
+# Nearest provider wins (the inner light Palette shadows the outer dark one for "inner" only), a Locale
+# provider is found next to a Palette one, and "bare" sits under no provider: it renders EnvMissing.
 assert_eq(texts(root), ["dark/fr", "outer:dark", "inner:light"])
-assert_eq(rt.errors, ["missing environment value: Theme"])
+assert_eq(rt.errors, ["missing environment value: Palette"])
 assert(rt.show().contains("EnvMissing"), "placeholder in the tree")
 
 # A rebuild reconciles the same tree, expands with the same scope, and does not repeat the report.

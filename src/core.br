@@ -1,4 +1,5 @@
 use boring.ui.*
+use ui.theme.*
 
 # boring-ui headless reactive core (docs/design-notes/boring-ui-draft.md, "Runtime architecture",
 # "Mounted tree and update pass", "Identity & lifecycle", "UI events and batched refresh").
@@ -53,6 +54,10 @@ pub struct Mounted:
     # A `Scroll`'s offset along its axis: identity-scoped mounted control state, kept across rebuilds
     # (reconciliation never touches it) and clamped by layout to the content that is actually there.
     pub var float scroll = 0.0
+    # The nearest `Theme` provider above this node (the system theme when there is none), resolved by the
+    # core while it reconciles so layout and painting read tokens off the node itself (draft: "Nearest
+    # provider wins").
+    pub var Theme theme = Theme()
 
 # The runtime's view of a tree of lowered `View`s: native views become `Desc`s eagerly, a
 # composite view stays a leaf carrying its `View` until it is expanded against its mounted state.
@@ -185,6 +190,7 @@ pub struct Runtime:
         nextGeneration += 1
         node.props = d.props
         node.control = d.control
+        node.theme = themeIn(scope)
         ctx.mounts.push("mount {d.kind}#{id}")
         ctx.fresh.push(id)
         if let v = d.view:
@@ -228,10 +234,21 @@ pub struct Runtime:
     def [EnvValue] scopeBelow(Desc d, [EnvValue] scope):
         if let control = d.control:
             if let provided = control.viewProvides():
-                mut out = [provided]
+                # A theme is validated once, when it is installed: an invalid one is reported and NOT
+                # installed (the subtree keeps the outer theme), so a bad token never reaches layout.
+                # (Downcast through an array: `boring build` does not downcast a bare optional method result.)
+                mut offered = [provided]
+                if let theme = firstTheme(offered):
+                    let problems = themeProblems(theme)
+                    if problems.length > 0:
+                        for problem in problems:
+                            let message = "invalid theme '{theme.name}': {problem}"
+                            if !errors.contains(message):
+                                errors.push(message)
+                        return scope
                 for v in scope:
-                    out.push(v)
-                return out
+                    offered.push(v)
+                return offered
         scope
 
     # A composite's expansion is only known while reconciling, so its keys are checked here, per
@@ -247,6 +264,7 @@ pub struct Runtime:
     def reconcileNode(mut Mounted node, Desc d, mut Pass ctx, [EnvValue] scope):
         node.props = d.props
         node.control = d.control
+        node.theme = themeIn(scope)
         if let v = d.view:
             node.view = v
         let kids = self.childrenOf(node.id, d, scope)
@@ -452,7 +470,7 @@ pub struct Runtime:
         var next = n.scroll
         if n.id == id:
             next = offset
-        Mounted(id = n.id, generation = n.generation, kind = n.kind, site = n.site, key = n.key, children = kids, props = n.props, view = n.view, control = n.control, scroll = next)
+        Mounted(id = n.id, generation = n.generation, kind = n.kind, site = n.site, key = n.key, children = kids, props = n.props, view = n.view, control = n.control, scroll = next, theme = n.theme)
 
     # ── bind projections ──────────────────────────────────────────────────────
 

@@ -1,0 +1,54 @@
+# The Theme value: base, overrides, builders, dark base, validation (src/theme.br).
+# Run: boring run tests/theme_test.br
+
+use boring.ui.*
+use ui.theme.*
+
+# The system theme is complete: every role resolves.
+let sys = systemTheme()
+assert_eq(sys.color(ColorRole.Accent), "#0A84FF")
+assert_eq(sys.color(ColorRole.PrimaryText), "#1D1D1F")
+assert_eq(sys.metric(MetricRole.ControlPadding), 8.0)
+assert_eq(sys.metric(MetricRole.MinimumHitSize), 0.0)
+assert_eq(sys.fontSize(FontRole.Body), 16.0)
+assert_eq(sys.fontSize(FontRole.Title), 24.0)
+assert_eq(sys.buttonStyleName(ButtonRole.Normal), "Secondary")
+assert_eq(sys.buttonStyleName(ButtonRole.Destructive), "Primary")
+assert_eq(sys.buttonStyleName(ButtonRole.Cancel), "Plain")
+
+# Builders return a new theme and leave the receiver alone; a missing entry inherits from the base.
+let brand = sys.withColor(ColorRole.Accent, "#7357FF").withMetric(MetricRole.ControlRadius, 10.0)
+assert_eq(brand.color(ColorRole.Accent), "#7357FF")
+assert_eq(brand.color(ColorRole.PrimaryText), "#1D1D1F")
+assert_eq(brand.metric(MetricRole.ControlRadius), 10.0)
+assert_eq(sys.color(ColorRole.Accent), "#0A84FF")
+assert_eq(sys.metric(MetricRole.ControlRadius), 6.0)
+
+# Replacing a token twice keeps one entry.
+let twice = brand.withColor(ColorRole.Accent, "#FF00FF")
+assert_eq(twice.color(ColorRole.Accent), "#FF00FF")
+assert_eq(twice.colors.length, 1)
+
+# The dark base keeps the overrides.
+let dark = brand.asDark()
+assert_eq(dark.color(ColorRole.WindowBackground), "#1C1C1E")
+assert_eq(dark.color(ColorRole.Accent), "#7357FF")
+assert_eq(darkTheme().color(ColorRole.PrimaryText), "#F5F5F7")
+
+# Typography and button style mapping are tokens too.
+let big = sys.withFontSize(FontRole.Body, 20.0).withButtonStyle(ButtonRole.Normal, "Compact")
+assert_eq(big.fontSize(FontRole.Body), 20.0)
+assert_eq(big.buttonStyleName(ButtonRole.Normal), "Compact")
+assert_eq(buttonSpec("Primary").background, "Accent")
+assert(!buttonSpec("Plain").filled)
+
+# Validation: a good theme has no problems, bad tokens are reported.
+assert_eq(brand.issues().length, 0)
+let bad = sys.withColor(ColorRole.PrimaryText, "red").withMetric(MetricRole.ControlRadius, -1.0).withFontSize(FontRole.Caption, 0.0).withButtonStyle(ButtonRole.Normal, "Fancy")
+assert_eq(bad.issues().length, 4)
+assert(isHexColor("#12abEF"))
+assert(isHexColor("#12abEF80"))
+assert(!isHexColor("12abEF"))
+assert(!isHexColor("#12abG0"))
+
+print "theme ok"

@@ -1,0 +1,103 @@
+# Themes through the whole pipeline: nearest provider wins, tokens drive layout metrics, fonts and
+# painted colors, button styles, validation at install (src/theme.br, core.br, layout.br, scene.br).
+# Run: boring run tests/theme_scene_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.theme.*
+use ui.layout.*
+use ui.scene.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed layIn(mut Runtime rt, View root, float w, float h):
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    let p = layout(rt, w, h)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Placed lay(View root, float w, float h):
+    mut rt = Runtime()
+    layIn(rt, root, w, h)
+
+# The `hex` of the nth command of a kind.
+def string hexOf([Command] cmds, string kind, int n):
+    var seen = 0
+    var found = ""
+    for c in cmds:
+        if c.kind == kind:
+            if seen == n:
+                found = c.hex
+            seen += 1
+    found
+
+def noop():
+    pass
+
+# ── the default theme paints with the system tokens ──────────────────────────────────────────────
+
+let plain = lay(Button(label = "OK", onActivate = noop), 200.0, 100.0)
+assert_eq(hexOf(displayList(plain), "FillRect", 0), "#F5F5F7")      # Secondary: Surface
+assert_eq(hexOf(displayList(plain), "DrawText", 0), "#1D1D1F")      # Text
+assert_eq(plain.w, 32.0)                                            # 16 + 2 * 8
+assert_eq(plain.h, 32.0)
+
+# ── the nearest provider wins; the dark base repaints without touching layout ────────────────────
+
+let brand = systemTheme().withColor(ColorRole.Accent, "#7357FF")
+let page = lay(Column(alignment = .Leading, spacing = 0.0, children = [
+    Text("a"),
+    Provide(value = darkTheme(), children = [
+        Column(alignment = .Leading, spacing = 0.0, children = [
+            Text("b"),
+            Provide(value = brand, children = [Toggle(value = Slot(value = true), label = "t")])])])]), 300.0, 300.0)
+let cmds = displayList(page)
+assert_eq(hexOf(cmds, "DrawText", 0), "#1D1D1F")                    # outside: light Text
+assert_eq(hexOf(cmds, "DrawText", 1), "#F5F5F7")                    # inside the dark provider
+assert_eq(hexOf(cmds, "FillRect", 0), "#7357FF")                    # the inner theme's Accent (a `brand` is light-based)
+assert_eq(page.h, 16.0 + 16.0 + 20.0)                               # layout is the same under any theme
+
+# ── tokens drive metrics, fonts and styles ────────────────────────────────────────────────────────
+
+let roomy = systemTheme().withMetric(MetricRole.ControlPadding, 12.0).withMetric(MetricRole.StackSpacing, 2.0)
+let sized = lay(Provide(value = roomy, children = [Column(alignment = .Leading, spacing = nil, children = [
+    Button(label = "OK", onActivate = noop),
+    Text("a")])]), 300.0, 300.0)
+assert_eq(sized.children[0].children[0].w, 40.0)         # "OK" = 16, plus 2 * 12
+assert_eq(sized.h, 40.0 + 2.0 + 16.0)                               # 16 + 24, theme StackSpacing 2, 16
+
+let title = lay(Text(content = "ab", font = .Title), 300.0, 300.0)
+assert_eq(title.w, 24.0)                                            # Title is 24: cell 12
+assert_eq(title.h, 24.0)
+let bigBody = lay(Provide(value = systemTheme().withFontSize(FontRole.Body, 20.0), children = [Text("ab")]), 300.0, 300.0)
+assert_eq(bigBody.w, 20.0)
+assert_eq(bigBody.h, 20.0)
+
+let compact = lay(Button(label = "OK", onActivate = noop, style = .Compact), 200.0, 100.0)
+assert_eq(compact.w, 24.0)                                          # padding 8 - 4
+assert_eq(compact.h, 24.0)
+let primary = lay(Button(label = "OK", onActivate = noop, style = .Primary), 200.0, 100.0)
+assert_eq(hexOf(displayList(primary), "FillRect", 0), "#0A84FF")    # Accent
+assert_eq(hexOf(displayList(primary), "DrawText", 0), "#FFFFFF")    # OnAccent
+# A Destructive button maps to Primary in the base theme; the theme can remap a role.
+let danger = lay(Button(label = "X", onActivate = noop, role = .Destructive), 200.0, 100.0)
+assert_eq(hexOf(displayList(danger), "FillRect", 0), "#0A84FF")
+let remapped = lay(Provide(value = systemTheme().withButtonStyle(ButtonRole.Normal, "Plain"), children = [Button(label = "OK", onActivate = noop)]), 200.0, 100.0)
+assert_eq(displayList(remapped).length, 1)                          # Plain is not filled: only the label
+
+# MinimumHitSize is a floor on a control's intrinsic size.
+let touch = lay(Provide(value = systemTheme().withMetric(MetricRole.MinimumHitSize, 44.0), children = [Button(label = "i", onActivate = noop)]), 200.0, 100.0)
+assert_eq(touch.children[0].w, 44.0)
+assert_eq(touch.children[0].h, 44.0)
+
+# ── validation at install: a bad theme is reported and not installed ──────────────────────────────
+
+mut rt = Runtime()
+let broken = systemTheme().withMetric(MetricRole.ControlPadding, -3.0)
+let guarded = layIn(rt, Provide(value = broken, children = [Button(label = "OK", onActivate = noop)]), 200.0, 100.0)
+assert_eq(rt.errors.length, 1)
+assert(rt.errors[0].contains("invalid theme 'system'"))
+assert_eq(guarded.children[0].w, 32.0)                  # the system theme's padding still applies
+
+print "theme scene ok"

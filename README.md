@@ -169,6 +169,34 @@ subtree without touching layout. An unlabeled `TextField` is a validation error 
 in the tree. Not yet: `Button`/`Toggle`/`Image`/`Video`/`Separator`/`Scroll`/`List`/`Sheet`, live regions,
 `accessibilityValue`, modal scoping, selection actions, and the platform adapter.
 
+## Theme — [`src/theme.br`](src/theme.br)
+
+A concrete, immutable `Theme` value (not a trait, not a global) that holds only **overrides** on a built-in base, light or dark:
+`Theme()` is the complete system theme, `theme.withColor(ColorRole.Accent, "#7357FF").withMetric(MetricRole.ControlRadius, 10.0)`
+returns a new one and leaves the receiver alone, `asDark()` switches the base keeping the overrides. Tokens: `ColorRole` (16
+roles), `MetricRole` (14), `FontRole` and `ButtonStyle` (`Primary`/`Secondary`/`Plain`/`Compact`, in `boring.ui`) and a role→style map.
+`issues()` / `themeProblems(theme)` validate: colors are `#RRGGBB[AA]`, metrics finite and non-negative, font sizes positive,
+style names built in.
+
+- **Install and resolve**: `Provide(value = theme):` + children installs a theme (a `Theme` is an `EnvValue`); the nearest provider
+  wins. The core resolves it onto every mounted node (`Mounted.theme`, `Placed.theme`), so layout and painting read tokens off
+  the node — no signature changes. An invalid theme is reported in `Runtime.errors` and **not installed** (the subtree keeps the
+  outer theme).
+- **Layout uses tokens**: spacing (`StackSpacing`), spacer minimum, control padding, toggle size, text-field size,
+  `MinimumHitSize` (a floor on a button/toggle, 0 by default) and **fonts** — `Text(font = .Title)` is 24 tall with a 12-wide cell
+  under the system theme, and `FontRole.Body` is exactly the 8 x 16 cell the old fixture assumed, so existing goldens did not change.
+- **Painting uses tokens**: `Command.color` stays the semantic token, `Command.hex` is the resolved `#RRGGBB[AA]` (a `ColorRole` name
+  resolves through the theme, a literal passes through). Buttons paint with their built-in style (`Button(style = .Primary)`, or what
+  the theme maps the button's role to; `Plain` is unfilled, `Compact` tightens padding).
+- Deviations from the draft: `Text`/`Border`/`Shadow`/`Destructive` roles are `PrimaryText`/`ControlBorder`/`ShadowColor`/`Danger`
+  (an enum variant named like a view would shadow `Text(...)`; `.Destructive` clashes with `ButtonRole`); a few headless metrics are
+  added; colors are hex strings, not a `Color` type; token tables are entry lists (dictionary iteration differs under `boring build`);
+  the library `Theme` name is taken, so an application's own `env` struct must be named differently.
+- Not yet: adaptive spacing pairs, text scale and per-token light/dark/contrast variants, custom style traits
+  (`<View> body(Context)`), inherited `.buttonStyle(...)` providers, `Toggle`/`TextField` styles.
+
+Tests: `theme_test.br` (value), `theme_scene_test.br` (nearest provider, dark base, tokens in layout/painting, styles, validation).
+
 ## Controls and events — [`src/events.br`](src/events.br) (layer 4)
 
 `Button(label, onActivate, role)`, `Toggle(bind bool value, label)` and `TextField(bind string value, label, …, onSubmit)` are
