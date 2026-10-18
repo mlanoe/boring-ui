@@ -1,0 +1,158 @@
+# Input-method composition: marked text, commit, cancel, Enter / Escape ownership, suspension when focus leaves
+# (src/events.br ime*, core.br Composition / pruneComposition, layout.br, scene.br, semantics.br).
+# ASCII text only (see the README: `String.length` differs between the interpreter and `boring build` for
+# other text). Run: boring run tests/ime_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.semantics.*
+use ui.events.*
+
+view Form:
+    state string text = ""
+    state string other = ""
+    state int submits = 0
+    state int cancels = 0
+    state int oks = 0
+
+    def submit():
+        submits += 1
+
+    def cancel():
+        cancels += 1
+
+    def ok():
+        oks += 1
+
+    req string summary():
+        "{text}|{submits}/{cancels}/{oks}"
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            TextField(value = text, label = "Name", onSubmit = ():
+                self.submit())
+            TextField(value = other, label = "Other")
+            Button(label = "Cancel", role = .Cancel, onActivate = ():
+                self.cancel())
+            DefaultAction:
+                Button(label = "OK", onActivate = ():
+                    self.ok())
+            Disabled(value = true):
+                TextField(value = other, label = "Frozen")
+
+struct FormBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Form()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 300.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind, string key, string want):
+    mut out = []
+    if p.kind == kind and (p.props[key] else ("")) == want:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind, key, want):
+            out.push(f)
+    out
+
+def Placed field(Runtime rt, string label):
+    ofKind(lay(rt), "TextField", "label", label)[0]
+
+def Form__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Form__State else (Form__State())
+
+def string summary(Runtime rt):
+    Form().summary(state(rt))
+
+let host = ViewRoot(inner = FormBuilder())
+mut rt = Runtime()
+rt.start(host)
+let name = field(rt, "Name")
+assert(click(rt, host, lay(rt), name.x + 2.0, name.y + 2.0))
+assert(typeText(rt, host, "ab"))
+assert(keyPress(rt, host, "End"))
+assert_eq(summary(rt), "ab|0/0/0")
+
+# ── composing: the marked text is shown at the caret, the committed value is untouched ───────────
+
+assert(imeUpdate(rt, host, "ni", 1))
+assert(rt.composition != nil)
+assert_eq(summary(rt), "ab|0/0/0")                                  # nothing committed
+let composing = field(rt, "Name")
+assert_eq(composing.props["value"] else (""), "ab")
+var shown = ""
+var underlined = false
+for c in displayList(lay(rt)):
+    if c.kind == "DrawText" and c.node == composing.id:
+        shown = c.text
+    if c.kind == "MarkedText":
+        underlined = true
+        assert_eq(c.text, "ni")
+        assert_eq(c.x, composing.x + 4.0 + 16.0)                   # after the two committed cells
+        assert_eq(c.w, 16.0)
+assert_eq(shown, "abni")
+assert(underlined)
+assert(describeTree(semantics(lay(rt)).roots, 0).join("\n").contains("marked='ni'"))
+
+# A new marked text replaces the previous one.
+assert(imeUpdate(rt, host, "nin", 3))
+assert_eq(summary(rt), "ab|0/0/0")
+
+# The editing keys belong to the IME while composing: they do not touch the committed text.
+assert(keyPress(rt, host, "Backspace"))
+assert_eq(summary(rt), "ab|0/0/0")
+
+# ── Enter commits what was typed; it is NOT a submit and NOT the default action ────────────────
+
+assert(keyPress(rt, host, "Enter"))
+assert_eq(summary(rt), "abnin|0/0/0")
+assert(rt.composition == nil)
+assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1))), [5, 5])
+assert(keyPress(rt, host, "Enter"))                                 # now Enter is the field's own: submit
+assert_eq(summary(rt), "abnin|1/0/0")
+
+# ── Escape cancels the composition and is NOT the Cancel button ─────────────────────────────────
+
+assert(imeUpdate(rt, host, "zz", 2))
+assert(keyPress(rt, host, "Escape"))
+assert(rt.composition == nil)
+assert_eq(summary(rt), "abnin|1/0/0")                               # cancels is still 0
+assert(keyPress(rt, host, "Escape"))                                 # now the scope's Cancel button
+assert_eq(summary(rt), "abnin|1/1/0")
+
+# ── commit with text from the platform, explicit cancel, and an empty update ending the composition ─
+
+assert(imeUpdate(rt, host, "q", 1))
+assert(imeCommit(rt, host, "qw"))
+assert_eq(summary(rt), "abninqw|1/1/0")
+assert(imeUpdate(rt, host, "t", 1))
+assert(imeCancel(rt, host))
+assert(!imeCancel(rt, host))                                         # nothing to cancel
+assert(imeUpdate(rt, host, "y", 1))
+assert(imeUpdate(rt, host, "", 0))
+assert(rt.composition == nil)
+assert_eq(summary(rt), "abninqw|1/1/0")
+
+# ── focus leaving the field suspends (drops) the composition ────────────────────────────────────
+
+assert(imeUpdate(rt, host, "ab", 2))
+assert(keyPress(rt, host, "Tab"))
+assert(rt.composition == nil)
+assert_eq(summary(rt), "abninqw|1/1/0")
+
+# ── no composition without an enabled focused text field ────────────────────────────────────────
+
+let frozen = field(rt, "Frozen")
+assert(!click(rt, host, lay(rt), frozen.x + 2.0, frozen.y + 2.0))   # disabled: never focused
+assert(imeUpdate(rt, host, "x", 1))                                    # (the focused field is still "Other")
+assert(imeCancel(rt, host))
+rt.focus = nil
+assert(!imeUpdate(rt, host, "x", 1))
+assert_eq(rt.errors.length, 0)
+
+print "ime ok"

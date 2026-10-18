@@ -1,0 +1,50 @@
+# The keyboard-focused control is painted with a focus ring (theme token FocusRing, metric FocusRingWidth).
+# Run: boring run tests/focus_ring_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+
+view Panel:
+    state bool on = false
+    state string text = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Toggle(value = on, label = "on")
+            TextField(value = text, label = "name", placeholder = "")
+
+struct PanelRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Command] rings(Runtime rt):
+    mut [Command] out = []
+    for c in displayList(must(layout(rt, 200.0, 200.0))):
+        if c.color == "focus":
+            out.push(c)
+    out
+
+let host = ViewRoot(inner = PanelRoot())
+mut rt = Runtime()
+rt.start(host)
+
+assert_eq(rings(rt).length, 0)          # nothing focused: no ring
+
+assert(keyPress(rt, host, "Tab"))       # focus the Toggle
+let first = rings(rt)
+assert_eq(first.length, 1)
+assert_eq(first[0].kind, "StrokeRect")
+assert_eq(first[0].value, 2.0)          # FocusRingWidth
+assert_eq(first[0].x, -2.0)             # just outside the control's bounds
+assert_eq(first[0].hex, "#0A84FF")      # the light theme's FocusRing
+
+assert(keyPress(rt, host, "Tab"))       # the ring moves with focus: still exactly one
+let second = rings(rt)
+assert_eq(second.length, 1)
+assert(second[0].node != first[0].node, "ring follows the focused node")
+print("focus ring ok")

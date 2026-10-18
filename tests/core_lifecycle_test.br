@@ -80,12 +80,12 @@ assert_eq(b.read(hr, "x") else (-1), 2)
 
 struct Churn as Builder:
     req Desc build(mut Runtime rt):
-        _ = rt.dirty.add(7)
+        rt.invalidateRoot()
         Desc(kind = "Root")
 
 mut l = Runtime()
 _ = l.apply(Desc(kind = "Root"))
-_ = l.dirty.add(7)
+l.invalidateRoot()
 let settled = l.flush(Churn())
 assert(!settled, "the loop guard reports failure")
 assert_eq(l.passesRun, 64)
@@ -93,6 +93,6 @@ assert_eq(l.dirty.length, 0)                       # the pending queue is cleare
 assert_eq(l.show(), "Root#1")                      # the last committed tree stays mounted
 assert_eq(l.errors.length, 1)
 assert(l.errors[0].contains("update loop: 64 consecutive passes"), l.errors[0])
-assert(l.errors[0].contains("still invalidated: 7"), l.errors[0])
+assert(l.errors[0].contains("still invalidated: 1"), l.errors[0])
 
 print "core lifecycle ok"

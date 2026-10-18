@@ -5,6 +5,7 @@
 
 use boring.ui.*
 use ui.core.*
+use ui.events.*
 
 view Page:
     state [TaskRun] runs = []
@@ -16,6 +17,10 @@ view Page:
 
     def tap():
         taps += 1
+
+    def explode() throws:
+        taps += 10
+        throw "disk full"
 
     req int runCount():
         runs.length
@@ -29,6 +34,8 @@ view Page:
                 self.started(run)):
                 Button(label = "Tap", onActivate = ():
                     self.tap())
+                Button(label = "Explode", onActivate = ():
+                    self.explode())
 
 struct PageBuilder as ViewBuilder:
     req View buildView(mut Runtime rt): Page()
@@ -43,6 +50,15 @@ def int idOfKind(Mounted m, string kind):
         return m.id
     for c in m.children:
         let r = idOfKind(c, kind)
+        if r >= 0:
+            return r
+    -1
+
+def int idOfKind2(Mounted m, string label):
+    if m.kind == "Button" and propText(m, "label") == label:
+        return m.id
+    for c in m.children:
+        let r = idOfKind2(c, label)
         if r >= 0:
             return r
     -1
@@ -75,6 +91,25 @@ assert_eq(first.node, buttonId)
 assert_eq(rt.errors[0], "disk full")             # the bare message is kept too
 assert_eq(Page().runCount(pageState(rt)), 1)     # (the task started once, nothing else was disturbed)
 
+# ── the dispatch boundary: `act` catches a callback that throws and reports it ───────────────────
+
+let explodeId = idOfKind2(root, "Explode")
+let explodeHandle = rt.handle(explodeId) else (Handle(id = -1, generation = -1))
+let beforeAct = rt.reports.length
+assert(act(rt, host, explodeHandle, "activate", ""))      # the event still completes
+assert_eq(rt.reports.length, beforeAct + 1)
+let actReport = rt.reports[rt.reports.length - 1]
+assert_eq(actReport.kind, "callback")
+assert_eq(actReport.source, "activate")
+assert_eq(actReport.message, "disk full")
+assert_eq(actReport.node, explodeId)
+assert_eq(actReport.path, "Page/Column/OnTask/Button")
+assert_eq(pageState(rt).taps, 11)                          # the write before the throw stays committed
+let tapHandle = rt.handle(buttonId) else (Handle(id = -1, generation = -1))
+assert(act(rt, host, tapHandle, "activate", ""))           # a well-behaved callback reports nothing
+assert_eq(rt.reports.length, beforeAct + 1)
+assert_eq(pageState(rt).taps, 12)
+
 # ── tasks: a current run reports; a cancelled or superseded one is an expected completion ───────
 
 let run1 = Page().runAt(0, pageState(rt))
@@ -105,9 +140,9 @@ assert_eq(rt.reports[rt.reports.length - 1].kind, "stale")
 # ── the host takes the reports and the queue starts empty again ──────────────────────────────────
 
 let taken = rt.takeReports()
-assert(taken.length >= 4)
+assert(taken.length >= 5)
 assert_eq(taken[0].kind, "callback")
 assert_eq(rt.reports.length, 0)
-assert(rt.errors.length >= 4)                     # the plain messages are not cleared
+assert(rt.errors.length >= 5)                     # the plain messages are not cleared
 
 print "core errors ok"

@@ -1,0 +1,96 @@
+# Non-ASCII text: caret in grapheme clusters, display-width layout, clicks, truncation, IME marked text
+# (src/layout.br, events.br, scene.br). Run: boring run tests/text_unicode_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+
+view Form:
+    state string text = ""
+
+    req string value():
+        text
+
+    body():
+        TextField(value = text, label = "Name")
+
+struct FormBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Form()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 100.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Placed? firstField(Placed p):
+    if p.kind == "TextField":
+        return p
+    for c in p.children:
+        if let f = firstField(c):
+            return f
+    nil
+
+def Placed field(Runtime rt):
+    firstField(lay(rt)) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Form__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Form__State else (Form__State())
+
+# ── widths: wide clusters take two cells, combining marks none ──────────────────────────────────
+
+assert_eq(textWidth("abc"), 24.0)
+assert_eq(textWidth("日本"), 32.0)
+assert_eq(textWidth("é"), 8.0)
+assert_eq(shownLines("日本語 日本語", 48.0, 1), ["日..."])         # 6 cells of room: "..." takes 3, one wide cluster (2) fits, a second (4) would not
+assert_eq(shownLines("éééé", 24.0, 1), ["éééé"])
+
+# ── caret steps by cluster; Backspace deletes a whole cluster ────────────────────────────────────
+
+let host = ViewRoot(inner = FormBuilder())
+mut rt = Runtime()
+rt.start(host)
+let f0 = field(rt)
+assert(click(rt, host, lay(rt), f0.x + 2.0, f0.y + 2.0))
+assert(typeText(rt, host, "a日éb"))
+assert_eq(Form().value(state(rt)), "a日éb")
+assert(keyPress(rt, host, "End"))
+assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1))), [4, 4])    # 4 clusters, 5 scalars
+assert(keyPress(rt, host, "Left"))
+assert(keyPress(rt, host, "Backspace"))                                                   # removes e + accent together
+assert_eq(Form().value(state(rt)), "a日b")
+assert(typeText(rt, host, "é"))
+assert_eq(Form().value(state(rt)), "a日éb")
+
+# ── a click lands on the nearest cluster boundary (a wide cluster is 2 cells = 16 px) ────────────
+
+let f1 = field(rt)
+assert(click(rt, host, lay(rt), f1.x + 4.0 + 8.0 + 3.0, f1.y + 2.0))        # inside "a"'s right half .. before 日
+assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1)))[0], 1)
+assert(click(rt, host, lay(rt), f1.x + 4.0 + 8.0 + 16.0 - 2.0, f1.y + 2.0)) # right half of 日
+assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1)))[0], 2)
+
+# ── IME marked text sits after the committed clusters, measured by display width ─────────────────
+
+assert(keyPress(rt, host, "Home"))
+assert(keyPress(rt, host, "Right"))
+assert(keyPress(rt, host, "Right"))                                                       # caret after 日
+assert(imeUpdate(rt, host, "かな", 2))
+let f2 = field(rt)
+var seen = false
+for c in displayList(lay(rt)):
+    if c.kind == "MarkedText":
+        seen = true
+        assert_eq(c.x, f2.x + 4.0 + 24.0)                                                 # a (8) + 日 (16)
+        assert_eq(c.w, 32.0)                                                              # two wide kana
+    if c.kind == "DrawText" and c.node == f2.id:
+        assert_eq(c.text, "a日かなéb")
+assert(seen)
+assert(imeCommit(rt, host, "かな"))
+assert_eq(Form().value(state(rt)), "a日かなéb")
+assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1))), [4, 4])
+
+assert_eq(rt.errors.length, 0)
+print "text unicode ok"

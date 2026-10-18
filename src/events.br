@@ -32,8 +32,8 @@
 # Space toggles a focused Toggle; Enter on a TextField with `onSubmit` submits, otherwise the nearest
 # `DefaultAction` button activates; Escape activates the first enabled `Cancel` button. A focused
 # TextField edits with `typeText` and the keys Backspace, Delete, Left, Right, Home, End (and the
-# Shift variants), SelectAll; caret and selection are mounted control state (ASCII text only:
-# `String.length` differs between the interpreter and `boring build` for other text).
+# Shift variants), SelectAll; caret and selection are mounted control state, counted in grapheme clusters
+# (a caret never splits a cluster; widths are `displayWidth` cells).
 # Scroll input (`scrollBy`) moves the `Scroll` offsets kept on the mounted nodes.
 #
 # Not here yet: IME / composition, undo, key capture-target-bubble phases, modal routing, focus rings
@@ -61,10 +61,177 @@ pub def bool isDisabled(Runtime rt, int id):
 pub def [Handle] focusOrder(Runtime rt):
     if rt.openSheets.length > 0:
         if let top = rt.find(rt.openSheets[rt.openSheets.length - 1]):
-            return focusablesIn(top, false)
+            return scopedOrder(rt, top)
     if let r = rt.root:
-        return focusablesIn(r, false)
+        return scopedOrder(rt, r)
     []
+
+# Traversal below `scope`: when the focus sits inside a trapping `FocusScope`, Tab wraps within it.
+def [Handle] scopedOrder(Runtime rt, Mounted scope):
+    if let f = rt.focus:
+        let Mounted? none = nil
+        if let trap = trapScopeOf(scope, f.id, none):
+            return focusablesIn(trap, false)
+    focusablesIn(scope, false)
+
+# ── directional navigation ────────────────────────────────────────────────────────────────────
+# Arrow keys move focus geometrically (draft, "Focus scopes and traversal"): the current `FocusSection` is
+# searched first; if it holds no candidate (or there is none), the active scope is, where each section is
+# one box (its placed bounds) and the winning section then picks its own control by the same rule.
+# Candidates lie in the requested half-plane; the winner minimizes main-axis distance, then cross-axis
+# distance, then traversal order. A host sends arrows here (`navigate`) unless a focused TextField consumed
+# them as caret movement.
+
+# One candidate target: a control (`section` -1) or a whole section, with its placed rectangle.
+struct Cand:
+    int id
+    int section
+    float x
+    float y
+    float w
+    float h
+
+def void collectRects(Placed p, mut {int=[float]} out):
+    out[p.id] = [p.x, p.y, p.w, p.h]
+    for c in p.children:
+        collectRects(c, out)
+
+def Cand candOf(int id, int section, {int=[float]} rects):
+    let r = rects[id] else ([0.0, 0.0, 0.0, 0.0])
+    Cand(id = id, section = section, x = r[0], y = r[1], w = r[2], h = r[3])
+
+# The index of the best candidate from `origin` towards `dir` ("Left", "Right", "Up", "Down"), or -1.
+def int pickBest(Cand origin, string dir, [Cand] cands):
+    let fcx = origin.x + origin.w / 2.0
+    let fcy = origin.y + origin.h / 2.0
+    var best = -1
+    var bestMain = 0.0
+    var bestCross = 0.0
+    for i in 0..<cands.length:
+        let c = cands[i]
+        let ccx = c.x + c.w / 2.0
+        let ccy = c.y + c.h / 2.0
+        var inPlane = false
+        var main = 0.0
+        var cross = 0.0
+        if dir == "Right":
+            inPlane = ccx > fcx
+            main = c.x - (origin.x + origin.w)
+            cross = ccy - fcy
+        if dir == "Left":
+            inPlane = ccx < fcx
+            main = origin.x - (c.x + c.w)
+            cross = ccy - fcy
+        if dir == "Down":
+            inPlane = ccy > fcy
+            main = c.y - (origin.y + origin.h)
+            cross = ccx - fcx
+        if dir == "Up":
+            inPlane = ccy < fcy
+            main = origin.y - (c.y + c.h)
+            cross = ccx - fcx
+        if !inPlane:
+            continue
+        if main < 0.0:
+            main = 0.0
+        if cross < 0.0:
+            cross = 0.0 - cross
+        if best < 0 or main < bestMain or (main == bestMain and cross < bestCross):
+            best = i
+            bestMain = main
+            bestCross = cross
+    best
+
+def [Cand] controlCands([Handle] hs, int skip, {int=[float]} rects):
+    mut [Cand] out = []
+    for h in hs:
+        if h.id != skip:
+            out.push(candOf(h.id, -1, rects))
+    out
+
+# Moves focus one step in direction `dir` ("Left"/"Right"/"Up"/"Down"), using the laid-out `placed` tree for
+# geometry. Returns false when nothing lies that way (focus stays). With no focus yet, the first control gets it.
+pub def bool navigate(mut Runtime rt, Builder host, Placed placed, string dir):
+    let order = focusOrder(rt)
+    if order.length == 0:
+        return false
+    var current = -1
+    if let f = rt.focus:
+        if rt.valid(f):
+            for h in order:
+                if h.id == f.id:
+                    current = f.id
+    if current < 0:
+        focusControl(rt, host, order[0])
+        return true
+    mut {int=[float]} rects = {=}
+    collectRects(placed, rects)
+    guard let scope = activeScope(rt) else:
+        return false
+    let Mounted? none = nil
+    let innerSec = sectionOf(scope, current, none, true)
+    if let sec = innerSec:
+        let inside = controlCands(focusablesIn(sec, false), current, rects)
+        let hit = pickBest(candOf(current, -1, rects), dir, inside)
+        if hit >= 0:
+            focusControl(rt, host, handleOf(rt, inside[hit].id))
+            return true
+    # Between sections: every control outside any section is a unit, every outermost section one box.
+    let outerSec = sectionOf(scope, current, none, false)
+    var skipSection = -1
+    var origin = candOf(current, -1, rects)
+    if let o = outerSec:
+        skipSection = o.id
+        origin = candOf(o.id, -1, rects)
+    mut [Cand] units = []
+    mut {int} seen = {}
+    for h in order:
+        if h.id == current:
+            continue
+        let s = sectionOf(scope, h.id, none, false)
+        if let sec = s:
+            if sec.id != skipSection and !seen.contains(sec.id):
+                _ = seen.add(sec.id)
+                units.push(candOf(sec.id, sec.id, rects))
+        else:
+            units.push(candOf(h.id, -1, rects))
+    let pick = pickBest(origin, dir, units)
+    if pick < 0:
+        return false
+    let unit = units[pick]
+    if unit.section < 0:
+        focusControl(rt, host, handleOf(rt, unit.id))
+        return true
+    guard let target = rt.find(unit.section) else:
+        return false
+    let members = focusablesIn(target, false)
+    if members.length == 0:
+        return false
+    let inner = controlCands(members, -1, rects)
+    var at = pickBest(candOf(current, -1, rects), dir, inner)
+    if at < 0:
+        at = 0
+    focusControl(rt, host, handleOf(rt, inner[at].id))
+    true
+
+def Handle handleOf(Runtime rt, int id):
+    rt.handle(id) else (Handle(id = -1, generation = -1))
+
+# The scope traversal currently runs in: the trapping scope holding the focus, else the topmost presented
+# sheet, else the window.
+def Mounted? activeScope(Runtime rt):
+    var Mounted? base = nil
+    if rt.openSheets.length > 0:
+        base = rt.find(rt.openSheets[rt.openSheets.length - 1])
+    else:
+        base = rt.root
+    if let b = base:
+        if let f = rt.focus:
+            let Mounted? none = nil
+            if let trap = trapScopeOf(b, f.id, none):
+                return trap
+        return b
+    nil
 
 pub def void setFocus(mut Runtime rt, Handle h):
     if rt.valid(h):
@@ -90,10 +257,19 @@ pub def bool act(mut Runtime rt, Builder host, Handle h, string action, string a
     if found == nil:
         return false
     let node = found else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    if node.kind == "Slider" and (action == "increment" or action == "decrement"):
+        var steps = 1
+        if action == "decrement":
+            steps = -1
+        return adjustSlider(rt, host, h, steps)
     if let control = node.control:
         rt.beginEvent()
-        control.viewAct(action, arg)
-        rt.invalidateRoot()
+        let before = rt.sink.reports
+        try:
+            control.viewAct(action, arg)
+        catch:
+            rt.reportFailure("callback", action, "{error}", node.id)
+        rt.settle(before)
         rt.endEvent(host)
         return true
     false
@@ -127,7 +303,7 @@ def int anchorOf(Runtime rt, Handle h, int len, int caret):
 # `[caret, anchor]` of a text field as the tests and the semantic layer read them.
 pub def [int] selectionOf(Runtime rt, Handle h):
     let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
-    let len = propOf(node, "value").length
+    let len = propOf(node, "value").graphemeCount
     let caret = caretOf(rt, h, len)
     [caret, anchorOf(rt, h, len, caret)]
 
@@ -138,9 +314,9 @@ def void moveCaret(mut Runtime rt, Handle h, int caret, int anchor):
 # Replaces the text between `a` and `b` with `insert`, leaving the caret after it, as one event.
 def bool replaceRange(mut Runtime rt, Builder host, Handle h, Mounted node, int a, int b, string insert):
     let text = propOf(node, "value")
-    let len = text.length
-    let next = "{text[0..<a]}{insert}{text[b..<len]}"
-    moveCaret(rt, h, a + insert.length, a + insert.length)
+    let len = text.graphemeCount
+    let next = "{text.graphemeSlice(0, a)}{insert}{text.graphemeSlice(b, len)}"
+    moveCaret(rt, h, a + insert.graphemeCount, a + insert.graphemeCount)
     act(rt, host, h, "setText", next)
 
 def Handle? focusedField(Runtime rt):
@@ -166,16 +342,99 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
                 let h = Handle(id = node.id, generation = node.generation)
                 focusControl(rt, host, h)
                 rt.capture = h
+                if node.kind == "Slider":
+                    if let at = findPlaced(placed, id):
+                        _ = setSliderFromPointer(rt, host, h, at, x)
                 if node.kind == "TextField":
                     if let at = findPlaced(placed, id):
-                        let len = propOf(node, "value").length
-                        let cell = ((x - at.x - 4.0) / (at.theme.fontSizeNamed("Body") / 2.0) + 0.5) as int
-                        let caret = clampTo(cell, 0, len)
+                        let cells = (x - at.x - 4.0) / (at.theme.fontSizeNamed("Body") / 2.0)
+                        let caret = graphemeAtCells(propOf(node, "value"), cells)
                         moveCaret(rt, h, caret, caret)
                         rt.invalidateRoot()
                 return true
         i -= 1
     selectRowAt(rt, host, placed, path)
+
+# ── sliders ────────────────────────────────────────────────────────────────────────────────────
+
+def float sliderNumber(Mounted n, string key, float fallback):
+    let text = n.props[key] else ("")
+    if text == "":
+        return fallback
+    text.parseFloat() else (fallback)
+
+# The distance one arrow-key press moves a slider: its `step`, or a twentieth of its range.
+def float sliderStepOf(Mounted n):
+    let low = sliderNumber(n, "min", 0.0)
+    let high = sliderNumber(n, "max", 1.0)
+    let explicit = sliderNumber(n, "step", 0.0)
+    if explicit > 0.0:
+        return explicit
+    (high - low) / 20.0
+
+# Sets a slider to `v`: clamped to its range and rounded to the nearest step, delivered as one event.
+pub def bool setSlider(mut Runtime rt, Builder host, Handle h, float v):
+    let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    if node.kind != "Slider":
+        return false
+    let low = sliderNumber(node, "min", 0.0)
+    let high = sliderNumber(node, "max", 1.0)
+    var next = v
+    let explicit = sliderNumber(node, "step", 0.0)
+    if explicit > 0.0:
+        let count = ((next - low) / explicit + 0.5) as int
+        next = low + (count as float) * explicit
+    if next < low:
+        next = low
+    if next > high:
+        next = high
+    act(rt, host, h, "setFloat", "{next}")
+
+# Moves a slider by `steps` steps (negative = down).
+pub def bool adjustSlider(mut Runtime rt, Builder host, Handle h, int steps):
+    let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    let current = sliderNumber(node, "value", 0.0)
+    setSlider(rt, host, h, current + (steps as float) * sliderStepOf(node))
+
+def bool setSliderFromPointer(mut Runtime rt, Builder host, Handle h, Placed at, float x):
+    let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    let low = sliderNumber(node, "min", 0.0)
+    let high = sliderNumber(node, "max", 1.0)
+    var frac = 0.0
+    if at.w > 0.0:
+        frac = (x - at.x) / at.w
+    if frac < 0.0:
+        frac = 0.0
+    if frac > 1.0:
+        frac = 1.0
+    setSlider(rt, host, h, low + frac * (high - low))
+
+# Slider keys: Left / Down and Right / Up move one step, PageDown / PageUp ten, Home / End jump to the ends.
+def bool sliderKey(mut Runtime rt, Builder host, Handle h, string name):
+    let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+    if name == "Left" or name == "Down":
+        return adjustSlider(rt, host, h, -1)
+    if name == "Right" or name == "Up":
+        return adjustSlider(rt, host, h, 1)
+    if name == "PageDown":
+        return adjustSlider(rt, host, h, -10)
+    if name == "PageUp":
+        return adjustSlider(rt, host, h, 10)
+    if name == "Home":
+        return setSlider(rt, host, h, sliderNumber(node, "min", 0.0))
+    if name == "End":
+        return setSlider(rt, host, h, sliderNumber(node, "max", 1.0))
+    false
+
+# While the pointer is captured by a slider, moving it (even outside the slider) drags the value.
+pub def bool pointerMove(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    if let cap = rt.capture:
+        if rt.valid(cap):
+            if let node = rt.find(cap.id):
+                if node.kind == "Slider":
+                    if let at = findPlaced(placed, cap.id):
+                        return setSliderFromPointer(rt, host, cap, at, x)
+    false
 
 # A pointer release: a Button activates and a Toggle toggles only when the pointer is still over the
 # control that captured it; released anywhere else it is a cancel. The capture always ends.
@@ -187,6 +446,10 @@ pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, flo
     let h = held else (Handle(id = -1, generation = -1))
     if !rt.valid(h):
         return false
+    # A drag on a slider simply ends wherever the pointer is released.
+    if let held = rt.find(h.id):
+        if held.kind == "Slider":
+            return true
     let path = hitTest(placed, x, y)
     if !path.contains(h.id):
         return false
@@ -337,7 +600,7 @@ def bool activateScopeButton(mut Runtime rt, Builder host, bool cancel):
 def bool editKey(mut Runtime rt, Builder host, Handle h, string name):
     let node = rt.find(h.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
     let text = propOf(node, "value")
-    let len = text.length
+    let len = text.graphemeCount
     let caret = caretOf(rt, h, len)
     let anchor = anchorOf(rt, h, len, caret)
     var lo = caret
@@ -389,11 +652,57 @@ def bool editKey(mut Runtime rt, Builder host, Handle h, string name):
     rt.invalidateRoot()
     true
 
+# ── input-method composition ──────────────────────────────────────────────────────────────────────
+
+# The platform's IME reports its marked (uncommitted) text and the cursor inside it for the focused text field; an
+# empty `marked` ends the composition. The bound value is untouched until `imeCommit`.
+pub def bool imeUpdate(mut Runtime rt, Builder host, string marked, int cursor):
+    if let f = focusedField(rt):
+        if isDisabled(rt, f.id):
+            return false
+        rt.beginEvent()
+        if marked == "":
+            rt.composition = nil
+        else:
+            rt.composition = Composition(node = f.id, text = marked, cursor = cursor)
+        rt.invalidateRoot()
+        rt.endEvent(host)
+        return true
+    false
+
+# The composition ends with `text` inserted at the caret (replacing a selection), as one edit.
+pub def bool imeCommit(mut Runtime rt, Builder host, string text):
+    if let c = rt.composition:
+        if let f = focusedField(rt):
+            rt.composition = nil
+            if f.id == c.node:
+                return typeText(rt, host, text)
+    false
+
+# The composition is abandoned: nothing is inserted.
+pub def bool imeCancel(mut Runtime rt, Builder host):
+    if rt.composition == nil:
+        return false
+    rt.beginEvent()
+    rt.composition = nil
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    true
+
 # A key press: Tab / ShiftTab move focus through `focusOrder` (wrapping); Escape activates the Cancel
 # button; Enter submits a TextField that has `onSubmit`, else activates the focused Button or the
 # default action; Space activates / toggles the focused control; editing keys edit the focused
 # TextField. Returns whether the key was used.
 pub def bool keyPress(mut Runtime rt, Builder host, string name):
+    # While an input method composes, Enter and Escape belong to it (commit as typed / cancel) and the editing keys do
+    # not touch the committed text: the IME owns them until the composition ends.
+    if let c = rt.composition:
+        if name == "Enter":
+            return imeCommit(rt, host, c.text)
+        if name == "Escape":
+            return imeCancel(rt, host)
+        if name == "Backspace" or name == "Delete" or name == "Left" or name == "Right" or name == "Home" or name == "End":
+            return true
     let order = focusOrder(rt)
     if name == "Tab" or name == "ShiftTab":
         if order.length == 0:
@@ -428,6 +737,9 @@ pub def bool keyPress(mut Runtime rt, Builder host, string name):
                         if let control = node.control:
                             if control.viewHandles("submit"):
                                 return act(rt, host, f, "submit", "")
+                if node.kind == "Slider":
+                    if sliderKey(rt, host, f, name):
+                        return true
                 if node.kind == "Button" and (name == "Enter" or name == "Space"):
                     return act(rt, host, f, "activate", "")
                 if node.kind == "Toggle" and name == "Space":
@@ -445,7 +757,7 @@ pub def bool typeText(mut Runtime rt, Builder host, string s):
         if isDisabled(rt, f.id):
             return false
         let node = rt.find(f.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
-        let len = propOf(node, "value").length
+        let len = propOf(node, "value").graphemeCount
         let caret = caretOf(rt, f, len)
         let anchor = anchorOf(rt, f, len, caret)
         var lo = caret

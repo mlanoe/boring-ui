@@ -1,0 +1,90 @@
+# Directional focus navigation (draft, "Focus scopes and traversal"): geometry, sections, ties.
+# Run: boring run tests/focus_nav_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+
+view Grid:
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Row(alignment = .Center, spacing = 0.0):
+                Button(label = "a", onActivate = ():
+                    pass)
+                Button(label = "b", onActivate = ():
+                    pass)
+            Row(alignment = .Center, spacing = 0.0):
+                Button(label = "c", onActivate = ():
+                    pass)
+                Button(label = "d", onActivate = ():
+                    pass)
+
+view Sections:
+    body():
+        Row(alignment = .Leading, spacing = 40.0):
+            FocusSection:
+                Column(alignment = .Leading, spacing = 0.0):
+                    Button(label = "l1", onActivate = ():
+                        pass)
+                    Button(label = "l2", onActivate = ():
+                        pass)
+            FocusSection:
+                Column(alignment = .Leading, spacing = 0.0):
+                    Button(label = "r1", onActivate = ():
+                        pass)
+                    Button(label = "r2", onActivate = ():
+                        pass)
+
+struct GridRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Grid()
+
+struct SectionRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Sections()
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def string focused(Runtime rt):
+    if let f = rt.focus:
+        if let n = rt.find(f.id):
+            return n.props["label"] else ("?")
+    "-"
+
+def bool go(mut Runtime rt, Builder host, string dir):
+    navigate(rt, host, must(layout(rt, 300.0, 300.0)), dir)
+
+let host = ViewRoot(inner = GridRoot())
+mut rt = Runtime()
+rt.start(host)
+assert(go(rt, host, "Right"), "first arrow focuses the first control")
+assert_eq(focused(rt), "a")
+assert(go(rt, host, "Right"))
+assert_eq(focused(rt), "b")
+assert(!go(rt, host, "Right"), "nothing to the right of b")
+assert_eq(focused(rt), "b")
+assert(go(rt, host, "Down"))
+assert_eq(focused(rt), "d")
+assert(go(rt, host, "Left"))
+assert_eq(focused(rt), "c")
+assert(go(rt, host, "Up"))
+assert_eq(focused(rt), "a")
+assert(!go(rt, host, "Up"))
+
+# Sections: arrows stay inside the current section while it has a candidate, then jump to the neighbour
+# section, landing on the control nearest the origin.
+let sh = ViewRoot(inner = SectionRoot())
+mut sr = Runtime()
+sr.start(sh)
+assert(go(sr, sh, "Down"))
+assert_eq(focused(sr), "l1")
+assert(go(sr, sh, "Down"))
+assert_eq(focused(sr), "l2")
+assert(!go(sr, sh, "Down"), "no further down anywhere")
+assert(go(sr, sh, "Right"))
+assert_eq(focused(sr), "r2")                 # the cross-axis-nearest control of the right section
+assert(go(sr, sh, "Up"))
+assert_eq(focused(sr), "r1")
+assert(go(sr, sh, "Left"))
+assert_eq(focused(sr), "l1")
+print("focus nav ok")

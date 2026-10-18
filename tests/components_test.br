@@ -1,0 +1,164 @@
+# Separator, Slider and Image (src/layout.br, scene.br, semantics.br, events.br).
+# Run: boring run tests/components_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.semantics.*
+use ui.events.*
+
+view Panel:
+    state float level = 0.5
+    state float coarse = 10.0
+
+    req string summary():
+        "{level}|{coarse}"
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            Text("a")
+            Separator()
+            Row(alignment = .Center, spacing = 4.0):
+                Text("b")
+                Separator()
+                Text("c")
+            Slider(value = level, min = 0.0, max = 1.0, label = "Level")
+            Slider(value = coarse, min = 0.0, max = 100.0, step = 25.0, label = "Coarse")
+            Disabled(value = true):
+                Slider(value = level, label = "Frozen")
+            Image(source = "logo.png", width = 40.0, height = 24.0, label = "Logo")
+            Image(source = "flourish.png", width = 10.0, height = 10.0, decorative = true)
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 200.0, 400.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Panel__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+def string summary(Runtime rt):
+    Panel().summary(state(rt))
+
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.001 and d > 0.0 - 0.001
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# ── Separator: the orientation comes from the container, the line spans the stack's cross extent ──
+
+let seps = ofKind(lay(rt), "Separator")
+assert_eq(seps.length, 2)
+let horizontal = seps[0]                       # in the Column
+assert_eq(horizontal.h, 1.0)                   # theme SeparatorThickness
+assert(horizontal.w > 0.0)                     # stretched across the column
+let vertical = seps[1]                         # in the Row
+assert_eq(vertical.w, 1.0)
+assert_eq(vertical.h, 16.0)                    # as tall as the row's text
+let rowText = ofKind(lay(rt), "Text")
+assert_eq(rowText.length, 3)
+assert_eq(rowText[2].x, rowText[1].x + 8.0 + 4.0 + 1.0 + 4.0)   # b, gap, line, gap, c
+
+let paint = displayList(lay(rt))
+var lines = 0
+for c in paint:
+    if c.color == "separator":
+        lines += 1
+        assert(c.hex == "#E5E5EA")
+assert_eq(lines, 2)
+
+# ── Slider: keyboard ────────────────────────────────────────────────────────────────────────────
+
+let slider = ofKind(lay(rt), "Slider")[0]
+assert_eq(slider.w, 160.0)
+assert(click(rt, host, lay(rt), slider.x + 80.0, slider.y + 10.0))      # a press sets the value from x
+assert(near(slider.w / 2.0, 80.0))
+assert_eq(summary(rt), "0.5|10")
+assert(keyPress(rt, host, "Right"))                                       # one step = a twentieth of the range
+assert_eq(summary(rt), "0.55|10")
+assert(keyPress(rt, host, "Left"))
+assert(keyPress(rt, host, "Left"))
+assert_eq(summary(rt), "0.45|10")
+assert(keyPress(rt, host, "PageUp"))                                      # ten steps
+assert_eq(summary(rt), "0.95|10")
+assert(keyPress(rt, host, "PageUp"))                                      # clamped to the range
+assert_eq(summary(rt), "1|10")
+assert(keyPress(rt, host, "Home"))
+assert_eq(summary(rt), "0|10")
+assert(keyPress(rt, host, "End"))
+assert_eq(summary(rt), "1|10")
+
+# ── Slider: pointer drag keeps working outside the slider ───────────────────────────────────────
+
+let coarseSlider = ofKind(lay(rt), "Slider")[1]
+assert(pointerDown(rt, host, lay(rt), coarseSlider.x + 2.0, coarseSlider.y + 10.0))
+assert_eq(summary(rt), "1|0")                                             # x near the left: 0
+assert(pointerMove(rt, host, lay(rt), coarseSlider.x + 100.0, 500.0))     # far below the slider: still captured
+assert_eq(summary(rt), "1|75")                                            # 62.5% of 100 rounds to the 25-step: 75
+assert(pointerMove(rt, host, lay(rt), coarseSlider.x + 400.0, 0.0))       # beyond the right end: clamped
+assert_eq(summary(rt), "1|100")
+assert(pointerUp(rt, host, lay(rt), coarseSlider.x + 400.0, 0.0))
+assert(!pointerMove(rt, host, lay(rt), coarseSlider.x + 10.0, 0.0))       # no capture any more
+assert_eq(summary(rt), "1|100")
+
+# ── Slider: the thumb is painted at the value, semantic actions behave like keys ─────────────────
+
+var thumbX = -1.0
+for c in displayList(lay(rt)):
+    if c.color == "thumb" and thumbX < 0.0:
+        thumbX = c.x
+assert(near(thumbX, slider.x + (slider.w - slider.h)))                    # level = 1: the far end
+
+let tree = semantics(lay(rt))
+let desc = describeTree(tree.roots, 0).join("\n")
+assert(desc.contains("slider 'Level' value='1'"), desc)
+assert(desc.contains("slider 'Frozen'"))
+assert(desc.contains("disabled"))
+assert_eq(tree.errors.length, 0)
+let levelHandle = rt.handle(slider.id) else (Handle(id = -1, generation = -1))
+assert(act(rt, host, levelHandle, "decrement", ""))
+assert_eq(summary(rt), "0.95|100")
+assert(act(rt, host, levelHandle, "increment", ""))
+assert_eq(summary(rt), "1|100")
+
+# A disabled slider takes no focus, no pointer and no action.
+let frozen = ofKind(lay(rt), "Slider")[2]
+assert(isDisabled(rt, frozen.id))
+assert(!click(rt, host, lay(rt), frozen.x + 10.0, frozen.y + 10.0))
+let frozenHandle = rt.handle(frozen.id) else (Handle(id = -1, generation = -1))
+assert(!act(rt, host, frozenHandle, "increment", ""))
+assert_eq(summary(rt), "1|100")
+
+# ── Image: intrinsic size from its props, accessible name required unless decorative ─────────────
+
+let images = ofKind(lay(rt), "Image")
+assert_eq(images.length, 2)
+assert_eq(images[0].w, 40.0)
+assert_eq(images[0].h, 24.0)
+var drawn = 0
+for c in displayList(lay(rt)):
+    if c.kind == "DrawImage":
+        drawn += 1
+assert_eq(drawn, 2)
+assert(desc.contains("image 'Logo'"))
+assert(!desc.contains("flourish"))                                         # decorative: not exposed
+assert_eq(rt.errors.length, 0)
+
+print "components ok"

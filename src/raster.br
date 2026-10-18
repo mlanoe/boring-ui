@@ -1,0 +1,263 @@
+# boring-ui CPU reference rasterizer (docs/design-notes/boring-ui-renderer-draft.md, step 0).
+# Turns the backend-neutral display list (`[Command]`, see scene.br) into a pixel buffer. It is the ORACLE
+# every GPU kernel is later compared against, so it favours exact, boring semantics over speed.
+#
+# Pixel format: `0xAARRGGBB`, premultiplied, one `uint` per pixel (the layout `Screen`'s `'surface` buffers
+# present as BGRA8). The buffer starts fully transparent.
+#
+# Colour pipeline (OPEN DECISION, see the renderer draft): for now sources are blended in the *encoded*
+# (sRGB) space, with no linear-light conversion. When the decision lands, only `blend` changes.
+#
+# Coverage: an axis-aligned rectangle is rasterized with exact area coverage (a pixel half inside a
+# rectangle gets alpha 0.5), and a clip is the geometric intersection of the rectangle with the clip
+# rectangle, so a clipped edge anti-aliases the same way a rectangle edge does.
+#
+# `DrawShadow` is an OUTER, blurred shadow of the command's rectangle: the rectangle is offset by (`dx`, `dy`) and
+# blurred with a Gaussian of sigma `value / 2` (so `value`, the radius, is the CSS blur radius: the edge ramps
+# over roughly one radius on each side). Coverage is the exact separable box-Gaussian integral evaluated at the
+# pixel centre (erf by Abramowitz-Stegun 7.1.26, max error 1.5e-7), truncated 3 sigma beyond the offset
+# rectangle; with radius 0 it is the exact area coverage of a hard-edged shadow. It is never drawn inside the
+# original rectangle (coverage there is scaled by the rectangle's own uncovered fraction), so a translucent
+# child does not show its own shadow through itself.
+#
+# Implemented so far: `FillRect`, `StrokeRect` (an inside border, drawn as four non-overlapping rectangles so
+# a translucent border never double-blends at the corners), `PushClip`/`PopClip` and `PushOpacity`/`PopOpacity`
+# (group opacity: the group is drawn into its own transparent layer, then composited once at the group's
+# opacity, so overlapping descendants do not become darker). Every other command kind is skipped and its kind
+# listed in `Raster.unsupported` (so a test, or a reader, can see what the picture is missing).
+
+use ui.layout.*
+use ui.scene.*
+
+pub struct Raster:
+    pub int width
+    pub int height
+    pub [uint] pixels
+    # Kinds present in the display list that this rasterizer does not draw yet, each listed once.
+    pub [string] unsupported
+
+# A rectangle by its edges (x0 <= x1, y0 <= y1), in pixels.
+@derive(Default, Clone)
+struct Area:
+    float x0
+    float y0
+    float x1
+    float y1
+
+struct Rgba:
+    int r
+    int g
+    int b
+    int a
+
+def Area intersect(Area a, Area b):
+    let x0 = maxOf(a.x0, b.x0)
+    let y0 = maxOf(a.y0, b.y0)
+    Area(x0 = x0, y0 = y0, x1 = maxOf(x0, minOf(a.x1, b.x1)), y1 = maxOf(y0, minOf(a.y1, b.y1)))
+
+def Area areaOf(Command c):
+    Area(x0 = c.x, y0 = c.y, x1 = c.x + maxOf(c.w, 0.0), y1 = c.y + maxOf(c.h, 0.0))
+
+def int hexDigit(string c):
+    let i = "0123456789abcdefABCDEF".indexOf(c) else (0)
+    if i >= 16:
+        return i - 6
+    i
+
+def int hexByte(string s, int at):
+    hexDigit(s[at..<(at + 1)]) * 16 + hexDigit(s[(at + 1)..<(at + 2)])
+
+# `#RRGGBB[AA]`, or a few named colours (what `resolveColor` leaves for the painter); anything else is
+# magenta, so a token the rasterizer does not know shows up instead of vanishing.
+def Rgba parseColor(string token):
+    if (token.length == 7 or token.length == 9) and token[0..<1] == "#":
+        var alpha = 255
+        if token.length == 9:
+            alpha = hexByte(token, 7)
+        return Rgba(r = hexByte(token, 1), g = hexByte(token, 3), b = hexByte(token, 5), a = alpha)
+    if token == "black":
+        return Rgba(r = 0, g = 0, b = 0, a = 255)
+    if token == "white":
+        return Rgba(r = 255, g = 255, b = 255, a = 255)
+    if token == "red":
+        return Rgba(r = 255, g = 0, b = 0, a = 255)
+    if token == "green":
+        return Rgba(r = 0, g = 128, b = 0, a = 255)
+    if token == "blue":
+        return Rgba(r = 0, g = 0, b = 255, a = 255)
+    if token == "transparent":
+        return Rgba(r = 0, g = 0, b = 0, a = 0)
+    Rgba(r = 255, g = 0, b = 255, a = 255)
+
+def int byteOf(uint p, int shift):
+    ((p >> shift) & 255) as int
+
+# Source-over of a premultiplied source (`sr`,`sg`,`sb` already scaled by `sa`, all 0..255 floats) onto one
+# destination pixel. Each channel is `src + dst * (1 - sa)`, rounded to nearest.
+def uint blend(uint dst, float sr, float sg, float sb, float sa):
+    let keep = 1.0 - sa / 255.0
+    let a = ((sa + byteOf(dst, 24) as float * keep) + 0.5).floor() as int
+    let r = ((sr + byteOf(dst, 16) as float * keep) + 0.5).floor() as int
+    let g = ((sg + byteOf(dst, 8) as float * keep) + 0.5).floor() as int
+    let b = ((sb + byteOf(dst, 0) as float * keep) + 0.5).floor() as int
+    (((a << 24) | (r << 16) | (g << 8) | b) as uint)
+
+# Layers are stored back to back in one buffer: layer `k` occupies `[k * width * height, (k + 1) * width * height)`.
+# `base` is the offset of the layer being drawn into.
+def fillArea(mut [uint] px, int base, int width, int height, Area area, Rgba color):
+    if area.x1 <= area.x0 or area.y1 <= area.y0 or color.a == 0:
+        return
+    let first_x = maxOf(area.x0.floor(), 0.0) as int
+    let first_y = maxOf(area.y0.floor(), 0.0) as int
+    let last_x = minOf(area.x1.ceil() - 1.0, (width - 1) as float) as int
+    let last_y = minOf(area.y1.ceil() - 1.0, (height - 1) as float) as int
+    var y = first_y
+    while y <= last_y:
+        let cover_y = minOf((y + 1) as float, area.y1) - maxOf(y as float, area.y0)
+        var x = first_x
+        while x <= last_x:
+            let cover = (minOf((x + 1) as float, area.x1) - maxOf(x as float, area.x0)) * cover_y
+            if cover > 0.0:
+                let a = color.a as float * cover
+                let k = a / 255.0
+                let i = base + y * width + x
+                px[i] = blend(px[i], color.r as float * k, color.g as float * k, color.b as float * k, a)
+            x += 1
+        y += 1
+
+# The inside border of `c`, `c.value` wide (clamped so it never exceeds half the rectangle): top and bottom
+# bands across the full width, left and right bands between them.
+def strokeArea(mut [uint] px, int base, int width, int height, Area box, float line, Area clip, Rgba color):
+    let w = minOf(line, minOf((box.x1 - box.x0) / 2.0, (box.y1 - box.y0) / 2.0))
+    if w <= 0.0:
+        return
+    fillArea(px, base, width, height, intersect(Area(x0 = box.x0, y0 = box.y0, x1 = box.x1, y1 = box.y0 + w), clip), color)
+    fillArea(px, base, width, height, intersect(Area(x0 = box.x0, y0 = box.y1 - w, x1 = box.x1, y1 = box.y1), clip), color)
+    fillArea(px, base, width, height, intersect(Area(x0 = box.x0, y0 = box.y0 + w, x1 = box.x0 + w, y1 = box.y1 - w), clip), color)
+    fillArea(px, base, width, height, intersect(Area(x0 = box.x1 - w, y0 = box.y0 + w, x1 = box.x1, y1 = box.y1 - w), clip), color)
+
+# erf(x), Abramowitz-Stegun 7.1.26. The GPU kernels must use this same polynomial to stay within one LSB.
+def float erfOf(float x):
+    let t = 1.0 / (1.0 + 0.3275911 * abs(x))
+    let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t
+    let y = 1.0 - poly * exp(-x * x)
+    if x < 0.0:
+        return -y
+    y
+
+# Length of the overlap of [lo, hi] with [a, b].
+def float overlap1d(float lo, float hi, float a, float b):
+    maxOf(0.0, minOf(hi, b) - maxOf(lo, a))
+
+# Coverage of pixel `i` along one axis by the interval [a, b] blurred with `sigma` (exact overlap when sigma is 0).
+def float gauss1d(int i, float a, float b, float sigma):
+    if sigma <= 0.0:
+        return overlap1d(i as float, (i + 1) as float, a, b)
+    let c = i as float + 0.5
+    let k = sigma * 1.4142135623730951
+    0.5 * (erfOf((b - c) / k) - erfOf((a - c) / k))
+
+def shadowArea(mut [uint] px, int base, int width, int height, Area box, float radius, float dx, float dy, Area clip, Rgba color):
+    if box.x1 <= box.x0 or box.y1 <= box.y0 or color.a == 0:
+        return
+    let sigma = maxOf(radius, 0.0) / 2.0
+    let reach = 3.0 * sigma
+    let sx0 = box.x0 + dx
+    let sx1 = box.x1 + dx
+    let sy0 = box.y0 + dy
+    let sy1 = box.y1 + dy
+    let first_x = maxOf(maxOf((sx0 - reach).floor(), clip.x0.floor()), 0.0) as int
+    let first_y = maxOf(maxOf((sy0 - reach).floor(), clip.y0.floor()), 0.0) as int
+    let last_x = minOf(minOf((sx1 + reach).ceil(), clip.x1.ceil()) - 1.0, (width - 1) as float) as int
+    let last_y = minOf(minOf((sy1 + reach).ceil(), clip.y1.ceil()) - 1.0, (height - 1) as float) as int
+    var y = first_y
+    while y <= last_y:
+        let cover_y = gauss1d(y, sy0, sy1, sigma)
+        let inside_y = overlap1d(y as float, (y + 1) as float, box.y0, box.y1)
+        let clip_y = overlap1d(y as float, (y + 1) as float, clip.y0, clip.y1)
+        var x = first_x
+        while x <= last_x:
+            let inside = overlap1d(x as float, (x + 1) as float, box.x0, box.x1) * inside_y
+            let clipped = overlap1d(x as float, (x + 1) as float, clip.x0, clip.x1) * clip_y
+            let cover = gauss1d(x, sx0, sx1, sigma) * cover_y * (1.0 - inside) * clipped
+            if cover > 0.0:
+                let a = color.a as float * cover
+                let k = a / 255.0
+                let i = base + y * width + x
+                px[i] = blend(px[i], color.r as float * k, color.g as float * k, color.b as float * k, a)
+            x += 1
+        y += 1
+
+# Composites the layer at offset `src` onto the one at `dst` at `opacity` (0..1): every premultiplied channel of the
+# layer is scaled by it, then blended source-over.
+def compositeLayer(mut [uint] px, int src, int dst, int count, float opacity):
+    var i = 0
+    while i < count:
+        let s = px[src + i]
+        if s != 0:
+            px[dst + i] = blend(px[dst + i], byteOf(s, 16) as float * opacity, byteOf(s, 8) as float * opacity, byteOf(s, 0) as float * opacity, byteOf(s, 24) as float * opacity)
+        i += 1
+
+# Draws `list` into a fresh `width` x `height` buffer. Paint order is list order.
+pub def Raster rasterize([Command] list, int width, int height):
+    let count = width * height
+    # layer 0 is the picture; each open `PushOpacity` adds one layer on top (grown on demand, reused after)
+    mut [uint] store = [0 for ..<count]
+    mut [float] opacities = []
+    mut [string] skipped = []
+    mut [Area] clips = [Area(x0 = 0.0, y0 = 0.0, x1 = width as float, y1 = height as float)]
+    for c in list:
+        let base = opacities.length * count
+        let clip = clips[clips.length - 1]
+        if c.kind == "FillRect":
+            fillArea(store, base, width, height, intersect(areaOf(c), clip), parseColor(c.hex))
+        elif c.kind == "StrokeRect":
+            strokeArea(store, base, width, height, areaOf(c), c.value, clip, parseColor(c.hex))
+        elif c.kind == "DrawShadow":
+            shadowArea(store, base, width, height, areaOf(c), c.value, c.dx, c.dy, clip, parseColor(c.hex))
+        elif c.kind == "PushClip":
+            clips.push(intersect(areaOf(c), clip))
+        elif c.kind == "PopClip":
+            if clips.length > 1:
+                _ = clips.pop()
+        elif c.kind == "PushOpacity":
+            opacities.push(maxOf(0.0, minOf(c.value, 1.0)))
+            let top = opacities.length * count
+            if store.length < top + count:
+                var k = 0
+                while k < count:
+                    store.push(0)
+                    k += 1
+            else:
+                var i = 0
+                while i < count:
+                    store[top + i] = 0
+                    i += 1
+        elif c.kind == "PopOpacity":
+            if opacities.length > 0:
+                let opacity = opacities[opacities.length - 1]
+                compositeLayer(store, opacities.length * count, (opacities.length - 1) * count, count, opacity)
+                _ = opacities.pop()
+        elif !skipped.contains(c.kind):
+            skipped.push(c.kind)
+    # a group left open at the end of the list is composited like a closed one
+    while opacities.length > 0:
+        compositeLayer(store, opacities.length * count, (opacities.length - 1) * count, count, opacities[opacities.length - 1])
+        _ = opacities.pop()
+    Raster(width = width, height = height, pixels = store[0..<count], unsupported = skipped)
+
+# The pixel at (x, y) as `#AARRGGBB` (premultiplied), for tests and debugging.
+pub def string pixelHex(Raster r, int x, int y):
+    "#{r.pixels[y * r.width + x]:08X}"
+
+# The picture as a plain-text PPM (P3), composited over white (PPM has no alpha channel).
+pub def string toPpm(Raster r):
+    mut rows = []
+    for y in 0..<r.height:
+        mut cells = []
+        for x in 0..<r.width:
+            let p = r.pixels[y * r.width + x]
+            let rest = 255 - byteOf(p, 24)
+            cells.push("{byteOf(p, 16) + rest} {byteOf(p, 8) + rest} {byteOf(p, 0) + rest}")
+        rows.push(cells.join(" "))
+    "P3\n{r.width} {r.height}\n255\n{rows.join("\n")}\n"

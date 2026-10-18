@@ -1,0 +1,34 @@
+# The Todo application's first frame through the CPU reference rasterizer (src/raster.br).
+# Run: boring run tests/raster_todo_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.raster.*
+use todo.todo.*
+
+struct AppRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): TodoApp()
+
+mut rt = Runtime()
+rt.start(ViewRoot(inner = AppRoot()))
+let placed = layout(rt, 600.0, 600.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+let list = displayList(placed)
+let picture = rasterize(list, 600, 600)
+
+# Every FillRect of the list lands on the picture: the first one's top-left pixel is not transparent.
+var firstFill = -1
+for i in 0..<list.length:
+    if firstFill < 0 and list[i].kind == "FillRect":
+        firstFill = i
+assert(firstFill >= 0)
+let f = list[firstFill]
+assert(pixelHex(picture, f.x as int, f.y as int) != "#00000000")
+
+# Text is the part this rasterizer does not draw yet, and it says so.
+assert(picture.unsupported.contains("DrawText"))
+assert(!picture.unsupported.contains("FillRect"))
+assert_eq(picture.pixels.length, 600 * 600)
+
+print "raster todo ok"

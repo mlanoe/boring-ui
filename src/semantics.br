@@ -22,6 +22,8 @@ pub struct SemNode:
     pub var string name = ""
     pub var string value = ""
     pub var string hint = ""
+    # An input-method composition in progress on a text field (the value above is the committed text).
+    pub var string marked = ""
     pub var int level = 0
     pub float x
     pub float y
@@ -62,11 +64,35 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors, bool off):
         mut n = node(p, "textField")
         n.name = p.props["label"] else ("")
         n.value = p.props["value"] else ("")
+        for v in p.live:
+            if v.key == "marked":
+                n.marked = v.value
         if !off:
             n.actions = ["focus", "setValue"]
         n.disabled = off
         if n.name == "":
             errors.push("unlabeled TextField (node {p.id}): an interactive element needs a name")
+        out.push(n)
+        return
+    if k == "Slider":
+        mut n = node(p, "slider")
+        n.name = p.props["label"] else ("")
+        n.value = p.props["value"] else ("0")
+        n.disabled = off
+        if !off:
+            n.actions = ["focus", "increment", "decrement"]
+        if n.name == "":
+            errors.push("unlabeled Slider (node {p.id}): an interactive element needs a name")
+        out.push(n)
+        return
+    if k == "Image":
+        # A decorative image is not exposed; any other needs an accessible name.
+        if (p.props["decorative"] else ("false")) == "true":
+            return
+        mut n = node(p, "image")
+        n.name = p.props["label"] else ("")
+        if n.name == "":
+            errors.push("unlabeled Image (node {p.id}): give it a `label` or mark it `decorative`")
         out.push(n)
         return
     if k == "Button" or k == "Toggle":
@@ -163,6 +189,8 @@ pub def [string] describeTree([SemNode] nodes, int depth):
             line = "{line} value='{n.value}'"
         if n.hint != "":
             line = "{line} hint='{n.hint}'"
+        if n.marked != "":
+            line = "{line} marked='{n.marked}'"
         if n.level > 0:
             line = "{line} level={n.level}"
         line = "{line} [{n.x},{n.y} {n.w}x{n.h}]"

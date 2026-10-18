@@ -17,8 +17,8 @@ use ui.anim.*
 #   - keys are strings (a lowered `for … with key` will stringify its `IdentityKey` for now).
 #   - structural sites are explicit (`Desc.site`) or fall back to the sibling index; the array-block
 #     lowering does not emit stable sites for `if` branches yet.
-#   - tasks, `onTask` restarts, environments, per-identity (incremental) rebuilds: the update pass
-#     conservatively rebuilds the whole window, as the draft allows.
+#   - tasks, `onTask` restarts, environments: see below. A pass re-expands only the invalidated composites
+#     unless the root itself is dirty (see `applyPartial`).
 
 # One build of a view: its component kind, where it sits, and its children.
 #
@@ -74,6 +74,10 @@ pub Desc describe(View v):
         kids.push(describe(c))
     Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), children = kids, props = v.viewProps(), control = v)
 
+# The description a composite node was last built from, to re-expand it without its parent.
+def Desc lastBuilt(Mounted n):
+    Desc(kind = n.kind, site = n.site, key = n.key, view = n.view, props = n.props, control = n.control)
+
 # The identity site of a child at index `i`, encoded so the three ways of being positioned can never
 # collide: an explicit static site `n` (>= 0, from the lowering's `Sited` tag) is `2n`, a keyed
 # iteration group without one is the shared `-2` (a reorder never changes identity), and a plain
@@ -94,7 +98,7 @@ def string propText(Mounted n, string name):
     n.props[name] else ("")
 
 pub def bool isFocusableKind(string kind):
-    kind == "Button" or kind == "Toggle" or kind == "TextField"
+    kind == "Button" or kind == "Toggle" or kind == "TextField" or kind == "Slider"
 
 # 1 when node `id` sits inside a `Disabled(true)` subtree, 0 when it does not, -1 when it is absent.
 pub def int disabledState(Mounted n, int id, bool inherited):
@@ -111,18 +115,65 @@ pub def int disabledState(Mounted n, int id, bool inherited):
             return r
     -1
 
-# The enabled focusable controls under `m`, in structural (tab) order.
+# A sibling's traversal rank: a `FocusOrder` wrapper's value, 0 for everything else.
+def float orderKey(Mounted c):
+    if c.kind == "FocusOrder":
+        return (propText(c, "value")).parseFloat() else (0.0)
+    0.0
+
+# `m`'s children in traversal order: ascending `FocusOrder` value, ties in structural order (a stable insertion).
+def [Mounted] inTraversalOrder(Mounted m):
+    mut [Mounted] out = []
+    mut [float] keys = []
+    for c in m.children:
+        let k = orderKey(c)
+        var at = out.length
+        while at > 0 and keys[at - 1] > k:
+            at -= 1
+        out.insert(at, c)
+        keys.insert(at, k)
+    out
+
+# The enabled focusable controls under `m`, in traversal order (structural, adjusted by `FocusOrder`).
+# A `Focusable(false)` subtree is skipped by keyboard traversal.
 pub def [Handle] focusablesIn(Mounted m, bool inherited):
     mut [Handle] out = []
     var off = inherited
     if m.kind == "Disabled" and propText(m, "value") == "true":
         off = true
+    if m.kind == "Focusable" and propText(m, "enabled") == "false":
+        return out
     if isFocusableKind(m.kind) and !off:
         out.push(Handle(id = m.id, generation = m.generation))
-    for c in m.children:
+    for c in inTraversalOrder(m):
         for h in focusablesIn(c, off):
             out.push(h)
     out
+
+# The innermost (or outermost) `FocusSection` that contains node `id` below `m`, nil when none does.
+pub def Mounted? sectionOf(Mounted m, int id, Mounted? current, bool innermost):
+    var here = current
+    if m.kind == "FocusSection":
+        if innermost or here == nil:
+            here = m
+    if m.id == id:
+        return here
+    for c in m.children:
+        if let found = sectionOf(c, id, here, innermost):
+            return found
+    nil
+
+# The innermost trapping `FocusScope` (`trap = true`) that contains node `id` below `m`, nil when none does.
+pub def Mounted? trapScopeOf(Mounted m, int id, Mounted? current):
+    var here = current
+    if m.kind == "FocusScope" and propText(m, "trap") == "true":
+        here = m
+    if m.id == id:
+        return here
+    for c in m.children:
+        if let found = trapScopeOf(c, id, here):
+            return found
+    nil
 
 # The keys of a `List`'s rows, in displayed order (one per keyed `for` iteration).
 pub def [string] rowKeysOf(Mounted list):
@@ -133,7 +184,7 @@ pub def [string] rowKeysOf(Mounted list):
     keys
 
 # Delivers a semantic action to a native node's control (string parameters, as `boring build` needs).
-pub def void deliver(Mounted n, string action, string arg):
+pub def void deliverAction(Mounted n, string action, string arg) throws:
     if let control = n.control:
         control.viewAct(action, arg)
 
@@ -206,6 +257,14 @@ pub struct ErrorReport:
     pub int run = -1
     pub string source = ""
 
+# An input-method composition in progress (draft, "Accepted value, editing buffer, and IME"): the platform's marked
+# (uncommitted) text for one TextField and the cursor inside it. The field's bound value is untouched until the text
+# is committed; a composition belongs to the focused field and ends when focus leaves it.
+pub struct Composition:
+    pub int node
+    pub string text
+    pub int cursor = 0
+
 pub struct Runtime:
     pub var Mounted? root = nil
     pub var mut [string] events = []
@@ -213,6 +272,9 @@ pub struct Runtime:
     # The same problems, structured (see `ErrorReport`); `errors` keeps the bare messages.
     pub var mut [ErrorReport] reports = []
     pub var mut {int} dirty = {}
+    # Where composites' callbacks report that they are about to change their own `state` (see
+    # `StateOwner` in boring.ui): drained into `dirty` (only the reporting identities) before every pass.
+    pub var mut DirtySink'actor sink = DirtySink()
     pub var int depth = 0
     pub var int maxPasses = 64
     # Keyboard focus (generation-checked; cleared when the focused node unmounts).
@@ -220,6 +282,8 @@ pub struct Runtime:
     # The control that took the last pointer press: later move/up/cancel go to it wherever the pointer is
     # (generation-checked; cleared when it unmounts — the draft's "unmounting sends cancellation").
     pub var Handle? capture = nil
+    # The composition in progress, if any (see `Composition`); pruned after every update pass.
+    pub var Composition? composition = nil
     # Modal presentation: the ids of the `Sheet` nodes that are presented, outermost first, and the focus
     # each one displaced (restored on dismissal while that control still exists and is enabled).
     pub var [int] openSheets = []
@@ -232,6 +296,8 @@ pub struct Runtime:
     pub var Animation? lastAnimation = nil
     pub var [Trigger] triggers = []
     pub var int passesRun = 0     # update passes executed by `flush`, over the runtime's lifetime
+    pub var int expansions = 0    # composite bodies expanded (a whole-window pass expands every composite)
+    pub var int partialPasses = 0 # update passes that re-expanded only the invalidated subtrees
     # Ids that still owe their `OnMount` hook (created by a commit, hook not run yet), in order.
     var mut [int] pendingMount = []
     var int nextId = 1
@@ -316,9 +382,43 @@ pub struct Runtime:
                 root = self.create(d, 0, ctx, [])
         else:
             root = self.create(d, 0, ctx, [])
+        self.finishPass(ctx)
+        true
+
+    def void finishPass(Pass ctx):
         self.commit(ctx)
         for id in ctx.fresh:
             self.pendingMount.push(id)
+
+    # Re-expands only the invalidated composites: each outermost dirty node is reconciled against the view
+    # it was last built from (inputs as of the latest whole-window build) and its own kept state, under the
+    # environment its ancestors provide. Native nodes carry no state of their own to rebuild. Everything
+    # outside those subtrees is untouched, so no `body()` outside them runs. The tree is plain owned data,
+    # so the walk rebuilds each ancestor's child list around the reconciled node, like `reconcileNode`.
+    def void applyPartial({int} ids):
+        mut ctx = Pass()
+        if let r = root:
+            mut top = r
+            self.partialIn(top, ids, ctx, [])
+            root = top
+        self.finishPass(ctx)
+
+    def void partialIn(mut Mounted n, {int} ids, mut Pass ctx, [EnvValue] scope):
+        if ids.contains(n.id) and n.view != nil:
+            self.reconcileNode(n, lastBuilt(n), ctx, scope)
+            return
+        let below = self.scopeBelow(lastBuilt(n), scope)
+        mut [Mounted] next = []
+        for c in n.children:
+            mut kept = c
+            self.partialIn(kept, ids, ctx, below)
+            next.push(kept)
+        n.children = next
+
+    # True when the next pass must rebuild the whole window: nothing mounted yet, or the root itself is dirty.
+    def bool wholeWindowDirty():
+        if let r = root:
+            return dirty.contains(r.id)
         true
 
     def start(Builder b):
@@ -349,7 +449,7 @@ pub struct Runtime:
         ctx.fresh.push(id)
         if let v = d.view:
             node.view = v
-            info.state = v.newState()
+            info.state = v.newOwnedState(StateOwner(id = id, generation = info.generation, sink = sink))
         meta[id] = info
         let kids = self.childrenOf(id, d, scope)
         let below = self.scopeBelow(d, scope)
@@ -375,6 +475,7 @@ pub struct Runtime:
     # One composite's body as a `Desc`. A view with `env` gets the providers in scope for it (nearest
     # ancestor first); one whose `env` is unsatisfied renders `EnvMissing`, reported once.
     def Desc expanded(View v, StateBox st, [EnvValue] scope):
+        expansions += 1
         let d = describe(self.expandBody(v, st, scope))
         if d.kind == "EnvMissing":
             let message = "missing environment value: {d.props["what"] else ("?")}"
@@ -488,8 +589,9 @@ pub struct Runtime:
         # The hook runs with the node's own identity (and the inputs it captured) still valid.
         if node.kind == "OnUnmount":
             if let control = node.control:
-                control.viewAct("unmount", "")
-                self.invalidateRoot()
+                let before = sink.reports
+                self.dispatch(node, "unmount", "")
+                self.settle(before)
         meta.remove(node.id)
         freeIds.push(node.id)
 
@@ -544,11 +646,34 @@ pub struct Runtime:
                 return hit
         nil
 
-    # Typed state is mutated in place by callbacks, so an action conservatively invalidates the
-    # whole window (the first runtime rebuilds everything anyway).
+    # Typed state is mutated in place by callbacks. A callback built by a lowered view reports the
+    # composite that owns the state it touches (`sink`), so only that one is re-expanded; anything that
+    # reported nothing (or reported that it reaches beyond its own state) invalidates the whole window.
     def void invalidateRoot():
         if let r = root:
             _ = dirty.add(r.id)
+
+    # Folds the callbacks' reports into `dirty`: the reporting identities that are still the same mounted
+    # node, or the root when one reached beyond its own state.
+    def void drainSink():
+        if sink.all:
+            self.invalidateRoot()
+        for i in 0..<sink.ids.length:
+            let id = sink.ids[i]
+            if let info = meta[id]:
+                if info.generation == sink.generations[i]:
+                    _ = dirty.add(id)
+        sink.clear()
+
+    def bool anyDirty():
+        self.drainSink()
+        dirty.length > 0
+
+    # Ends a dispatch that began with `sink.reports == before`: a callback that reported (precisely or
+    # not) has said what it dirtied; one that did not is unknown, so the whole window is rebuilt.
+    def void settle(int before):
+        if sink.reports == before:
+            self.invalidateRoot()
 
     # The typed state of a composite view's mounted node (downcast it with `as V__State`).
     req StateBox? stateOf(Handle h):
@@ -597,9 +722,9 @@ pub struct Runtime:
             # only start once the tree is stable, so an `OnMount` that removes its own subtree never
             # starts work that would be cancelled at once.
             self.runMountHooks()
-            if dirty.length == 0:
+            if !self.anyDirty():
                 self.startTasks()
-            if dirty.length == 0:
+            if !self.anyDirty():
                 break
             if passes >= maxPasses:
                 self.reportAtPath("update", "update loop: {passes} consecutive passes, still invalidated: {self.dirtyIds().map((i): "{i}").join(",")}", "")
@@ -608,14 +733,21 @@ pub struct Runtime:
                 return false
             passes += 1
             passesRun += 1
+            let whole = self.wholeWindowDirty()
+            let wanted = dirty
             dirty = {}
             # Child writes through `bind` projections land in their parents' collections (by key)
             # before anything is rebuilt from them.
             self.commitProjections()
-            _ = self.apply(b.build(self))
+            if whole:
+                _ = self.apply(b.build(self))
+            else:
+                partialPasses += 1
+                self.applyPartial(wanted)
             self.syncModal()
             self.syncFocusBindings()
             self.pruneSelection()
+            self.pruneComposition()
         true
 
     # ── modal presentation and focus restoration ─────────────────────────────
@@ -660,6 +792,19 @@ pub struct Runtime:
                     restored = back
             focus = restored
         openSheets = now
+
+    # ── input-method composition ───────────────────────────────────────────────
+
+    # A composition survives only while its field is mounted, enabled and focused (focus moving away, an unmount or
+    # a `Disabled` ancestor cancels it: the draft's "text input/IME is suspended").
+    def void pruneComposition():
+        if let c = composition:
+            var keep = false
+            if let f = focus:
+                if self.valid(f) and f.id == c.node and !self.disabledAt(f.id):
+                    keep = true
+            if !keep:
+                composition = nil
 
     # ── `.focused(...)` bindings ───────────────────────────────────────────────
 
@@ -755,22 +900,31 @@ pub struct Runtime:
             let chosen = propText(l, "selection")
             if chosen != "":
                 if !rowKeysOf(l).contains(chosen):
-                    deliver(l, "select", "")
-                    self.invalidateRoot()
+                    let before = sink.reports
+                    self.dispatch(l, "select", "")
+                    self.settle(before)
+
+    # The dispatch boundary for a native control's semantic action: a callback that throws is reported
+    # (kind "callback", the action as source, the node's path) instead of escaping; earlier writes stay.
+    def void dispatch(Mounted n, string action, string arg):
+        try:
+            deliverAction(n, action, arg)
+        catch:
+            self.reportFailure("callback", action, "{error}", n.id)
 
     # Writes a binding on (true / its token) or off (false / "") through its control.
     def void bindFocused(Mounted n, bool isToken, bool on):
         if isToken:
             if on:
-                deliver(n, "setText", propText(n, "token"))
+                self.dispatch(n, "setText", propText(n, "token"))
             else:
                 if propText(n, "value") == propText(n, "token"):
-                    deliver(n, "setText", "")
+                    self.dispatch(n, "setText", "")
         else:
             if on:
-                deliver(n, "setBool", "true")
+                self.dispatch(n, "setBool", "true")
             else:
-                deliver(n, "setBool", "false")
+                self.dispatch(n, "setBool", "false")
         self.invalidateRoot()
 
     # Whether a control may take focus now: mounted, enabled, and inside the active modal scope if any.
@@ -799,8 +953,12 @@ pub struct Runtime:
     # causes, are eligible to animate with `a` (the innermost `animate` of a nested call wins).
     def void animate(Animation a, Builder host, UIAction body):
         self.beginEvent()
-        body()
-        self.invalidateRoot()
+        let before = sink.reports
+        try:
+            body()
+        catch:
+            self.reportFailure("callback", "animate", "{error}", -1)
+        self.settle(before)
         lastAnimation = a
         self.endEvent(host)
 
@@ -877,8 +1035,9 @@ pub struct Runtime:
             if node.kind == "OnMount":
                 if let control = node.control:
                     events.push("hook mount {node.kind}#{id}")
-                    control.viewAct("mount", "")
-                    self.invalidateRoot()
+                    let before = sink.reports
+                    self.dispatch(node, "mount", "")
+                    self.settle(before)
 
     # Starts a run for every `OnTask` node that has none yet, or whose `id` changed since its run
     # started (the old run is cancelled: its generation goes stale first). Preorder; stops as soon as
@@ -903,9 +1062,13 @@ pub struct Runtime:
                     meta[n.id].taskId = id
                     let run = TaskRun(node = n.id, nodeGeneration = nodeGeneration, generation = next, id = id)
                     events.push("task start {n.kind}#{n.id} run {run.generation}")
+                    let before = sink.reports
                     if let control = n.control:
-                        control.viewTask(run)
-                    self.invalidateRoot()
+                        try:
+                            control.viewTask(run)
+                        catch:
+                            _ = self.failTask(run, "{error}")
+                    self.settle(before)
                     return false
         for c in n.children:
             if !self.startTasksIn(c):
@@ -939,8 +1102,12 @@ pub struct Runtime:
             self.report("stale", "stale task delivery to {run.node} (run {run.generation})", run.node)
             return false
         self.beginEvent()
-        action()
-        self.invalidateRoot()
+        let before = sink.reports
+        try:
+            action()
+        catch:
+            _ = self.failTask(run, "{error}")
+        self.settle(before)
         self.endEvent(b)
         true
 

@@ -113,9 +113,49 @@ def paintNode(Placed p, mut [Command] out):
         mut field = cmd("FillRect", p, "", "field")
         field.hex = p.theme.color(ColorRole.Surface)
         out.push(field)
-        mut text = Command(kind = "DrawText", x = p.x + 4.0, y = p.y + 4.0, w = p.w - 8.0, h = p.theme.fontSizeNamed("Body"), text = value, color = "", node = p.id)
+        # While an input method composes, its marked text is shown at the caret (the bound value is untouched).
+        var shownText = "{value}"   # a copy: `var x = value` moves the shared string in transpiled code
+        let marked = propOrLive(p, "marked", "")
+        let cell = p.theme.fontSizeNamed("Body") / 2.0
+        let valueCount = value.graphemeCount
+        var markedAt = 0
+        if marked != "":
+            let atText = propOrLive(p, "markedAt", "0")
+            markedAt = atText.parseInt() else (0)
+            if markedAt > valueCount:
+                markedAt = valueCount
+            shownText = "{value.graphemeSlice(0, markedAt)}{marked}{value.graphemeSlice(markedAt, value.graphemeCount)}"
+        mut text = Command(kind = "DrawText", x = p.x + 4.0, y = p.y + 4.0, w = p.w - 8.0, h = p.theme.fontSizeNamed("Body"), text = shownText, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
+        if marked != "":
+            out.push(Command(kind = "MarkedText", x = p.x + 4.0 + (value.graphemeSlice(0, markedAt).displayWidth as float) * cell, y = p.y + 4.0, w = (marked.displayWidth as float) * cell, h = p.theme.fontSizeNamed("Body"), text = marked, color = "", node = p.id))
+    if p.kind == "Separator":
+        mut line = cmd("FillRect", p, "", "separator")
+        line.hex = p.theme.color(ColorRole.Separator)
+        out.push(line)
+    if p.kind == "Image":
+        out.push(cmd("DrawImage", p, p.props["source"] else (""), ""))
+    if p.kind == "Slider":
+        let low = num(p, "min", 0.0)
+        let high = num(p, "max", 1.0)
+        var frac = 0.0
+        if high > low:
+            frac = (num(p, "value", low) - low) / (high - low)
+        if frac < 0.0:
+            frac = 0.0
+        if frac > 1.0:
+            frac = 1.0
+        let trackH = 4.0
+        mut track = Command(kind = "FillRect", x = p.x, y = p.y + (p.h - trackH) / 2.0, w = p.w, h = trackH, text = "", color = "track", node = p.id)
+        track.hex = p.theme.color(ColorRole.ControlBorder)
+        out.push(track)
+        mut fill = Command(kind = "FillRect", x = p.x, y = p.y + (p.h - trackH) / 2.0, w = p.w * frac, h = trackH, text = "", color = "fill", node = p.id)
+        fill.hex = p.theme.color(ColorRole.Accent)
+        out.push(fill)
+        mut thumb = Command(kind = "FillRect", x = p.x + frac * (p.w - p.h), y = p.y, w = p.h, h = p.h, text = "", color = "thumb", node = p.id)
+        thumb.hex = p.theme.color(ColorRole.ElevatedSurface)
+        out.push(thumb)
     if p.kind == "Toggle":
         var state = "off"
         let value = p.props["value"] else ("false")
@@ -143,6 +183,13 @@ def paintNode(Placed p, mut [Command] out):
         mut close = cmd("PopOpacity", p, "", "")
         close.value = num(p, "value", 1.0)
         out.push(close)
+    if (p.kind == "Button" or p.kind == "Toggle" or p.kind == "TextField" or p.kind == "Slider") and propOrLive(p, "focused", "false") == "true":
+        # The focus ring sits just outside the control's bounds, over the control and its own children.
+        let width = p.theme.metric(MetricRole.FocusRingWidth)
+        mut ring = Command(kind = "StrokeRect", x = p.x - width, y = p.y - width, w = p.w + 2.0 * width, h = p.h + 2.0 * width, text = "", color = "focus", node = p.id)
+        ring.hex = p.theme.color(ColorRole.FocusRing)
+        ring.value = width
+        out.push(ring)
     if p.kind == "Border":
         mut stroke = cmd("StrokeRect", p, "", p.props["color"] else (""))
         stroke.hex = resolveColor(p, p.props["color"] else (""))
@@ -173,7 +220,7 @@ pub def [Command] displayList(Placed root):
 # One line per command, for golden tests.
 pub def string describe(Command c):
     var s = "{c.kind} {c.x},{c.y} {c.w}x{c.h}"
-    if c.kind == "DrawText":
+    if c.kind == "DrawText" or c.kind == "DrawImage" or c.kind == "MarkedText":
         s = "{s} '{c.text}'"
     if c.kind == "FillRect":
         s = "{s} {c.color}"

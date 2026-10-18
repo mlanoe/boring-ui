@@ -1,0 +1,84 @@
+# Non-modal focus: `FocusScope`, `.focusOrder(value)`, `.focusable(false)` (draft, "Focus scopes and traversal").
+# Run: boring run tests/focus_scope_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+
+view Page:
+    state int a = 0
+    state int b = 0
+    state int c = 0
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Button(label = "one", onActivate = ():
+                a += 1)
+            FocusOrder(value = -1.0):
+                Button(label = "two", onActivate = ():
+                    b += 1)
+            Focusable(enabled = false):
+                Button(label = "skipped", onActivate = ():
+                    c += 1)
+            FocusScope(trap = false):
+                Button(label = "three", onActivate = ():
+                    c += 1)
+                Button(label = "four", onActivate = ():
+                    c += 1)
+
+view Trapped:
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Button(label = "outside", onActivate = ():
+                pass)
+            FocusScope(trap = true):
+                Button(label = "in1", onActivate = ():
+                    pass)
+                Button(label = "in2", onActivate = ():
+                    pass)
+
+struct PageRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+struct TrapRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Trapped()
+
+def string labelOf(Runtime rt, Handle h):
+    if let n = rt.find(h.id):
+        return n.props["label"] else ("?")
+    "?"
+
+def string order(Runtime rt):
+    mut parts = []
+    for h in focusOrder(rt):
+        parts.push(labelOf(rt, h))
+    parts.join(",")
+
+let host = ViewRoot(inner = PageRoot())
+mut rt = Runtime()
+rt.start(host)
+# `two` (order -1) moves before everything; the non-focusable one is skipped; the plain scope does not trap.
+assert_eq(order(rt), "two,one,three,four")
+
+# Tab walks that order, wrapping at the end.
+assert(keyPress(rt, host, "Tab"))
+assert_eq(labelOf(rt, rt.focus else (Handle(id = -1, generation = -1))), "two")
+assert(keyPress(rt, host, "Tab"))
+assert(keyPress(rt, host, "Tab"))
+assert(keyPress(rt, host, "Tab"))
+assert_eq(labelOf(rt, rt.focus else (Handle(id = -1, generation = -1))), "four")
+assert(keyPress(rt, host, "Tab"))
+assert_eq(labelOf(rt, rt.focus else (Handle(id = -1, generation = -1))), "two")
+
+# A trapping scope wraps traversal inside it once focus is in it.
+let trapHost = ViewRoot(inner = TrapRoot())
+mut tr = Runtime()
+tr.start(trapHost)
+assert_eq(order(tr), "outside,in1,in2")
+assert(keyPress(tr, trapHost, "Tab"))                 # outside
+assert(keyPress(tr, trapHost, "Tab"))                 # in1 (focus enters the trap)
+assert(keyPress(tr, trapHost, "Tab"))                 # in2
+assert(keyPress(tr, trapHost, "Tab"))                 # wraps to in1, not outside
+assert_eq(labelOf(tr, tr.focus else (Handle(id = -1, generation = -1))), "in1")
+print("focus scope ok")

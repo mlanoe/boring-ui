@@ -155,6 +155,26 @@ point). The hit region is a node's layout bounds intersected with ancestor clips
 enlarges it, and children are tested front to back. `Background(color)` and `Clip()` are wrapper views in
 `boring.ui`, layout-transparent. `describe(command)` renders one line per command for golden tests.
 
+## Raster — [`src/raster.br`](src/raster.br) (CPU reference renderer, step 0 of
+[`boring-ui-renderer-draft.md`](../boring/docs/design-notes/boring-ui-renderer-draft.md))
+
+`rasterize(displayList, width, height)` → `Raster` (`width`, `height`, `pixels: [uint]`, `unsupported: [string]`).
+It is the oracle GPU kernels will be compared against, so it favours exact semantics over speed. Pixels are
+`0xAARRGGBB`, **premultiplied**, starting fully transparent. A rectangle gets exact area coverage (a half-covered
+pixel has alpha 0.5) and a clip is the geometric intersection with the clip rectangle. Blending is source-over in
+the encoded (sRGB) space for now — the colour-pipeline decision in the renderer draft is still open, and only
+`blend` would change. Colours are `#RRGGBB[AA]` plus a few named ones; an unknown token paints magenta rather than
+vanishing. Implemented: `FillRect`, `StrokeRect` (inside border, four non-overlapping bands so a translucent
+border blends once, clamped to half the rectangle), `PushClip`/`PopClip` and `PushOpacity`/`PopOpacity` (group
+opacity: each group is drawn into its own layer and composited once, so overlapping children do not darken; groups
+nest, a stray pop is ignored and a group left open is composited at the end),
+`DrawShadow` (an outer shadow of the rectangle: offset by `dx`/`dy`, Gaussian-blurred with sigma = radius / 2 by the
+exact box-Gaussian integral at the pixel centre, never drawn inside the rectangle itself, exact area coverage when
+the radius is 0); every other kind is skipped and listed once in `unsupported` (`DrawText`, `DrawImage` come next). `pixelHex(raster, x, y)`
+and `toPpm(raster)` (plain-text P3, over white) serve tests and debugging;
+`boring run tests/render_todo_ppm.br > todo.ppm` renders the Todo application's first frame.
+Tests: `raster_test.br`, `raster_todo_test.br` (interpreter and transpiled).
+
 ## Accessibility — [`src/semantics.br`](src/semantics.br) (layer 3, third slice)
 
 A backend-neutral semantic tree from the same `Placed` tree: nodes with a stable id (the mounted id — a keyed
@@ -289,14 +309,13 @@ disabled handle is ignored.
   **Escape** activates the first enabled `role = .Cancel` button.
 - **Text editing**: caret and selection are mounted control state (`selectionOf`). `typeText` replaces the selection or inserts
   at the caret; `Backspace`, `Delete`, `Left`/`Right`/`Home`/`End`, their `Shift…` variants and `SelectAll` edit; a pointer press
-  places the caret at the clicked cell. ASCII text only: `String.length` differs between the interpreter and `boring build`.
+  places the caret at the clicked cell. Counted in grapheme clusters; click offsets use display-width cells.
 - Scroll wheel input is `scrollBy` (see "Composition, scrolling and effects").
 
 Tests: `events_test.br`, `events_extra_test.br` (disabled, capture, editing, Enter/Escape). Behaviour change: a press no longer
 activates (it captures); use `click` (or down + up) where a Button must fire.
 
-Not yet: IME / composition and undo, key capture-target-bubble phases, non-modal focus scopes and `focusOrder`/`focusable`, focus rings,
-momentum scrolling, scroll-into-view on focus, multiple selection, a throwing-callback boundary (see Error reporting).
+Not yet: IME / composition and undo, key capture-target-bubble phases, momentum scrolling, scroll-into-view on focus, multiple selection, a throwing-callback boundary (see Error reporting).
 
 ## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
 
@@ -315,6 +334,43 @@ already be a `Slot`); the form is a conditional branch rather than a `Sheet`; ro
 instead of a `List` with selection, `onMove`, `onDelete`; no `.focused` bindings, `Separator`, `Scroll`, fonts or
 theming. Interpreter only, like the rest of the runtime.
 
+## Separator, Slider, Image and input-method composition
+
+- `Separator` (`.HorizontalRule`/`.VerticalRule`, spans its container), `Image(source, label)` (a `DrawImage`
+  command; the label is its accessible name) and `Slider(value: Float bind, range, step)` (arrow keys / Home / End
+  and a pointer drag; generated `setFloat` action) — tests in `tests/components_test.br`.
+- IME: `imeUpdate(rt, host, text, caret)` sets the *marked* text of the focused, enabled `TextField` (shown at the
+  caret, underlined via a `MarkedText` command, exposed as `SemNode.marked`); the bound value is untouched until
+  `imeCommit` (or Enter). While composing, Enter commits and Escape cancels — they are not the field's submit nor the
+  scope's default/cancel action; an empty update or focus leaving the field drops the composition. State lives in
+  `Runtime.composition`. Tests: `tests/ime_test.br` (ASCII).
+
+## Non-modal focus scopes
+
+`FocusScope(trap = false)`, `FocusOrder(value)` (`.focusOrder`) and `Focusable(enabled)` (`.focusable`) — draft "Focus scopes
+and traversal". `focusOrder(rt)` sorts siblings by ascending `FocusOrder` value (ties keep structural order), skips
+`Focusable(false)` subtrees (pointer focus is unchanged), and a trapping scope wraps Tab inside it once focus is in it;
+a plain scope groups without trapping. `tests/focus_scope_test.br`.
+
+## Directional navigation
+
+`navigate(rt, host, placed, "Left"|"Right"|"Up"|"Down")` moves focus geometrically: the current `FocusSection` first, else the
+active scope (sections as one box, then the same rule inside the winner); candidates lie in the half-plane, ranked by
+main-axis gap, then cross-axis offset, then traversal order. A host sends arrows here unless a focused TextField takes
+them as caret keys. `tests/focus_nav_test.br`. Not here: arrow keys inside `keyPress` (it has no layout).
+
+## Focus ring
+
+`layout` marks the keyboard-focused control with a live `focused` prop; the painter then emits a `StrokeRect`
+(color `focus`, theme `FocusRing`, `FocusRingWidth` outside the bounds) after the control — `tests/focus_ring_test.br`.
+
+## Unicode text
+
+Caret, selection and marked-text positions are grapheme-cluster indices (`graphemeCount` / `graphemeSlice`); the
+fixture font measures with `displayWidth` (wide CJK/emoji = 2 cells, combining marks = 0), ellipsis truncation drops
+whole clusters, and a click maps to the nearest cluster boundary (`graphemeAtCells`). Same behaviour interpreted and
+transpiled — `tests/text_unicode_test.br`. A real font engine replaces the cell model with shaped advances.
+
 ## Not here yet
 
 - **Transpiled runtime is real, not interpreter-only** (checked 2026-10-16 against `boring` 4637855e): every
@@ -327,9 +383,16 @@ theming. Interpreter only, like the rest of the runtime.
 - Keys are strings (a lowered `for … with key` passes `"{key}"`). Unkeyed `for` loops keep positional (index)
   identity for their items.
 - Views with `env` are not expandable (no environment to give them); `bind` slots work (they are inputs).
-- Per-identity (incremental) rebuilds — `flush` conservatively rebuilds the whole window, as the draft allows;
+- Per-identity rebuilds: `invalidate(handle)` / `write` re-expand only the dirty composites (their last-built view +
+  kept state, under their ancestors' environment; `partialPasses`, `expansions` count it). Callbacks a lowered view
+  hands to a constructor (`Button(onActivate = ...)`) report to the composite that owns the `state` they touch
+  (`StateOwner`/`DirtySink` in `boring.ui`; the owner is the view whose body wrote the closure, wherever the button
+  ends up placed), so an action re-expands only that composite. A callback that also reaches an input, a `bind`, an
+  `env` or a free function reports "everything" and a callback that reports nothing (hand-built native views, facade
+  actions like a `Toggle`'s write through its `bind`) is unknown: both still rebuild the whole window, as does
+  the root being dirty (`invalidateRoot`, a changed builder). Still open:
   lifecycle *hooks as user callbacks* (`events` is a log), `onTask` and its generations, focus, animated removal,
-  layout/scene/rendering (layers 3+). Write-site invalidation is explicit (`invalidate`) rather than generated.
+  layout/scene/rendering (layers 3+). A `bind` write by a child could report its owner too (not yet).
 
 ## Running the tests
 

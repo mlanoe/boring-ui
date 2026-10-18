@@ -1,0 +1,123 @@
+# Owner-precise invalidation: a callback a view's body hands to a constructor reports to the composite
+# whose `state` it changes, so an action re-expands only that composite (not the whole window).
+# Run: boring run tests/core_owner_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.events.*
+
+# A composite with its own state that only wraps content it is given (slot content).
+view Holder:
+    View content
+    state int renders = 0
+
+    body():
+        Column(alignment = .Center, spacing = nil, children = [content])
+
+# `taps` belongs to Counter even though the button sits under Holder: the closure is written here.
+view Counter:
+    string title
+    state int taps = 0
+
+    def bump():
+        taps += 1
+
+    body():
+        Column(alignment = .Center, spacing = nil):
+            Text("{title}:{taps}")
+            Holder(content = Button(label = "tap", onActivate = ():
+                self.bump()))
+
+view Outside:
+    string label
+    state int seen = 0
+
+    body():
+        Button(label = "reach", onActivate = ():
+            seen = label.length)
+
+view Page:
+    [string] ids
+
+    body():
+        Column(alignment = .Center, spacing = nil):
+            for id in ids with id:
+                Counter(title = id)
+            Outside(label = "reach")
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page(ids = ["a", "b"])
+
+def int find(Mounted m, string kind, int nth):
+    mut seen = [0]
+    return findNth(m, kind, nth, seen)
+
+def int findNth(Mounted m, string kind, int nth, mut [int] seen):
+    if m.kind == kind:
+        if seen[0] == nth:
+            return m.id
+        seen[0] = seen[0] + 1
+    for c in m.children:
+        let r = findNth(c, kind, nth, seen)
+        if r >= 0:
+            return r
+    -1
+
+def Mounted rootOf(Runtime rt):
+    rt.root else (Mounted(id = 0, generation = 0, kind = "", site = 0, key = ""))
+
+def string textOf(Runtime rt, int id):
+    if let n = rt.find(id):
+        return n.props["content"] else ("")
+    ""
+
+def Handle h(Runtime rt, int id):
+    rt.handle(id) else (Handle(id = -1, generation = -1))
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+assert_eq(rt.expansions, 6)          # Page, Counter a (+ Holder), Counter b (+ Holder), Outside
+assert_eq(rt.partialPasses, 0)
+
+# Counter a's button (the first one) bumps ITS state: only Counter a (and the Holder it builds) re-expands.
+let first = find(rootOf(rt), "Button", 0)
+let before = rt.expansions
+assert(act(rt, host, h(rt, first), "activate", ""))
+assert_eq(rt.partialPasses, 1)
+assert_eq(rt.expansions - before, 2)  # Counter a, then its Holder; nothing else
+let textA = find(rootOf(rt), "Text", 0)
+assert_eq(textOf(rt, textA), "a:1")   # the owner is Counter, not the Holder the button sits under
+assert_eq(textOf(rt, find(rootOf(rt), "Text", 1)), "b:0")
+
+# The second counter, twice: each action is its own partial pass.
+let second = find(rootOf(rt), "Button", 1)
+assert(act(rt, host, h(rt, second), "activate", ""))
+assert(act(rt, host, h(rt, second), "activate", ""))
+assert_eq(rt.partialPasses, 3)
+assert_eq(textOf(rt, find(rootOf(rt), "Text", 1)), "b:2")
+assert_eq(textOf(rt, find(rootOf(rt), "Text", 0)), "a:1")
+
+# A callback that reads an input (`label`) cannot be scoped to one composite: the whole window.
+let reach = find(rootOf(rt), "Button", 2)
+let wholeBefore = rt.expansions
+assert(act(rt, host, h(rt, reach), "activate", ""))
+assert_eq(rt.partialPasses, 3)
+assert(rt.expansions - wholeBefore >= 6, "every composite expands again")
+
+# A callback no lowered view built (a hand-assembled native Button) reports nothing: unknown, so the
+# whole window is rebuilt, as before.
+struct RawBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt):
+        Column(alignment = .Center, spacing = nil, children = [Button(label = "raw", onActivate = ():
+            pass), Counter(title = "c")])
+
+let rawHost = ViewRoot(inner = RawBuilder())
+mut raw = Runtime()
+raw.start(rawHost)
+let rawButton = find(rootOf(raw), "Button", 0)
+let rawBefore = raw.expansions
+assert(act(raw, rawHost, h(raw, rawButton), "activate", ""))
+assert_eq(raw.partialPasses, 0)
+assert(raw.expansions > rawBefore, "the Counter expanded again with the whole window")
+print("core owner ok")

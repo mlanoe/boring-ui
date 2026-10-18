@@ -1,0 +1,18 @@
+# Renders the Todo application's first frame with the CPU reference rasterizer and prints it as a P3 PPM.
+# Not a test (the runner only picks up *_test.br). Usage:
+#   boring run tests/render_todo_ppm.br > todo.ppm
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.raster.*
+use todo.todo.*
+
+struct AppRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): TodoApp()
+
+mut rt = Runtime()
+rt.start(ViewRoot(inner = AppRoot()))
+let placed = layout(rt, 600.0, 600.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+print toPpm(rasterize(displayList(placed), 600, 600))

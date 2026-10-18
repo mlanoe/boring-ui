@@ -1,0 +1,212 @@
+# CPU reference rasterizer (src/raster.br). Run: boring run tests/raster_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.raster.*
+
+def Command rect(float x, float y, float w, float h, string hex):
+    Command(kind = "FillRect", x = x, y = y, w = w, h = h, hex = hex)
+
+def Command pop():
+    Command(kind = "PopClip", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+def Command clip(float x, float y, float w, float h):
+    Command(kind = "PushClip", x = x, y = y, w = w, h = h)
+
+# ── a fill covers exactly its pixels, everything else stays transparent ───────────────────────────
+
+let one = rasterize([rect(1.0, 1.0, 2.0, 2.0, "#FF0000")], 4, 4)
+assert_eq(pixelHex(one, 0, 0), "#00000000")
+assert_eq(pixelHex(one, 1, 1), "#FFFF0000")
+assert_eq(pixelHex(one, 2, 2), "#FFFF0000")
+assert_eq(pixelHex(one, 3, 3), "#00000000")
+assert_eq(one.unsupported.length, 0)
+
+# ── paint order: later fills cover earlier ones, alpha blends premultiplied ───────────────────────
+
+let over = rasterize([rect(0.0, 0.0, 2.0, 1.0, "#0000FF"), rect(0.0, 0.0, 1.0, 1.0, "#FF000080")], 2, 1)
+assert_eq(pixelHex(over, 1, 0), "#FF0000FF")
+# 0x80 red over opaque blue: alpha stays opaque, red = 128, blue = 255 * (1 - 128/255) = 127
+assert_eq(pixelHex(over, 0, 0), "#FF80007F")
+
+# ── fractional edges anti-alias by exact area coverage ────────────────────────────────────────────
+
+let half = rasterize([rect(0.5, 0.0, 1.0, 1.0, "#000000")], 2, 1)
+assert_eq(pixelHex(half, 0, 0), "#80000000")   # half of pixel 0
+assert_eq(pixelHex(half, 1, 0), "#80000000")   # half of pixel 1
+
+# ── clips ─────────────────────────────────────────────────────────────────────────────────────────
+
+let clipped = rasterize([clip(0.0, 0.0, 2.0, 4.0), rect(0.0, 0.0, 4.0, 4.0, "#00FF00"), pop(), rect(3.0, 0.0, 1.0, 1.0, "#0000FF")], 4, 4)
+assert_eq(pixelHex(clipped, 1, 3), "#FF00FF00")   # inside the clip
+assert_eq(pixelHex(clipped, 2, 0), "#00000000")   # overflow outside the clip is cut
+assert_eq(pixelHex(clipped, 3, 0), "#FF0000FF")   # after PopClip nothing is clipped any more
+
+# Nested clips intersect, and an extra PopClip never pops the window itself.
+let nested = rasterize([clip(0.0, 0.0, 3.0, 3.0), clip(1.0, 1.0, 9.0, 9.0), rect(0.0, 0.0, 4.0, 4.0, "#FFFFFF"), pop(), pop(), pop(), rect(3.0, 3.0, 1.0, 1.0, "#FFFFFF")], 4, 4)
+assert_eq(pixelHex(nested, 0, 0), "#00000000")
+assert_eq(pixelHex(nested, 1, 1), "#FFFFFFFF")
+assert_eq(pixelHex(nested, 2, 2), "#FFFFFFFF")
+assert_eq(pixelHex(nested, 3, 3), "#FFFFFFFF")
+
+# A rectangle partly off the buffer is clamped, not an error.
+let edge = rasterize([rect(-2.0, -2.0, 3.0, 3.0, "#FFFFFF"), rect(3.0, 3.0, 10.0, 10.0, "#FFFFFF")], 4, 4)
+assert_eq(pixelHex(edge, 0, 0), "#FFFFFFFF")
+assert_eq(pixelHex(edge, 1, 1), "#00000000")
+assert_eq(pixelHex(edge, 3, 3), "#FFFFFFFF")
+
+
+def Command stroke(float x, float y, float w, float h, float line, string hex):
+    Command(kind = "StrokeRect", x = x, y = y, w = w, h = h, hex = hex, value = line)
+
+def Command fade(float opacity):
+    Command(kind = "PushOpacity", x = 0.0, y = 0.0, w = 0.0, h = 0.0, value = opacity)
+
+def Command unfade():
+    Command(kind = "PopOpacity", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+# ── StrokeRect: an inside border ──────────────────────────────────────────────────────────────────
+
+let box = rasterize([stroke(0.0, 0.0, 4.0, 4.0, 1.0, "#FFFFFF")], 4, 4)
+assert_eq(pixelHex(box, 0, 0), "#FFFFFFFF")   # corner
+assert_eq(pixelHex(box, 3, 0), "#FFFFFFFF")
+assert_eq(pixelHex(box, 0, 3), "#FFFFFFFF")
+assert_eq(pixelHex(box, 3, 3), "#FFFFFFFF")
+assert_eq(pixelHex(box, 1, 0), "#FFFFFFFF")   # top edge
+assert_eq(pixelHex(box, 0, 2), "#FFFFFFFF")   # left edge
+assert_eq(pixelHex(box, 1, 1), "#00000000")   # inside stays empty
+assert_eq(pixelHex(box, 2, 2), "#00000000")
+
+# A translucent border blends once everywhere, corners included (the four bands never overlap).
+let soft = rasterize([stroke(0.0, 0.0, 4.0, 4.0, 1.0, "#FFFFFF80")], 4, 4)
+assert_eq(pixelHex(soft, 0, 0), pixelHex(soft, 1, 0))
+assert_eq(pixelHex(soft, 0, 0), pixelHex(soft, 0, 1))
+
+# A border wider than half the rectangle fills it, and never reaches outside.
+let fat = rasterize([stroke(1.0, 1.0, 2.0, 2.0, 9.0, "#FFFFFF")], 4, 4)
+assert_eq(pixelHex(fat, 1, 1), "#FFFFFFFF")
+assert_eq(pixelHex(fat, 2, 2), "#FFFFFFFF")
+assert_eq(pixelHex(fat, 0, 0), "#00000000")
+assert_eq(pixelHex(fat, 3, 3), "#00000000")
+
+# A zero-width border draws nothing, and a clip cuts a border like a fill.
+assert_eq(pixelHex(rasterize([stroke(0.0, 0.0, 4.0, 4.0, 0.0, "#FFFFFF")], 4, 4), 0, 0), "#00000000")
+let cutBorder = rasterize([clip(0.0, 0.0, 2.0, 4.0), stroke(0.0, 0.0, 4.0, 4.0, 1.0, "#FFFFFF"), pop()], 4, 4)
+assert_eq(pixelHex(cutBorder, 1, 0), "#FFFFFFFF")
+assert_eq(pixelHex(cutBorder, 3, 0), "#00000000")
+
+# ── PushOpacity / PopOpacity: group opacity, composited once ──────────────────────────────────────
+
+# Two overlapping opaque rectangles at 50%: the overlap is the top rectangle at 50%, not darker.
+let group = rasterize([fade(0.5), rect(0.0, 0.0, 2.0, 1.0, "#FF0000"), rect(1.0, 0.0, 2.0, 1.0, "#0000FF"), unfade()], 3, 1)
+assert_eq(pixelHex(group, 0, 0), "#80800000")
+assert_eq(pixelHex(group, 1, 0), "#80000080")
+assert_eq(pixelHex(group, 2, 0), "#80000080")
+
+# The same two rectangles each blended at 50% on their own would darken the overlap (control).
+let each = rasterize([rect(0.0, 0.0, 2.0, 1.0, "#FF000080"), rect(1.0, 0.0, 2.0, 1.0, "#0000FF80")], 3, 1)
+assert(pixelHex(each, 1, 0) != pixelHex(group, 1, 0))
+
+# Opacity 1 changes nothing; 0 hides the group; out-of-range values are clamped.
+assert_eq(pixelHex(rasterize([fade(1.0), rect(0.0, 0.0, 1.0, 1.0, "#FF0000"), unfade()], 1, 1), 0, 0), "#FFFF0000")
+assert_eq(pixelHex(rasterize([fade(0.0), rect(0.0, 0.0, 1.0, 1.0, "#FF0000"), unfade()], 1, 1), 0, 0), "#00000000")
+assert_eq(pixelHex(rasterize([fade(7.0), rect(0.0, 0.0, 1.0, 1.0, "#FF0000"), unfade()], 1, 1), 0, 0), "#FFFF0000")
+
+# The group composites over what was already painted underneath.
+let under = rasterize([rect(0.0, 0.0, 1.0, 1.0, "#0000FF"), fade(0.5), rect(0.0, 0.0, 1.0, 1.0, "#FF0000"), unfade()], 1, 1)
+assert_eq(pixelHex(under, 0, 0), "#FF800080")   # red 128, blue 255 * (1 - 128/255) = 127.5 -> 128
+
+# Nested groups multiply: 0.5 * 0.5 = 0.25, and a group left open is still composited.
+let nestedFade = rasterize([fade(0.5), fade(0.5), rect(0.0, 0.0, 1.0, 1.0, "#FFFFFF"), unfade(), unfade()], 1, 1)
+assert_eq(pixelHex(nestedFade, 0, 0), "#40404040")
+let open = rasterize([fade(0.5), rect(0.0, 0.0, 1.0, 1.0, "#FFFFFF")], 1, 1)
+assert_eq(pixelHex(open, 0, 0), "#80808080")
+
+# A stray PopOpacity is ignored, and a clip inside a group still applies.
+assert_eq(pixelHex(rasterize([unfade(), rect(0.0, 0.0, 1.0, 1.0, "#FF0000")], 1, 1), 0, 0), "#FFFF0000")
+let clippedGroup = rasterize([fade(0.5), clip(0.0, 0.0, 1.0, 1.0), rect(0.0, 0.0, 2.0, 1.0, "#FFFFFF"), pop(), unfade()], 2, 1)
+assert_eq(pixelHex(clippedGroup, 0, 0), "#80808080")
+assert_eq(pixelHex(clippedGroup, 1, 0), "#00000000")
+
+
+def Command shadow(float x, float y, float w, float h, float radius, float dx, float dy, string hex):
+    Command(kind = "DrawShadow", x = x, y = y, w = w, h = h, hex = hex, value = radius, dx = dx, dy = dy)
+
+# ── DrawShadow: an outer, offset, blurred shadow ──────────────────────────────────────────────────
+
+# Radius 0 is a hard-edged shadow with exact area coverage, and it is cut out of the rectangle itself.
+let hard = rasterize([shadow(0.0, 0.0, 2.0, 2.0, 0.0, 1.0, 1.0, "#000000")], 4, 4)
+assert_eq(pixelHex(hard, 2, 1), "#FF000000")
+assert_eq(pixelHex(hard, 1, 2), "#FF000000")
+assert_eq(pixelHex(hard, 2, 2), "#FF000000")
+assert_eq(pixelHex(hard, 1, 1), "#00000000")   # inside the original rectangle: no shadow
+assert_eq(pixelHex(hard, 0, 0), "#00000000")
+assert_eq(pixelHex(hard, 3, 3), "#00000000")   # past the offset rectangle
+
+# The shadow colour's own alpha scales it, and a fractional offset anti-aliases.
+let faint = rasterize([shadow(0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, "#00000080")], 3, 1)
+assert_eq(pixelHex(faint, 1, 0), "#80000000")
+let slid = rasterize([shadow(0.0, 0.0, 2.0, 1.0, 0.0, 0.5, 0.0, "#000000")], 4, 1)
+assert_eq(pixelHex(slid, 2, 0), "#80000000")
+
+# No offset and no blur: the shadow is exactly hidden behind its rectangle.
+let hidden = rasterize([shadow(1.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, "#000000")], 4, 4)
+assert_eq(hidden.pixels.length, 16)
+assert_eq(pixelHex(hidden, 1, 1), "#00000000")
+assert_eq(pixelHex(hidden, 0, 0), "#00000000")
+
+# A blurred shadow around a centred rectangle: hand-computed Gaussian coverage at (7, 10) is
+# (Phi(2.25) - Phi(0.25)) * (Phi(0.75) - Phi(-1.25)) = 0.2598 -> alpha 66 of 255.
+let soft = rasterize([shadow(8.0, 8.0, 4.0, 4.0, 4.0, 0.0, 0.0, "#000000")], 20, 20)
+assert_eq(pixelHex(soft, 7, 10), "#42000000")
+assert_eq(pixelHex(soft, 10, 10), "#00000000")                          # inside the rectangle
+assert_eq(pixelHex(soft, 7, 10), pixelHex(soft, 12, 10))                # mirror symmetry
+assert_eq(pixelHex(soft, 10, 7), pixelHex(soft, 10, 12))
+assert_eq(pixelHex(soft, 7, 10), pixelHex(soft, 10, 7))                 # and between the axes
+assert_eq(pixelHex(soft, 0, 0), "#00000000")                            # beyond three sigma
+
+# Alpha (the top byte; the colour is black) never grows with distance from the rectangle.
+var d = 7
+while d > 0:
+    assert(soft.pixels[10 * 20 + d] >= soft.pixels[10 * 20 + d - 1])
+    d -= 1
+assert(soft.pixels[10 * 20 + 7] > soft.pixels[10 * 20 + 4])
+
+# A negative radius behaves like zero.
+assert_eq(pixelHex(rasterize([shadow(0.0, 0.0, 1.0, 1.0, -3.0, 1.0, 0.0, "#000000")], 3, 1), 1, 0), "#FF000000")
+
+# Painting order: the child covers its own shadow, and a clip cuts the shadow like anything else.
+let under = rasterize([shadow(0.0, 0.0, 2.0, 2.0, 0.0, 1.0, 1.0, "#000000"), rect(0.0, 0.0, 2.0, 2.0, "#FFFFFF")], 4, 4)
+assert_eq(pixelHex(under, 1, 1), "#FFFFFFFF")
+assert_eq(pixelHex(under, 2, 2), "#FF000000")
+let cutShadow = rasterize([clip(0.0, 0.0, 2.0, 4.0), shadow(0.0, 0.0, 2.0, 2.0, 0.0, 1.0, 1.0, "#000000"), pop()], 4, 4)
+assert_eq(pixelHex(cutShadow, 1, 2), "#FF000000")
+assert_eq(pixelHex(cutShadow, 2, 1), "#00000000")                       # right of the clip
+
+# A shadow wholly off the buffer is harmless, and a shadow inside a group fades with it.
+let away = rasterize([shadow(0.0, 0.0, 2.0, 2.0, 6.0, 100.0, -100.0, "#000000")], 4, 4)
+assert_eq(away.pixels.length, 16)
+let fadedShadow = rasterize([fade(0.5), shadow(0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, "#000000"), unfade()], 3, 1)
+assert_eq(pixelHex(fadedShadow, 1, 0), "#80000000")
+
+# ── colours ───────────────────────────────────────────────────────────────────────────────────────
+
+let named = rasterize([rect(0.0, 0.0, 1.0, 1.0, "red"), rect(1.0, 0.0, 1.0, 1.0, "no-such-colour"), rect(2.0, 0.0, 1.0, 1.0, "#abcdef")], 3, 1)
+assert_eq(pixelHex(named, 0, 0), "#FFFF0000")
+assert_eq(pixelHex(named, 1, 0), "#FFFF00FF")   # unknown token: magenta, visible rather than silent
+assert_eq(pixelHex(named, 2, 0), "#FFABCDEF")   # lower-case hex
+
+# ── unsupported kinds are reported once, not drawn ────────────────────────────────────────────────
+
+let text = rasterize([Command(kind = "DrawText", x = 0.0, y = 0.0, w = 4.0, h = 4.0, text = "hi"), Command(kind = "DrawText", x = 0.0, y = 0.0, w = 4.0, h = 4.0, text = "yo")], 4, 4)
+assert_eq(text.unsupported.length, 1)
+assert_eq(text.unsupported[0], "DrawText")
+assert_eq(pixelHex(text, 0, 0), "#00000000")
+
+# ── PPM ───────────────────────────────────────────────────────────────────────────────────────────
+
+assert_eq(toPpm(rasterize([rect(0.0, 0.0, 1.0, 1.0, "#FF0000")], 2, 1)), "P3\n2 1\n255\n255 0 0 255 255 255\n")
+
+print "raster ok"
