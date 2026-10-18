@@ -169,6 +169,23 @@ subtree without touching layout. An unlabeled `TextField` is a validation error 
 in the tree. Not yet: `Button`/`Toggle`/`Image`/`Video`/`Separator`/`Scroll`/`List`/`Sheet`, live regions,
 `accessibilityValue`, modal scoping, selection actions, and the platform adapter.
 
+## Error reporting — `ErrorReport` in [`src/core.br`](src/core.br)
+
+Every problem the runtime meets is recorded twice: the bare message in `Runtime.errors` (unchanged) and a structured `ErrorReport` in
+`Runtime.reports` — `kind` (`update`, `identity`, `stale`, `env`, `theme`, `projection`, `task`, `callback`, `hook`), `message`, the mounted **view
+path** (`Page/Column/OnTask/Button`, the kinds from the root down), the `node`, the task-run generation `run` and a `source` (the action, hook or task id
+that ran). Nothing here terminates anything: the application reporter — a host reading `rt.takeReports()` — decides presentation and fatality.
+
+- `rt.reportFailure(kind, source, message, node)` is the dispatch boundary's entry for a failure raised by user code: writes already completed stay
+  committed and the pending invalidations still run; only the report is added.
+- `rt.failTask(run, message)` reports an uncaught task error **only while the run is still current**: a run cancelled by an unmount or superseded by an
+  `id` change is an expected completion and is not an error (and the task stays finished — a rebuild with the same `id` does not retry it).
+- `rt.pathOf(id)` gives a node's view path; `takeReports()` returns and clears the queue.
+
+Not yet: callbacks that actually `throw` are caught by the boundary only once `boring build` supports throwing function types (task proposed — today it
+works under the interpreter only), so `act`/`deliver` do not yet call `reportFailure` themselves; a view-tree `.onError` is deferred in the draft.
+Test: `core_errors_test.br`.
+
 ## Sheet, focus bindings and List (layer 4/5)
 
 Facades in `boring.ui`; tests `sheet_test.br`, `focus_binding_test.br`, `list_test.br`, and the whole acceptance app in `todo_test.br`.
@@ -279,7 +296,7 @@ Tests: `events_test.br`, `events_extra_test.br` (disabled, capture, editing, Ent
 activates (it captures); use `click` (or down + up) where a Button must fire.
 
 Not yet: IME / composition and undo, key capture-target-bubble phases, non-modal focus scopes and `focusOrder`/`focusable`, focus rings,
-momentum scrolling, scroll-into-view on focus, multiple selection, error reporting from callbacks.
+momentum scrolling, scroll-into-view on focus, multiple selection, a throwing-callback boundary (see Error reporting).
 
 ## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
 

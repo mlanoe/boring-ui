@@ -34,6 +34,8 @@ assert(!ok, "a duplicate key is a recoverable update error, not a panic")
 assert_eq(d.show(), before)                      # the previous tree is left mounted untouched
 assert_eq(d.errors.length, 1)
 assert_eq(d.errors[0], "duplicate key 'a' under List (indices 0 and 2)")
+assert_eq(d.reports[0].kind, "identity")
+assert_eq(d.reports[0].path, "List")
 assert_eq(d.events.length, 3)                    # no partial reconciliation, no hooks
 assert(d.apply(node("List", [keyed("a"), keyed("c")])), "the next valid rebuild reconciles normally")
 assert_eq(d.show(), "List#1[Row#2@a, Row#4@c]")

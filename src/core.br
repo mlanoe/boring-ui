@@ -192,10 +192,26 @@ struct Pass:
     # hooks run after the commit.
     var mut [int] fresh = []
 
+# One reported problem (draft: "Error boundary for event dispatch", "Task errors"): what kind of thing
+# failed, the message, the mounted view PATH (`Page/Column/List/TodoRow`, kinds from the root down), the
+# mounted node and — for a task — the task-run generation. Nothing here terminates anything: the
+# application reporter (a host reading `takeReports`) decides presentation and fatality.
+#   kind: "update" (loop guard), "identity" (duplicate keys), "stale" (a write through a dead handle),
+#         "env", "theme", "projection", "task", "callback", "hook"
+pub struct ErrorReport:
+    pub string kind
+    pub string message
+    pub string path = ""
+    pub int node = -1
+    pub int run = -1
+    pub string source = ""
+
 pub struct Runtime:
     pub var Mounted? root = nil
     pub var mut [string] events = []
     pub var mut [string] errors = []
+    # The same problems, structured (see `ErrorReport`); `errors` keeps the bare messages.
+    pub var mut [ErrorReport] reports = []
     pub var mut {int} dirty = {}
     pub var int depth = 0
     pub var int maxPasses = 64
@@ -223,6 +239,62 @@ pub struct Runtime:
     var mut [int] freeIds = []
     var mut {int=Meta} meta = {=}
 
+    # ── error reporting ───────────────────────────────────────────────────────
+
+    # Records a problem about mounted node `node` (-1 for none): the message goes to `errors`, a structured
+    # report with the node's view path to `reports`.
+    def void report(string kind, string message, int node):
+        errors.push(message)
+        reports.push(ErrorReport(kind = kind, message = message, path = self.pathOf(node), node = node))
+
+    # The same for a problem that already knows its path (validation of a description before mounting).
+    def void reportAtPath(string kind, string message, string path):
+        errors.push(message)
+        reports.push(ErrorReport(kind = kind, message = message, path = path))
+
+    # A failure raised by user code while the runtime was driving it: `source` names what ran (the action
+    # `"activate"`, a hook `"mount"`, a task id). Writes already completed stay committed; the reporter
+    # decides what to show. Used by the dispatch boundary for callbacks that throw.
+    def void reportFailure(string kind, string source, string message, int node):
+        errors.push(message)
+        reports.push(ErrorReport(kind = kind, message = message, path = self.pathOf(node), node = node, source = source))
+
+    # An uncaught error of a task body. A cancelled or superseded run (lifecycle removal, an `id` change) is an
+    # EXPECTED completion and is not reported; only a run that is still current is. The task then stays
+    # finished: a rebuild with the same `id` does not retry it.
+    def bool failTask(TaskRun run, string message):
+        if !self.isCurrent(run):
+            return false
+        errors.push(message)
+        reports.push(ErrorReport(kind = "task", message = message, path = self.pathOf(run.node), node = run.node, run = run.generation, source = run.id))
+        true
+
+    # The reports recorded since the last call (clears them).
+    def [ErrorReport] takeReports():
+        let out = reports
+        reports = []
+        out
+
+    # The view path of mounted node `id`: the kinds from the root down, joined with "/" ("" when unknown).
+    req string pathOf(int id):
+        if id < 0:
+            return ""
+        if let r = root:
+            mut [string] kinds = []
+            if self.pathKinds(r, id, kinds):
+                return kinds.join("/")
+        ""
+
+    req bool pathKinds(Mounted n, int id, mut [string] kinds):
+        kinds.push(n.kind)
+        if n.id == id:
+            return true
+        for c in n.children:
+            if self.pathKinds(c, id, kinds):
+                return true
+        _ = kinds.pop()
+        false
+
     # ── mount / update ────────────────────────────────────────────────────────
 
     # Mounts (first call) or updates (later calls) the tree from `d`. Returns false and leaves the
@@ -231,7 +303,7 @@ pub struct Runtime:
         let problems = self.validate(d, d.kind)
         if problems.length > 0:
             for p in problems:
-                errors.push(p)
+                self.reportAtPath("identity", p, d.kind)
             return false
         mut ctx = Pass()
         if let current = root:
@@ -307,7 +379,7 @@ pub struct Runtime:
         if d.kind == "EnvMissing":
             let message = "missing environment value: {d.props["what"] else ("?")}"
             if !errors.contains(message):
-                errors.push(message)
+                self.reportAtPath("env", message, d.kind)
         d
 
     def View expandBody(View v, StateBox st, [EnvValue] scope):
@@ -329,7 +401,7 @@ pub struct Runtime:
                         for problem in problems:
                             let message = "invalid theme '{theme.name}': {problem}"
                             if !errors.contains(message):
-                                errors.push(message)
+                                self.reportAtPath("theme", message, "Provide")
                         return scope
                 for v in scope:
                     offered.push(v)
@@ -342,7 +414,7 @@ pub struct Runtime:
     def bool checked([Desc] kids, string path):
         let problems = self.validate(Desc(kind = path, children = kids), path)
         for p in problems:
-            errors.push(p)
+            self.reportAtPath("identity", p, path)
         problems.length == 0
 
     # Same identity, same kind: keep the node (and its slots and state), reconcile its children.
@@ -453,7 +525,7 @@ pub struct Runtime:
     # node later reuses the id.
     def bool write(Handle h, string slot, int value):
         if !self.valid(h):
-            errors.push("stale write to {h.id}.{slot}")
+            self.report("stale", "stale write to {h.id}.{slot}", -1)
             return false
         meta[h.id].slots[slot] = value
         _ = dirty.add(h.id)
@@ -490,7 +562,7 @@ pub struct Runtime:
     # Marks a node as needing a rebuild without writing a slot (typed state is mutated in place).
     def bool invalidate(Handle h):
         if !self.valid(h):
-            errors.push("stale invalidate of {h.id}")
+            self.report("stale", "stale invalidate of {h.id}", -1)
             return false
         _ = dirty.add(h.id)
         true
@@ -530,7 +602,7 @@ pub struct Runtime:
             if dirty.length == 0:
                 break
             if passes >= maxPasses:
-                errors.push("update loop: {passes} consecutive passes, still invalidated: {self.dirtyIds().map((i): "{i}").join(",")}")
+                self.reportAtPath("update", "update loop: {passes} consecutive passes, still invalidated: {self.dirtyIds().map((i): "{i}").join(",")}", "")
                 dirty = {}
                 self.pendingMount = []
                 return false
@@ -777,7 +849,7 @@ pub struct Runtime:
         if let r = root:
             let stale = self.commitProjectionsIn(r)
             if stale > 0:
-                errors.push("stale bind projection: {stale} write(s) dropped, the element's key is gone")
+                self.reportAtPath("projection", "stale bind projection: {stale} write(s) dropped, the element's key is gone", "")
 
     def int commitProjectionsIn(Mounted n):
         var stale = 0
@@ -864,7 +936,7 @@ pub struct Runtime:
     # intercept a write made outside this call; `deliver` is the contract for continuations.
     def bool deliver(TaskRun run, Builder b, UIAction action):
         if !self.isCurrent(run):
-            errors.push("stale task delivery to {run.node} (run {run.generation})")
+            self.report("stale", "stale task delivery to {run.node} (run {run.generation})", run.node)
             return false
         self.beginEvent()
         action()

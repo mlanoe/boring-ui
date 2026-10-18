@@ -1,0 +1,113 @@
+# Structured error reports (src/core.br ErrorReport, report*, failTask, takeReports, pathOf): every problem
+# carries its kind, message, mounted view path and node; a cancelled task is not an error; a failing callback
+# is reported with its path while earlier writes stay committed.
+# Run: boring run tests/core_errors_test.br
+
+use boring.ui.*
+use ui.core.*
+
+view Page:
+    state [TaskRun] runs = []
+    state string query = "a"
+    state int taps = 0
+
+    def started(TaskRun run):
+        runs.push(run)
+
+    def tap():
+        taps += 1
+
+    req int runCount():
+        runs.length
+
+    req TaskRun runAt(int i):
+        runs[i]
+
+    body():
+        Column(alignment = .Center, spacing = nil):
+            OnTask(id = query, onTask = (run):
+                self.started(run)):
+                Button(label = "Tap", onActivate = ():
+                    self.tap())
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Page__State pageState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Page__State else (Page__State())
+
+def int idOfKind(Mounted m, string kind):
+    if m.kind == kind:
+        return m.id
+    for c in m.children:
+        let r = idOfKind(c, kind)
+        if r >= 0:
+            return r
+    -1
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+assert_eq(rt.reports.length, 0)
+
+# ── paths are the kinds from the root down ───────────────────────────────────────────────────────
+
+let root = rt.root else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+let buttonId = idOfKind(root, "Button")
+assert_eq(rt.pathOf(buttonId), "Page/Column/OnTask/Button")
+assert_eq(rt.pathOf(-1), "")
+assert_eq(rt.pathOf(9999), "")
+
+# ── a failing callback: reported with its path, source and message; nothing is rolled back ──────
+
+mut st = pageState(rt)
+Page().tap(st)                                   # a write made before the failure stays committed
+rt.reportFailure("callback", "activate", "disk full", buttonId)
+assert_eq(rt.reports.length, 1)
+let first = rt.reports[0]
+assert_eq(first.kind, "callback")
+assert_eq(first.source, "activate")
+assert_eq(first.message, "disk full")
+assert_eq(first.path, "Page/Column/OnTask/Button")
+assert_eq(first.node, buttonId)
+assert_eq(rt.errors[0], "disk full")             # the bare message is kept too
+assert_eq(Page().runCount(pageState(rt)), 1)     # (the task started once, nothing else was disturbed)
+
+# ── tasks: a current run reports; a cancelled or superseded one is an expected completion ───────
+
+let run1 = Page().runAt(0, pageState(rt))
+assert(rt.failTask(run1, "network down"))
+let taskReport = rt.reports[rt.reports.length - 1]
+assert_eq(taskReport.kind, "task")
+assert_eq(taskReport.run, run1.generation)
+assert_eq(taskReport.source, "a")                 # the task id
+assert_eq(taskReport.path, "Page/Column/OnTask")
+
+st.query = "b"                                    # an id change cancels run 1 and starts run 2
+rt.invalidateRoot()
+assert(rt.flush(host))
+assert(!rt.isCurrent(run1))
+let before = rt.reports.length
+assert(!rt.failTask(run1, "late failure of the old run"))
+assert_eq(rt.reports.length, before)              # not an error
+let run2 = Page().runAt(1, pageState(rt))
+assert(rt.failTask(run2, "second run failed"))
+assert_eq(rt.reports.length, before + 1)
+
+# ── stale handles and the update loop guard are structured too ───────────────────────────────────
+
+let gone = Handle(id = buttonId, generation = 12345)
+assert(!rt.invalidate(gone))
+assert_eq(rt.reports[rt.reports.length - 1].kind, "stale")
+
+# ── the host takes the reports and the queue starts empty again ──────────────────────────────────
+
+let taken = rt.takeReports()
+assert(taken.length >= 4)
+assert_eq(taken[0].kind, "callback")
+assert_eq(rt.reports.length, 0)
+assert(rt.errors.length >= 4)                     # the plain messages are not cleared
+
+print "core errors ok"
