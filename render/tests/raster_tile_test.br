@@ -1,0 +1,69 @@
+# The tiled kernel rasterizer (src/raster_tile.br) against the per-pixel one (src/raster_gpu.br): bit-identical
+# (a difference of 0), and so within one LSB of the CPU reference (src/raster.br). Includes more than one round
+# of 256 commands per tile and opacity groups that open in one round and close in a later one.
+# Run: boring run tests/raster_tile_test.br   (the simulation costs about a second per tile and round: the
+# pictures are small here; run_kernel_tests.sh runs the file on the real simd and wgpu targets, and
+# bench/run_bench.sh compares the two kernels at 1280 x 720 and above)
+
+use render.display_list.*
+use render.raster.*
+use render.raster_gpu.*
+use render.raster_tile.*
+
+def Command rect(float x, float y, float w, float h, string hex):
+    Command(kind = "FillRect", x = x, y = y, w = w, h = h, hex = hex)
+
+def Command stroke(float x, float y, float w, float h, float line, string hex):
+    Command(kind = "StrokeRect", x = x, y = y, w = w, h = h, hex = hex, value = line)
+
+def Command shadow(float x, float y, float w, float h, float radius, float dx, float dy, string hex):
+    Command(kind = "DrawShadow", x = x, y = y, w = w, h = h, hex = hex, value = radius, dx = dx, dy = dy)
+
+def Command text(float x, float y, float h, string content, string hex):
+    Command(kind = "DrawText", x = x, y = y, w = 100.0, h = h, text = content, hex = hex)
+
+def Command clip(float x, float y, float w, float h):
+    Command(kind = "PushClip", x = x, y = y, w = w, h = h)
+
+def Command pop():
+    Command(kind = "PopClip", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+def Command fade(float opacity):
+    Command(kind = "PushOpacity", x = 0.0, y = 0.0, w = 0.0, h = 0.0, value = opacity)
+
+def Command unfade():
+    Command(kind = "PopOpacity", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+# Both kernels, bit-identical; returns the tiled kernel's largest difference against the CPU reference.
+def int compare([Command] list, int w, int h) throws:
+    let pixel = rasterizeGpu(list, w, h)
+    let tiled = rasterizeTiled(list, w, h)
+    assert_eq(maxDifference(pixel, tiled), 0)
+    maxDifference(rasterize(list, w, h), tiled)
+
+# Content spread over several tiles, shapes straddling tile edges, a shadow whose blur crosses tiles.
+assert(compare([rect(10.0, 4.0, 20.0, 9.5, "#336699"), rect(15.5, 8.25, 20.0, 8.0, "#FF880080")], 40, 20) <= 1)
+assert(compare([rect(0.0, 0.0, 40.0, 20.0, "#FFFFFF"), shadow(8.0, 4.0, 20.0, 10.0, 8.0, 3.0, 2.0, "#00000080"), stroke(8.0, 4.0, 20.0, 10.0, 1.5, "#202020")], 40, 20) <= 1)
+assert(compare([clip(5.0, 3.0, 25.0, 12.0), text(0.0, 2.0, 16.0, "Tiles and text", "#000000"), pop()], 40, 20) <= 1)
+
+# More than one round of 256 commands per tile; a group opens in the first round and closes in the last.
+def [Command] many(int n):
+    mut [Command] list = [fade(0.7)]
+    for i in 0..<n:
+        let x = ((i * 37) % 30) as float
+        let y = ((i * 53) % 12) as float
+        list.push(rect(x, y, 9.5, 6.25, "#3366FF40"))
+        if i == n / 2:
+            list.push(fade(0.5))
+            list.push(text(2.0, 4.0, 16.0, "mid", "#CC0000"))
+        if i == n - 20:
+            list.push(unfade())
+    list.push(unfade())
+    list.push(stroke(3.0, 3.0, 25.0, 14.0, 2.0, "#000000"))
+    list
+assert(compare(many(520), 40, 20) <= 1)
+
+# A tile no command reaches stays transparent, a tile with only an empty group too.
+assert(compare([fade(0.5), rect(0.0, 0.0, 4.0, 4.0, "#FFFFFF"), unfade()], 48, 20) <= 1)
+
+print "raster tile ok"

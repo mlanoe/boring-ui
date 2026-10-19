@@ -1,10 +1,7 @@
 # CPU reference rasterizer (src/raster.br). Run: boring run tests/raster_test.br
 
-use boring.ui.*
-use ui.core.*
-use ui.layout.*
-use ui.scene.*
-use ui.raster.*
+use render.display_list.*
+use render.raster.*
 
 def Command rect(float x, float y, float w, float h, string hex):
     Command(kind = "FillRect", x = x, y = y, w = w, h = h, hex = hex)

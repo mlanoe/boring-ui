@@ -1,0 +1,24 @@
+# The kernel rasterizer against the CPU reference on the Todo application's first frame (cropped to the
+# top-left corner where its text and controls are). Interpreter only: it pulls in the whole UI runtime, which
+# the kernel targets (`--target simd|wgpu`) do not transpile yet (see raster_gpu_test.br for the kernel corpus).
+# Run: boring run tests/raster_gpu_todo_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use render.display_list.*
+use ui.scene.*
+use render.raster.*
+use render.raster_gpu.*
+use todo.todo.*
+
+# The Todo application's first frame (cropped to the top-left corner where its text and controls are).
+struct AppRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): TodoApp()
+
+mut rt = Runtime()
+rt.start(ViewRoot(inner = AppRoot()))
+let placed = layout(rt, 600.0, 600.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+assert(maxDifference(rasterize(displayList(placed), 120, 60), rasterizeGpu(displayList(placed), 120, 60)) <= 1)
+
+print "raster gpu todo ok"

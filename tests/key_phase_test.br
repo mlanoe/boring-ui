@@ -1,0 +1,121 @@
+# Key dispatch phases (draft, "Event dispatch, capture, and errors"): capture root→target, the target's default
+# behaviour, bubble target→root; `stop` and `prevent` are independent.
+# Run: boring run tests/key_phase_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.events.*
+
+struct Log:
+    var mut [string] lines = []
+
+    def add(string line):
+        lines.push(line)
+
+    req string text():
+        lines.join(" ")
+
+# An observer that records what it saw and answers with fixed flags.
+struct Probe as KeyHandler:
+    string name
+    mut Log'actor log
+    bool stop = false
+    bool prevent = false
+
+    req void onKey(mut KeyEvent e) throws:
+        let seen = "{name}:{e.key}"
+        if e.handled:
+            log.add("{seen}+handled")
+        else:
+            log.add(seen)
+        e.stop = stop
+        e.prevent = prevent
+
+struct Boom as KeyHandler:
+    req void onKey(mut KeyEvent e) throws:
+        throw "observer failed"
+
+view Form:
+    state string text = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            TextField(value = text, label = "name", placeholder = "")
+
+struct FormBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Form()
+
+def Form__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Form__State else (Form__State())
+
+def string shown(Runtime rt):
+    state(rt).text.value
+
+let host = ViewRoot(inner = FormBuilder())
+mut rt = Runtime()
+rt.start(host)
+assert(keyPress(rt, host, "Tab"))             # focus the field (#3: Form#1 Column#2 TextField#3)
+let form = rt.handle(1) else (Handle(id = -1, generation = -1))
+let column = rt.handle(2) else (Handle(id = -1, generation = -1))
+let field = rt.handle(3) else (Handle(id = -1, generation = -1))
+mut Log'actor log = Log()
+
+# Order: capture from the root down, the default (typing), then bubble from the target up with `handled`.
+assert(rt.observeKeys(form, true, Probe(name = "capForm", log = log)))
+assert(rt.observeKeys(column, true, Probe(name = "capCol", log = log)))
+assert(rt.observeKeys(field, false, Probe(name = "bubField", log = log)))
+assert(rt.observeKeys(column, false, Probe(name = "bubCol", log = log)))
+assert(typeText(rt, host, "a"))
+assert_eq(shown(rt), "a")
+assert(keyPress(rt, host, "Backspace"))
+assert_eq(shown(rt), "")
+assert_eq(log.text(), "capForm:Backspace capCol:Backspace bubField:Backspace+handled bubCol:Backspace+handled")
+
+# `prevent` in capture suppresses the default (nothing is typed) yet the key still bubbles, reported as handled.
+mut again = Runtime()
+again.start(host)
+assert(keyPress(again, host, "Tab"))
+mut Log'actor log2 = Log()
+assert(again.observeKeys(again.handle(2) else (Handle(id = -1, generation = -1)), true, Probe(name = "block", log = log2, prevent = true)))
+assert(again.observeKeys(again.handle(3) else (Handle(id = -1, generation = -1)), false, Probe(name = "bub", log = log2)))
+assert(typeText(again, host, "x"))
+assert_eq(shown(again), "x")                 # text input is not a key press: only `keyPress` is observed
+assert(keyPress(again, host, "Backspace"))
+assert_eq(shown(again), "x")                 # the default was prevented
+assert_eq(log2.text(), "block:Backspace bub:Backspace+handled")
+
+# `stop` ends observer delivery (later capture and all bubble observers) but NOT the default behaviour.
+mut third = Runtime()
+third.start(host)
+assert(keyPress(third, host, "Tab"))
+mut Log'actor log3 = Log()
+assert(third.observeKeys(third.handle(1) else (Handle(id = -1, generation = -1)), true, Probe(name = "halt", log = log3, stop = true)))
+assert(third.observeKeys(third.handle(2) else (Handle(id = -1, generation = -1)), true, Probe(name = "late", log = log3)))
+assert(third.observeKeys(third.handle(3) else (Handle(id = -1, generation = -1)), false, Probe(name = "bub", log = log3)))
+assert(typeText(third, host, "ab"))
+assert(keyPress(third, host, "Backspace"))
+assert_eq(shown(third), "a")                 # still edited
+assert_eq(log3.text(), "halt:Backspace")
+
+# A throwing observer is reported at the boundary and does not break the dispatch.
+mut fourth = Runtime()
+fourth.start(host)
+assert(keyPress(fourth, host, "Tab"))
+assert(fourth.observeKeys(fourth.handle(2) else (Handle(id = -1, generation = -1)), true, Boom()))
+assert(typeText(fourth, host, "z"))
+assert(keyPress(fourth, host, "Backspace"))
+assert_eq(shown(fourth), "")
+assert_eq(fourth.reports.length, 1)
+assert_eq(fourth.reports[0].kind, "callback")
+assert_eq(fourth.reports[0].source, "key")
+
+# Observers are dropped with their node; with no focus the key goes to the window (the root).
+mut fifth = Runtime()
+fifth.start(host)
+mut Log'actor log5 = Log()
+assert(fifth.observeKeys(fifth.handle(1) else (Handle(id = -1, generation = -1)), false, Probe(name = "root", log = log5)))
+assert(!keyPress(fifth, host, "F5"))
+assert_eq(log5.text(), "root:F5")
+print("key phases ok")

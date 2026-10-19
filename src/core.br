@@ -273,6 +273,49 @@ pub struct Composition:
     pub string text
     pub int cursor = 0
 
+# ── physical key dispatch (draft, "Event dispatch, capture, and errors") ─────────────────────────
+# A key travels the retained path root → focused target → root: CAPTURE observers (root toward the target), the
+# TARGET's default behaviour (editing, activation, traversal — `keyPress`), then BUBBLE observers (target toward the
+# root), which see whether that default consumed the key. Two outcomes are independent: `stop` ends further observer
+# delivery, `prevent` suppresses the default behaviour — an ancestor can still observe a key a text field consumed.
+# Observers are registered on a mounted identity (`Runtime.observeKeys`) and dropped when it unmounts.
+
+pub struct KeyEvent:
+    pub string key
+    pub int target = -1           # the focused node (-1: none, the key goes to the window)
+    pub bool handled = false      # bubble only: the target's default behaviour consumed the key
+    # The observer's answer: set `stop` to end observer delivery, `prevent` to suppress the default behaviour.
+    pub var bool stop = false
+    pub var bool prevent = false
+
+# What one phase's observers decided, together.
+pub struct KeyResponse:
+    pub bool stop = false
+    pub bool prevent = false
+
+pub trait KeyHandler:
+    req void onKey(mut KeyEvent e) throws
+
+pub struct KeyObserver:
+    pub int node
+    pub int generation
+    pub bool capture
+    pub KeyHandler handler
+
+# Undo history of one TextField identity (draft, "Accepted value, editing buffer, and IME"): snapshots of the accepted
+# value (and the caret to restore) before each undo group, the redo side, and what grouping needs to know about the
+# last edit. It lives with the mounted control and is dropped on unmount.
+pub struct EditHistory:
+    pub int generation
+    pub var mut [string] undoText = []
+    pub var mut [int] undoCaret = []
+    pub var mut [string] redoText = []
+    pub var mut [int] redoCaret = []
+    # The value this history last produced; a different bound value is an authoritative external replacement.
+    pub var string current = ""
+    pub var string lastKind = ""
+    pub var int expectCaret = -1
+
 pub struct Runtime:
     pub var Mounted? root = nil
     pub var mut [string] events = []
@@ -292,6 +335,9 @@ pub struct Runtime:
     pub var Handle? capture = nil
     # The composition in progress, if any (see `Composition`); pruned after every update pass.
     pub var Composition? composition = nil
+    # Per-TextField undo/redo history, keyed by mounted id (generation-checked; dropped when the node unmounts).
+    pub var mut {int=EditHistory} histories = {=}
+    pub var mut [KeyObserver] keyObservers = []
     # Modal presentation: the ids of the `Sheet` nodes that are presented, outermost first, and the focus
     # each one displaced (restored on dismissal while that control still exists and is enabled).
     pub var [int] openSheets = []
@@ -601,7 +647,41 @@ pub struct Runtime:
                 self.dispatch(node, "unmount", "")
                 self.settle(before)
         meta.remove(node.id)
+        histories.remove(node.id)
+        self.dropObservers(node.id)
         freeIds.push(node.id)
+
+    # Registers `handler` for keys passing through node `h`: capture (before the target's default) or bubble (after).
+    def bool observeKeys(Handle h, bool capture, KeyHandler handler):
+        if !self.valid(h):
+            return false
+        keyObservers.push(KeyObserver(node = h.id, generation = h.generation, capture = capture, handler = handler))
+        true
+
+    def void dropObservers(int id):
+        mut [KeyObserver] kept = []
+        for o in keyObservers:
+            if o.node != id:
+                kept.push(o)
+        keyObservers = kept
+
+    # The ids from the window root down to node `id` (just the root when `id` is -1 or gone).
+    req [int] idPath(int id):
+        mut [int] out = []
+        if let r = root:
+            if id < 0 or !self.idPathIn(r, id, out):
+                out = [r.id]
+        out
+
+    req bool idPathIn(Mounted n, int id, mut [int] out):
+        out.push(n.id)
+        if n.id == id:
+            return true
+        for c in n.children:
+            if self.idPathIn(c, id, out):
+                return true
+        _ = out.pop()
+        false
 
     # Keys must be unique among the keyed siblings of one site, checked before anything mutates.
     def [string] validate(Desc d, string path):

@@ -1,0 +1,57 @@
+# The kernel rasterizer (src/raster_gpu.br) against the CPU reference (src/raster.br): every channel of every
+# pixel within one LSB (the f32 headroom), on a corpus covering each command kind and their combinations.
+# Run: boring run tests/raster_gpu_test.br   (kernels are simulated sequentially on the CPU there; also
+# `boring build --target simd` and `--target wgpu` for the real thing)
+
+use render.display_list.*
+use render.raster.*
+use render.raster_gpu.*
+
+def Command rect(float x, float y, float w, float h, string hex):
+    Command(kind = "FillRect", x = x, y = y, w = w, h = h, hex = hex)
+
+def Command stroke(float x, float y, float w, float h, float line, string hex):
+    Command(kind = "StrokeRect", x = x, y = y, w = w, h = h, hex = hex, value = line)
+
+def Command shadow(float x, float y, float w, float h, float radius, float dx, float dy, string hex):
+    Command(kind = "DrawShadow", x = x, y = y, w = w, h = h, hex = hex, value = radius, dx = dx, dy = dy)
+
+def Command text(float x, float y, float h, string content, string hex):
+    Command(kind = "DrawText", x = x, y = y, w = 100.0, h = h, text = content, hex = hex)
+
+def Command clip(float x, float y, float w, float h):
+    Command(kind = "PushClip", x = x, y = y, w = w, h = h)
+
+def Command pop():
+    Command(kind = "PopClip", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+def Command fade(float opacity):
+    Command(kind = "PushOpacity", x = 0.0, y = 0.0, w = 0.0, h = 0.0, value = opacity)
+
+def Command unfade():
+    Command(kind = "PopOpacity", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+# Renders `list` both ways and returns the largest channel difference.
+def int compare([Command] list, int w, int h) throws:
+    maxDifference(rasterize(list, w, h), rasterizeGpu(list, w, h))
+
+assert_eq(compare([rect(1.0, 1.0, 6.0, 4.0, "#FF0000"), rect(4.0, 2.0, 8.0, 5.0, "#0000FF80")], 16, 8), 0)
+assert_eq(compare([rect(0.5, 0.25, 6.3, 4.1, "#336699")], 16, 8), 0)
+assert_eq(compare([clip(2.0, 1.0, 5.5, 3.0), rect(0.0, 0.0, 16.0, 8.0, "#00FF00"), pop(), rect(9.0, 0.0, 3.0, 2.0, "#FFFFFF")], 16, 8), 0)
+assert(compare([stroke(1.0, 1.0, 10.0, 6.0, 2.0, "#FFFFFF80")], 16, 8) <= 1)
+assert(compare([stroke(0.5, 0.5, 9.0, 5.0, 1.5, "#102030")], 16, 8) <= 1)
+assert(compare([shadow(5.0, 5.0, 6.0, 6.0, 0.0, 2.0, 2.0, "#000000")], 20, 20) <= 1)
+assert(compare([shadow(8.0, 8.0, 4.0, 4.0, 4.0, 0.0, 0.0, "#000000")], 20, 20) <= 1)
+assert(compare([rect(0.0, 0.0, 20.0, 20.0, "#FFFFFF"), shadow(6.0, 6.0, 8.0, 8.0, 6.0, 1.0, 2.0, "#00000080"), rect(6.0, 6.0, 8.0, 8.0, "#3366FF")], 20, 20) <= 1)
+assert(compare([text(0.0, 0.0, 16.0, "Hello", "#000000")], 48, 16) <= 1)
+assert(compare([text(0.5, 0.25, 24.0, "日I e", "#FF8800")], 80, 24) <= 1)
+assert(compare([clip(0.0, 0.0, 30.0, 16.0), text(0.0, 0.0, 16.0, "Clipped text", "#000000"), pop()], 48, 16) <= 1)
+assert(compare([fade(0.5), rect(0.0, 0.0, 6.0, 4.0, "#FF0000"), rect(3.0, 0.0, 6.0, 4.0, "#0000FF"), unfade()], 12, 4) <= 1)
+assert(compare([rect(0.0, 0.0, 12.0, 4.0, "#0000FF"), fade(0.5), fade(0.5), rect(2.0, 0.0, 6.0, 4.0, "#FFFFFF"), unfade(), unfade()], 12, 4) <= 1)
+assert(compare([unfade(), fade(0.4), rect(0.0, 0.0, 6.0, 4.0, "#FFFFFF")], 12, 4) <= 1)
+assert(compare([fade(0.5), shadow(2.0, 2.0, 4.0, 4.0, 2.0, 1.0, 1.0, "#000000"), text(0.0, 0.0, 16.0, "Hi", "#000000"), unfade()], 24, 16) <= 1)
+
+# Nothing to draw: no kernel dispatch, same empty picture.
+assert_eq(compare([], 4, 4), 0)
+
+print "raster gpu ok"

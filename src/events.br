@@ -311,11 +311,95 @@ def void moveCaret(mut Runtime rt, Handle h, int caret, int anchor):
     _ = rt.write(h, "caret", caret)
     _ = rt.write(h, "anchor", anchor)
 
+# ── undo / redo ───────────────────────────────────────────────────────────────────────────────
+# Every accepted edit goes through `replaceRange`, which records it. Consecutive single-character typing (or
+# consecutive deletions) with the caret where the last one left it form ONE undo group; a caret move, a switch
+# between typing and deleting, a paste / selection replacement or an IME commit starts a new one. A bound value
+# that differs from what the history last produced (an authoritative external replacement) clears it, so undo can
+# never cross that boundary and overwrite newer application data; an edit clears redo.
+
+def EditHistory historyOf(Runtime rt, Handle h, string value):
+    let known = rt.histories[h.id] else (EditHistory(generation = h.generation, current = value))
+    if known.generation != h.generation or known.current != value:
+        return EditHistory(generation = h.generation, current = value)
+    known
+
+def string editKind(int a, int b, string insert):
+    if insert == "":
+        return "delete"
+    if a == b and insert.graphemeCount == 1:
+        return "type"
+    "other"
+
+def void recordEdit(mut Runtime rt, Handle h, string before, int caretBefore, int a, int b, string insert, string after):
+    mut hist = historyOf(rt, h, before)
+    let kind = editKind(a, b, insert)
+    let grouped = kind != "other" and kind == hist.lastKind and caretBefore == hist.expectCaret
+    if !grouped:
+        hist.undoText.push(before)
+        hist.undoCaret.push(caretBefore)
+    hist.redoText = []
+    hist.redoCaret = []
+    hist.current = after
+    hist.lastKind = kind
+    hist.expectCaret = a + insert.graphemeCount
+    rt.histories[h.id] = hist
+
+# Steps the focused field back one undo group (a normal accepted edit: the binding is written). False when there is
+# nothing to undo (or no enabled focused field).
+pub def bool undo(mut Runtime rt, Builder host):
+    stepHistory(rt, host, true)
+
+pub def bool redo(mut Runtime rt, Builder host):
+    stepHistory(rt, host, false)
+
+def bool stepHistory(mut Runtime rt, Builder host, bool backwards):
+    guard let f = focusedField(rt) else:
+        return false
+    if isDisabled(rt, f.id):
+        return false
+    guard let node = rt.find(f.id) else:
+        return false
+    let value = propOf(node, "value")
+    mut hist = historyOf(rt, f, value)
+    var target = ""
+    var targetCaret = 0
+    let here = caretOf(rt, f, value.graphemeCount)
+    if backwards:
+        if hist.undoText.length == 0:
+            return false
+        let at = hist.undoText.length - 1
+        target = hist.undoText[at]
+        targetCaret = hist.undoCaret[at]
+        _ = hist.undoText.pop()
+        _ = hist.undoCaret.pop()
+        hist.redoText.push(value)
+        hist.redoCaret.push(here)
+    else:
+        if hist.redoText.length == 0:
+            return false
+        let at = hist.redoText.length - 1
+        target = hist.redoText[at]
+        targetCaret = hist.redoCaret[at]
+        _ = hist.redoText.pop()
+        _ = hist.redoCaret.pop()
+        hist.undoText.push(value)
+        hist.undoCaret.push(here)
+    hist.current = target
+    hist.lastKind = ""
+    hist.expectCaret = -1
+    rt.histories[f.id] = hist
+    let c = clampTo(targetCaret, 0, target.graphemeCount)
+    moveCaret(rt, f, c, c)
+    act(rt, host, f, "setText", target)
+
 # Replaces the text between `a` and `b` with `insert`, leaving the caret after it, as one event.
 def bool replaceRange(mut Runtime rt, Builder host, Handle h, Mounted node, int a, int b, string insert):
     let text = propOf(node, "value")
     let len = text.graphemeCount
     let next = "{text.graphemeSlice(0, a)}{insert}{text.graphemeSlice(b, len)}"
+    if next != text:
+        recordEdit(rt, h, text, caretOf(rt, h, len), a, b, insert, next)
     moveCaret(rt, h, a + insert.graphemeCount, a + insert.graphemeCount)
     act(rt, host, h, "setText", next)
 
@@ -810,6 +894,66 @@ pub def bool imeCancel(mut Runtime rt, Builder host):
 # default action; Space activates / toggles the focused control; editing keys edit the focused
 # TextField. Returns whether the key was used.
 pub def bool keyPress(mut Runtime rt, Builder host, string name):
+    if rt.keyObservers.length == 0:
+        return defaultKey(rt, host, name)
+    var target = -1
+    if let f = rt.focus:
+        if rt.valid(f):
+            target = f.id
+    let path = rt.idPath(target)
+    var stopped = false
+    var prevented = false
+    # capture: root toward the target
+    for id in path:
+        let r = observed(rt, id, true, KeyEvent(key = name, target = target), stopped)
+        if r.stop:
+            stopped = true
+        if r.prevent:
+            prevented = true
+    # target: the component's own behaviour, unless some capture observer suppressed it
+    var handled = prevented
+    if !prevented:
+        handled = defaultKey(rt, host, name)
+    # bubble: the target toward the root, seeing whether the default consumed the key
+    var i = path.length - 1
+    while i >= 0:
+        let r = observed(rt, path[i], false, KeyEvent(key = name, target = target, handled = handled), stopped)
+        if r.stop:
+            stopped = true
+        i -= 1
+    handled
+
+# Calls an observer. (A free `throws` function: `boring build` drops the error of a throwing trait-object method called
+# directly inside `try`, but propagates it through a function — the same shape as `deliverAction`.)
+def void deliverKey(KeyHandler h, mut KeyEvent e) throws:
+    h.onKey(e)
+
+# What node `id`'s observers of one phase decided, in registration order; nothing once propagation was stopped.
+# A throwing observer is reported (kind "callback", source "key") and counts as no answer.
+def KeyResponse observed(mut Runtime rt, int id, bool capture, KeyEvent seen, bool stopped):
+    if stopped:
+        return KeyResponse()
+    var stop = false
+    var prevent = false
+    let registered = rt.keyObservers
+    for o in registered:
+        if stop or o.node != id or o.capture != capture:
+            continue
+        if !rt.valid(Handle(id = o.node, generation = o.generation)):
+            continue
+        mut ev = KeyEvent(key = seen.key, target = seen.target, handled = seen.handled)
+        try:
+            deliverKey(o.handler, ev)
+            if ev.stop:
+                stop = true
+            if ev.prevent:
+                prevent = true
+        catch:
+            rt.reportFailure("callback", "key", "{error}", id)
+    KeyResponse(stop = stop, prevent = prevent)
+
+# The target's default behaviour for a key (everything `keyPress` did before observers existed).
+def bool defaultKey(mut Runtime rt, Builder host, string name):
     # While an input method composes, Enter and Escape belong to it (commit as typed / cancel) and the editing keys do
     # not touch the committed text: the IME owns them until the composition ends.
     if let c = rt.composition:
@@ -820,6 +964,10 @@ pub def bool keyPress(mut Runtime rt, Builder host, string name):
         if name == "Backspace" or name == "Delete" or name == "Left" or name == "Right" or name == "Home" or name == "End":
             return true
     let order = focusOrder(rt)
+    if name == "Undo":
+        return undo(rt, host)
+    if name == "Redo":
+        return redo(rt, host)
     if name == "Tab" or name == "ShiftTab":
         if order.length == 0:
             return false

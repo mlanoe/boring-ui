@@ -13,25 +13,10 @@
 # Hit region = a node's layout bounds intersected with ancestor clips: visible overflow never enlarges
 # it. Children are tested front to back (reverse paint order), so the topmost wins.
 
+use render.display_list.*
 use ui.layout.*
 use ui.theme.*
 use boring.ui.*
-
-pub struct Command:
-    pub string kind
-    pub float x
-    pub float y
-    pub float w
-    pub float h
-    pub string text = ""
-    pub string color = ""
-    pub int node = -1
-    # Border width / opacity / shadow radius, and a shadow's offset.
-    # The color token resolved against the node's theme (`#RRGGBB[AA]`); `color` keeps the semantic token.
-    pub var string hex = ""
-    pub var float value = 0.0
-    pub var float dx = 0.0
-    pub var float dy = 0.0
 
 def Command cmd(string kind, Placed p, string text, string color):
     Command(kind = kind, x = p.x, y = p.y, w = p.w, h = p.h, text = text, color = color, node = p.id)

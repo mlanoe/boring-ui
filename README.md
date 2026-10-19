@@ -155,8 +155,52 @@ point). The hit region is a node's layout bounds intersected with ancestor clips
 enlarges it, and children are tested front to back. `Background(color)` and `Clip()` are wrapper views in
 `boring.ui`, layout-transparent. `describe(command)` renders one line per command for golden tests.
 
-## Raster — [`src/raster.br`](src/raster.br) (CPU reference renderer, step 0 of
+## Renderers — [`render/`](render) (steps 0 and 1 of
 [`boring-ui-renderer-draft.md`](../boring/docs/design-notes/boring-ui-renderer-draft.md))
+
+A separate project (`render/boring.toml`, referenced as `render.<module>`; boring-ui depends on it through the root
+`boring.toml`) so it builds for `--target simd|wgpu` without the view runtime. It holds
+[`display_list.br`](render/src/display_list.br) (the `Command` vocabulary scenes emit), the CPU reference
+rasterizer ([`raster.br`](render/src/raster.br), [`raster_font.br`](render/src/raster_font.br)) and the kernel
+rasterizer ([`raster_gpu.br`](render/src/raster_gpu.br)), described below.
+
+### Kernel rasterizer — [`render/src/raster_gpu.br`](render/src/raster_gpu.br)
+
+`rasterizeGpu(displayList, width, height) throws` → the same `Raster`, from a one-thread-per-pixel kernel:
+`encode` turns `[Command]` into two flat numeric buffers (clips baked into every command, text expanded to one
+command per glyph, colours packed, opacity groups bounded to depth 4), and each thread walks the whole list in paint
+order keeping its own layer stack. It is the CPU reference's twin: `render/tests/raster_gpu_test.br` renders a corpus
+(fills, strokes, shadows, text, clips, nested groups) both ways and requires every channel within one LSB
+(`maxDifference`). Verified under `boring run` (sequential simulation), `--target simd` and `--target wgpu`
+(`render/tests/run_kernel_tests.sh`, real Metal on macOS). Naive O(pixels × commands) by design; tiling is step 2.
+The kernel targets cannot yet build the view runtime, so the Todo-frame comparison
+(`tests/raster_gpu_todo_test.br`) runs under `boring run` only.
+
+### Tiled kernel rasterizer — [`render/src/raster_tile.br`](render/src/raster_tile.br)
+
+`rasterizeTiled(displayList, width, height) throws` → the same `Raster` again. A workgroup owns a 16 × 16 tile (one
+thread per pixel) and bins the commands itself, in the same dispatch, in rounds of 256: each thread tests one
+command's bounding box against the tile, a Hillis-Steele scan in workgroup memory (two barriers per step) gives the
+selected commands their slots so the compacted list keeps paint order — no atomics, nothing nondeterministic — and
+every pixel thread then draws only those, with the per-pixel kernel's own evaluator. A skipped command had zero
+coverage on the whole tile, so the output is **bit-identical** to the per-pixel kernel
+(`render/tests/raster_tile_test.br` asserts a difference of 0, including more than one round per tile and groups that
+span rounds; the benchmark checks it at 1280 × 720 and 1920 × 1080 too).
+
+`render/bench/run_bench.sh` times the three on a UI-like scene (cards with shadow, face, border and three text lines).
+Apple Silicon, `--target wgpu` (Metal), release build, whole call including encoding, upload, readback and packing:
+
+| scene | CPU reference | per-pixel kernel | tiled kernel |
+|---|---|---|---|
+| 1280 × 720, 633 commands | 17 ms | 78 ms | **12 ms** |
+| 1280 × 720, 1925 commands | 26 ms | 222 ms | **13 ms** |
+| 1920 × 1080, 1925 commands | 69 ms | 562 ms | **43 ms** |
+
+On `--target simd` (the kernel emulated on CPU threads) the tiled kernel is about 1.8 × faster than the per-pixel one
+but two orders of magnitude slower than the CPU reference: that target is a portability fallback, not a renderer.
+Where the tiled kernel's time goes (dispatch, readback, the host-side packing loop) is not profiled yet.
+
+### CPU reference rasterizer — [`render/src/raster.br`](render/src/raster.br)
 
 `rasterize(displayList, width, height)` → `Raster` (`width`, `height`, `pixels: [uint]`, `unsupported: [string]`).
 It is the oracle GPU kernels will be compared against, so it favours exact semantics over speed. Pixels are
@@ -172,10 +216,10 @@ nest, a stray pop is ignored and a group left open is composited at the end),
 exact box-Gaussian integral at the pixel centre, never drawn inside the rectangle itself, exact area coverage when
 the radius is 0); `DrawText` (the fixture 5x7 bitmap font of [`src/raster_font.br`](src/raster_font.br): a grapheme is `displayWidth`
 cells of `h / 2` by `h`, its 6x8 texel cell stretched onto the cell with exact area coverage, a hollow box for a
-grapheme the font lacks); every other kind is skipped and listed once in `unsupported` (`DrawImage`, `MarkedText`). `pixelHex(raster, x, y)`
-and `toPpm(raster)` (plain-text P3, over white) serve tests and debugging;
+grapheme the font lacks); every other kind is skipped and listed once in `unsupported` (`DrawImage`, `MarkedText`).
+`pixelHex(raster, x, y)` and `toPpm(raster)` (plain-text P3, over white) serve tests and debugging;
 `boring run tests/render_todo_ppm.br > todo.ppm` renders the Todo application's first frame.
-Tests: `raster_test.br`, `raster_todo_test.br` (interpreter and transpiled).
+Tests: `render/tests/raster_test.br`, `tests/raster_todo_test.br` (interpreter and transpiled).
 
 ## Accessibility — [`src/semantics.br`](src/semantics.br) (layer 3, third slice)
 
@@ -317,7 +361,7 @@ disabled handle is ignored.
 Tests: `events_test.br`, `events_extra_test.br` (disabled, capture, editing, Enter/Escape). Behaviour change: a press no longer
 activates (it captures); use `click` (or down + up) where a Button must fire.
 
-Not yet: IME / composition and undo, key capture-target-bubble phases, momentum scrolling, scroll-into-view on focus.
+Not yet: momentum scrolling, scroll-into-view on focus.
 
 ## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
 
@@ -370,6 +414,25 @@ collapse to one row, ShiftUp/ShiftDown extend from the anchor, SelectAll takes e
 computes the new set and writes it whole (`setSelection`); `anchor` / `cursor` are mounted slots. Selected rows of a
 `List`/`MultiList` are painted with the theme's `Selection` color (a `FillRect` behind the row). `tests/multi_list_test.br`.
 
+## Key dispatch phases
+
+A key travels the path root → focused target → root (`keyPress`): CAPTURE observers (root toward the target), the target's
+default behaviour (editing, activation, traversal), then BUBBLE observers (target toward the root) that see whether the
+default consumed it (`KeyEvent.handled`). `stop` ends observer delivery and `prevent` suppresses the default — independent,
+so an ancestor still observes a key a text field consumed. Internal API as the draft prescribes (no public modifier yet):
+`rt.observeKeys(handle, capture, handler)` with a `KeyHandler` that sets `e.stop` / `e.prevent`; observers die with their
+node; a throwing one is reported (`callback`, source `key`). `tests/key_phase_test.br`.
+
+## Undo / redo
+
+`undo(rt, host)` / `redo(rt, host)` (keys `"Undo"` / `"Redo"`, which a host maps from Cmd/Ctrl-Z) step the focused
+TextField through a per-identity history (`Runtime.histories`, dropped on unmount). Every accepted edit is recorded;
+consecutive single-character typing, or consecutive deletions, with the caret where the last left it form one group — a
+caret move, a switch between typing and deleting, a paste/selection replacement or an IME commit starts a new one. Undo
+restores the caret too and is itself an accepted binding write; an edit clears redo. A bound value that differs from what
+the history last produced (an external replacement) clears it, so undo never crosses that boundary. Not here: mapping the
+caret through an external replacement. `tests/undo_test.br`.
+
 ## Focus ring
 
 `layout` marks the keyboard-focused control with a live `focused` prop; the painter then emits a `StrokeRect`
@@ -410,4 +473,7 @@ transpiled — `tests/text_unicode_test.br`. A real font engine replaces the cel
 ```bash
 tests/run_tests.sh              # interpreter (`boring run`); needs a `boring` on PATH (cargo install --path ../boring)
 tests/run_tests_transpiled.sh   # transpiler (`boring build` + `cargo run`), same files
+render/tests/run_tests.sh       # the renderer project's own tests (interpreter)
+render/tests/run_kernel_tests.sh # kernel rasterizer vs CPU reference on the real simd and wgpu targets
+render/bench/run_bench.sh       # CPU reference vs per-pixel vs tiled kernel timings
 ```

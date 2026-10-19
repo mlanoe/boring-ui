@@ -1,0 +1,357 @@
+# boring-ui kernel rasterizer, step 1 of docs/design-notes/boring-ui-renderer-draft.md: the CPU reference
+# (raster.br) as a one-thread-per-pixel kernel. Each thread walks the whole resolved command list in paint
+# order, O(pixels x commands), deliberately naive; tiling is step 2. The CPU reference is the oracle: a test
+# renders both and compares every channel (`maxDifference`, tolerance one LSB, the headroom f32 needs).
+#
+# Resolved commands (`encode`): one CPU pass turns `[Command]` into two flat numeric buffers, because kernels
+# take numbers, not strings. Everything the pixel loop would otherwise have to track is baked in here:
+#   - clips: `PushClip`/`PopClip` disappear, every drawing command carries its effective clip rectangle;
+#   - text: a `DrawText` becomes one `GLYPH` command per grapheme (cell rectangle + glyph index);
+#   - colours: parsed to a packed straight-alpha 0xAARRGGBB;
+#   - groups: opacity values are clamped, stray `PopOpacity` dropped, unclosed groups closed at the end. At most
+#     `MAX_DEPTH` groups nest (a kernel has fixed per-thread storage); a deeper one is drawn as if it were
+#     not a group (the CPU reference has no such limit; deeper nesting is the one intended difference).
+#
+# Layout, per command `i`: `f[12 i ..]` = box x0 y0 x1 y1, clip x0 y0 x1 y1, value, dx, dy, (unused);
+# `u[4 i ..]` = op, colour, glyph, (unused). Ops: 0 fill, 1 stroke, 2 shadow, 3 glyph, 4 push opacity, 5 pop.
+#
+# Everything the kernel calls is a top-level function over float32 scalars (the one helper shape that every
+# target accepts: `boring run`, `--target simd`, `--target wgpu`).
+
+use render.display_list.*
+use render.raster.*
+use render.raster_font.*
+
+pub let MAX_DEPTH = 4
+
+pub struct Encoded:
+    pub [float32] f
+    pub [uint] u
+    pub int count
+
+def push(mut [float32] f, mut [uint] u, int op, Area box, Area clip, float value, float dx, float dy, uint color, int glyph):
+    f.push(box.x0 as float32)
+    f.push(box.y0 as float32)
+    f.push(box.x1 as float32)
+    f.push(box.y1 as float32)
+    f.push(clip.x0 as float32)
+    f.push(clip.y0 as float32)
+    f.push(clip.x1 as float32)
+    f.push(clip.y1 as float32)
+    f.push(value as float32)
+    f.push(dx as float32)
+    f.push(dy as float32)
+    f.push(0.0 as float32)
+    u.push(op as uint)
+    u.push(color)
+    u.push(glyph as uint)
+    u.push(0 as uint)
+
+def uint pack(Rgba c):
+    (((c.a << 24) | (c.r << 16) | (c.g << 8) | c.b) as uint)
+
+def float clampUnit(float v):
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    v
+
+pub def Encoded encode([Command] list, int width, int height):
+    mut [float32] f = []
+    mut [uint] u = []
+    var count = 0
+    mut [Area] clips = [Area(x0 = 0.0, y0 = 0.0, x1 = width as float, y1 = height as float)]
+    # one entry per open PushOpacity: whether it became a real group (false once MAX_DEPTH are open)
+    mut [bool] groups = []
+    var open = 0
+    for c in list:
+        let clip = clips[clips.length - 1]
+        let none = Area(x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0)
+        if c.kind == "FillRect":
+            let color = parseColor(c.hex)
+            if color.a > 0:
+                push(f, u, 0, areaOf(c), clip, 0.0, 0.0, 0.0, pack(color), 0)
+                count += 1
+        elif c.kind == "StrokeRect":
+            let color = parseColor(c.hex)
+            if color.a > 0:
+                push(f, u, 1, areaOf(c), clip, c.value, 0.0, 0.0, pack(color), 0)
+                count += 1
+        elif c.kind == "DrawShadow":
+            let color = parseColor(c.hex)
+            if color.a > 0:
+                push(f, u, 2, areaOf(c), clip, c.value, c.dx, c.dy, pack(color), 0)
+                count += 1
+        elif c.kind == "DrawText":
+            let color = parseColor(c.hex)
+            let cell = c.h / 2.0
+            if color.a > 0 and c.h > 0.0:
+                var pen = c.x
+                let string content = c.text
+                for i in 0..<content.graphemeCount:
+                    let string g = content.graphemeSlice(i, i + 1)
+                    let cells = g.displayWidth
+                    if cells > 0:
+                        let span = cell * cells as float
+                        push(f, u, 3, Area(x0 = pen, y0 = c.y, x1 = pen + span, y1 = c.y + c.h), clip, 0.0, 0.0, 0.0, pack(color), glyphIndex(g))
+                        count += 1
+                    pen += cell * cells as float
+        elif c.kind == "PushClip":
+            clips.push(intersect(areaOf(c), clip))
+        elif c.kind == "PopClip":
+            if clips.length > 1:
+                _ = clips.pop()
+        elif c.kind == "PushOpacity":
+            if open < MAX_DEPTH:
+                push(f, u, 4, none, clip, clampUnit(c.value), 0.0, 0.0, 0 as uint, 0)
+                count += 1
+                open += 1
+                groups.push(true)
+            else:
+                groups.push(false)
+        elif c.kind == "PopOpacity":
+            if groups.length > 0:
+                let real = groups[groups.length - 1]
+                _ = groups.pop()
+                if real:
+                    push(f, u, 5, none, clip, 0.0, 0.0, 0.0, 0 as uint, 0)
+                    count += 1
+                    open -= 1
+    # groups still open at the end of the list are composited there, as the CPU reference does
+    while open > 0:
+        push(f, u, 5, Area(x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0), Area(x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0), 0.0, 0.0, 0.0, 0 as uint, 0)
+        count += 1
+        open -= 1
+    Encoded(f = f, u = u, count = count)
+
+# ── device helpers (top-level so every target accepts them) ───────────────────────────────────────
+
+# `max`/`min` on two float32 operands (the interpreter's own reject a float literal beside a float32).
+pub def float32 maxf(float32 a, float32 b):
+    if a > b:
+        return a
+    b
+
+pub def float32 minf(float32 a, float32 b):
+    if a < b:
+        return a
+    b
+
+pub def float32 overlap(float32 lo, float32 hi, float32 a, float32 b):
+    maxf(0.0, minf(hi, b) - maxf(lo, a))
+
+# erf(x), Abramowitz-Stegun 7.1.26: the same polynomial the CPU reference uses.
+pub def float32 erfOfDevice(float32 x):
+    let t = 1.0 / (1.0 + 0.3275911 * abs(x))
+    let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t
+    let y = 1.0 - poly * exp(0.0 - x * x)
+    if x < 0.0:
+        return 0.0 - y
+    y
+
+# Coverage of pixel `i` along one axis by [a, b] blurred with `sigma` (exact overlap when sigma is 0).
+pub def float32 gauss(float32 i, float32 a, float32 b, float32 sigma):
+    if sigma <= 0.0:
+        return overlap(i, i + 1.0, a, b)
+    let c = i + 0.5
+    let k = sigma * 1.4142135
+    0.5 * (erfOfDevice((b - c) / k) - erfOfDevice((a - c) / k))
+
+# One blended channel: source (already scaled by its alpha) over a destination kept at `keep`, rounded.
+pub def float32 mix(float32 src, float32 dst, float32 keep):
+    floor(src + dst * keep + 0.5)
+
+kernel RasterKernel:
+    let [float32]'global f
+    let [uint]'global u
+    let [uint]'global atlas
+    mut [float32]'unified out
+    let int count
+    let int width
+    let int height
+
+    init([float32]'global fi, [uint]'global ui, [uint]'global ai, int n, int w, int h):
+        f = fi
+        u = ui
+        atlas = ai
+        count = n
+        width = w
+        height = h
+        out = [0.0 for ..<w * h * 4]
+
+    def ():
+        let px = .block.x * .block_dim.x + .thread.x
+        let py = .block.y * .block_dim.y + .thread.y
+        if px < width and py < height:
+            let fx = px as float32
+            let fy = py as float32
+            # layer d occupies lay[4 d ..]: alpha, red, green, blue (premultiplied, integral); opac[d] is its opacity
+            var [float32, 20] lay = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            var [float32, 5] opac = [1.0, 1.0, 1.0, 1.0, 1.0]
+            var int depth = 0
+            for i in 0..<count:
+                let fb = i * 12
+                let ub = i * 4
+                let op = u[ub]
+                if op == 4:
+                    depth += 1
+                    opac[depth] = f[fb + 8]
+                    lay[depth * 4] = 0.0
+                    lay[depth * 4 + 1] = 0.0
+                    lay[depth * 4 + 2] = 0.0
+                    lay[depth * 4 + 3] = 0.0
+                elif op == 5:
+                    let sb = depth * 4
+                    let o = opac[depth]
+                    let sa = lay[sb] * o
+                    if lay[sb] > 0.0 or lay[sb + 1] > 0.0 or lay[sb + 2] > 0.0 or lay[sb + 3] > 0.0:
+                        let db = sb - 4
+                        let keep = 1.0 - sa / 255.0
+                        lay[db] = mix(sa, lay[db], keep)
+                        lay[db + 1] = mix(lay[sb + 1] * o, lay[db + 1], keep)
+                        lay[db + 2] = mix(lay[sb + 2] * o, lay[db + 2], keep)
+                        lay[db + 3] = mix(lay[sb + 3] * o, lay[db + 3], keep)
+                    depth -= 1
+                else:
+                    let col = u[ub + 1]
+                    let ca = ((col >> 24) & 255) as float32
+                    let cr = ((col >> 16) & 255) as float32
+                    let cg = ((col >> 8) & 255) as float32
+                    let cb = (col & 255) as float32
+                    let bx0 = f[fb]
+                    let by0 = f[fb + 1]
+                    let bx1 = f[fb + 2]
+                    let by1 = f[fb + 3]
+                    let kx0 = f[fb + 4]
+                    let ky0 = f[fb + 5]
+                    let kx1 = f[fb + 6]
+                    let ky1 = f[fb + 7]
+                    let dbase = depth * 4
+                    # fill and stroke: `passes` non-overlapping rectangles, each blended in turn (a stroke is four bands)
+                    var passes = 1
+                    if op == 1:
+                        passes = 4
+                    if op == 2 or op == 3:
+                        passes = 1
+                    for band in 0..<passes:
+                        var float32 cover = 0.0
+                        if op == 0 or op == 1:
+                            var rx0 = bx0
+                            var ry0 = by0
+                            var rx1 = bx1
+                            var ry1 = by1
+                            var live = true
+                            if op == 1:
+                                let w = minf(f[fb + 8], minf((bx1 - bx0) / 2.0, (by1 - by0) / 2.0))
+                                if w <= 0.0:
+                                    live = false
+                                if band == 0:
+                                    ry1 = by0 + w
+                                if band == 1:
+                                    ry0 = by1 - w
+                                if band == 2:
+                                    ry0 = by0 + w
+                                    rx1 = bx0 + w
+                                    ry1 = by1 - w
+                                if band == 3:
+                                    rx0 = bx1 - w
+                                    ry0 = by0 + w
+                                    ry1 = by1 - w
+                            if live:
+                                let ax0 = maxf(rx0, kx0)
+                                let ay0 = maxf(ry0, ky0)
+                                let ax1 = maxf(ax0, minf(rx1, kx1))
+                                let ay1 = maxf(ay0, minf(ry1, ky1))
+                                cover = overlap(fx, fx + 1.0, ax0, ax1) * overlap(fy, fy + 1.0, ay0, ay1)
+                        elif op == 2:
+                            let sigma = maxf(f[fb + 8], 0.0) / 2.0
+                            let reach = 3.0 * sigma
+                            let sx0 = bx0 + f[fb + 9]
+                            let sx1 = bx1 + f[fb + 9]
+                            let sy0 = by0 + f[fb + 10]
+                            let sy1 = by1 + f[fb + 10]
+                            let first_x = maxf(maxf(floor(sx0 - reach), floor(kx0)), 0.0)
+                            let first_y = maxf(maxf(floor(sy0 - reach), floor(ky0)), 0.0)
+                            let last_x = minf(ceil(sx1 + reach), ceil(kx1)) - 1.0
+                            let last_y = minf(ceil(sy1 + reach), ceil(ky1)) - 1.0
+                            if bx1 > bx0 and by1 > by0 and fx >= first_x and fx <= last_x and fy >= first_y and fy <= last_y:
+                                let inside = overlap(fx, fx + 1.0, bx0, bx1) * overlap(fy, fy + 1.0, by0, by1)
+                                let clipped = overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
+                                cover = gauss(fx, sx0, sx1, sigma) * gauss(fy, sy0, sy1, sigma) * (1.0 - inside) * clipped
+                        else:
+                            # glyph: the cell (bx0..bx1 by by0..by1) holds a 6 x 8 texel glyph; sum the lit texels' area
+                            let g = u[ub + 2] as int
+                            let cw = bx1 - bx0
+                            let ch = by1 - by0
+                            if cw > 0.0 and ch > 0.0 and fx >= maxf(floor(bx0), floor(kx0)) and fx <= minf(ceil(bx1), ceil(kx1)) - 1.0 and fy >= maxf(floor(by0), floor(ky0)) and fy <= minf(ceil(by1), ceil(ky1)) - 1.0:
+                                let tw = cw / 6.0
+                                let th = ch / 8.0
+                                let col_lo = maxf(floor((fx - bx0) / tw), 0.0) as int
+                                let col_hi = ceil(minf((fx + 1.0 - bx0) / tw, 6.0)) as int - 1
+                                let row_lo = maxf(floor((fy - by0) / th), 0.0) as int
+                                let row_hi = ceil(minf((fy + 1.0 - by0) / th, 8.0)) as int - 1
+                                var float32 sum = 0.0
+                                var r = row_lo
+                                while r <= row_hi:
+                                    let over_y = overlap(fy, fy + 1.0, by0 + r as float32 * th, by0 + (r + 1) as float32 * th)
+                                    var c = col_lo
+                                    while c <= col_hi:
+                                        if atlas[g * 48 + r * 6 + c] > 0:
+                                            sum += overlap(fx, fx + 1.0, bx0 + c as float32 * tw, bx0 + (c + 1) as float32 * tw) * over_y
+                                        c += 1
+                                    r += 1
+                                cover = sum * overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
+                        if cover > 0.0:
+                            let a = ca * minf(cover, 1.0)
+                            let k = a / 255.0
+                            let keep = 1.0 - k
+                            lay[dbase] = mix(a, lay[dbase], keep)
+                            lay[dbase + 1] = mix(cr * k, lay[dbase + 1], keep)
+                            lay[dbase + 2] = mix(cg * k, lay[dbase + 2], keep)
+                            lay[dbase + 3] = mix(cb * k, lay[dbase + 3], keep)
+            # four floats per pixel (alpha, red, green, blue): reading a [uint] back from a kernel does not
+            # type-check on the host yet, and these are integral values <= 255, so exact
+            let o = (py * width + px) * 4
+            out[o] = lay[0]
+            out[o + 1] = lay[1]
+            out[o + 2] = lay[2]
+            out[o + 3] = lay[3]
+
+# The CPU reference's `Raster`, produced by the kernel.
+pub def Raster rasterizeGpu([Command] list, int width, int height) throws:
+    let encoded = encode(list, width, height)
+    if encoded.count == 0 or width <= 0 or height <= 0:
+        return rasterize([], width, height)
+    let small = buildAtlas()
+    mut [uint] atlas = []
+    for i in 0..<small.length:
+        atlas.push(small[i] as uint)
+    mut k = RasterKernel(encoded.f, encoded.u, atlas, encoded.count, width, height)
+    kernel:
+        k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
+    let [float32] raw = k.out
+    mut [uint] pixels = []
+    for i in 0..<(width * height):
+        let a = raw[i * 4] as int
+        let r = raw[i * 4 + 1] as int
+        let g = raw[i * 4 + 2] as int
+        let b = raw[i * 4 + 3] as int
+        pixels.push((((a << 24) | (r << 16) | (g << 8) | b) as uint))
+    Raster(width = width, height = height, pixels = pixels, unsupported = [])
+
+# The largest per-channel difference between two pictures of the same size (255 when the sizes differ).
+pub def int maxDifference(Raster a, Raster b):
+    if a.width != b.width or a.height != b.height:
+        return 255
+    var worst = 0
+    for i in 0..<a.pixels.length:
+        let p = a.pixels[i] as int
+        let q = b.pixels[i] as int
+        for shift in [0, 8, 16, 24]:
+            var d = ((p >> shift) & 255) - ((q >> shift) & 255)
+            if d < 0:
+                d = 0 - d
+            if d > worst:
+                worst = d
+    worst

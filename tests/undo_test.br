@@ -1,0 +1,80 @@
+# Undo / redo of TextField edits: grouping, redo, caret restore, the external-replacement boundary, unmount.
+# Run: boring run tests/undo_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.events.*
+
+view Form:
+    state string text = ""
+
+    req string shownText():
+        text
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            TextField(value = text, label = "name", placeholder = "")
+
+struct FormBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Form()
+
+def Form__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Form__State else (Form__State())
+
+def string shown(Runtime rt):
+    Form().shownText(state(rt))
+
+let host = ViewRoot(inner = FormBuilder())
+mut rt = Runtime()
+rt.start(host)
+assert(keyPress(rt, host, "Tab"))                       # focus the field
+
+# Typing a word is one undo group.
+assert(typeText(rt, host, "h"))
+assert(typeText(rt, host, "i"))
+assert(typeText(rt, host, "!"))
+assert_eq(shown(rt), "hi!")
+assert(undo(rt, host))
+assert_eq(shown(rt), "")
+assert(!undo(rt, host), "nothing left to undo")
+assert(redo(rt, host))
+assert_eq(shown(rt), "hi!")
+assert(!redo(rt, host))
+
+# A caret move, a paste and a switch to deleting each start a new group; undo restores the caret too.
+assert(keyPress(rt, host, "Home"))
+assert(typeText(rt, host, "Hello, "))                    # a multi-character insert: its own group
+assert_eq(shown(rt), "Hello, hi!")
+assert(keyPress(rt, host, "Backspace"))
+assert(keyPress(rt, host, "Backspace"))
+assert_eq(shown(rt), "Hellohi!")
+assert(undo(rt, host))                                   # both backspaces at once
+assert_eq(shown(rt), "Hello, hi!")
+assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1)))[0], 7)
+assert(undo(rt, host))
+assert_eq(shown(rt), "hi!")
+assert(redo(rt, host))
+assert_eq(shown(rt), "Hello, hi!")
+
+# A new edit clears redo.
+assert(undo(rt, host))
+assert(typeText(rt, host, "X"))
+assert(!redo(rt, host), "an edit clears redo")
+
+# The key names a host maps Cmd-Z / Shift-Cmd-Z to.
+assert(keyPress(rt, host, "Undo"))
+assert(keyPress(rt, host, "Redo"))
+
+# An authoritative external replacement is a boundary: undo cannot cross it.
+# (A value written behind the editor's back — an accessibility set-value here — is the same situation.)
+assert(act(rt, host, rt.focus else (Handle(id = -1, generation = -1)), "setText", "from the app"))
+assert_eq(shown(rt), "from the app")
+assert(!undo(rt, host), "history does not cross an external replacement")
+assert(keyPress(rt, host, "End"))
+assert(typeText(rt, host, "?"))
+assert_eq(shown(rt), "from the app?")
+assert(undo(rt, host))
+assert_eq(shown(rt), "from the app")
+print("undo ok")

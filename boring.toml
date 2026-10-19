@@ -1,0 +1,8 @@
+[project]
+name    = "boring-ui"
+version = "0.1.0"
+
+# boring-ui is a plain `src/` consumed through a `[deps]` path entry named `ui`. Its one dependency is the
+# renderer project in ./render (the display-list `Command` lives there), referenced as `render.<module>`.
+[deps]
+render = "render"

@@ -1,0 +1,8 @@
+[project]
+name    = "boring-ui-render"
+version = "0.1.0"
+
+# The boring-ui renderers: the display-list vocabulary (`Command`), the CPU reference rasterizer and the
+# kernel rasterizer. A plain `src/` consumed through a `[deps]` path entry named `render` (the modules
+# reference each other as `render.<module>`), kept apart from boring-ui's view runtime so it builds for
+# `--target simd|wgpu` without it.

@@ -1,0 +1,22 @@
+# boring-ui display list vocabulary: the `Command` a scene emits (scene.br) and a renderer consumes
+# (raster.br, raster_gpu.br). Kept apart from scene.br, which needs the whole view machinery, so a renderer
+# can be built for the kernel targets without pulling it in.
+#
+# Vocabulary (`kind`): `FillRect`, `StrokeRect` (inside border), `DrawShadow`, `DrawText`, `DrawImage`,
+# `MarkedText`, `PushClip`/`PopClip`, `PushOpacity`/`PopOpacity`.
+
+pub struct Command:
+    pub string kind
+    pub float x
+    pub float y
+    pub float w
+    pub float h
+    pub string text = ""
+    pub string color = ""
+    pub int node = -1
+    # Border width / opacity / shadow radius, and a shadow's offset.
+    # The color token resolved against the node's theme (`#RRGGBB[AA]`); `color` keeps the semantic token.
+    pub var string hex = ""
+    pub var float value = 0.0
+    pub var float dx = 0.0
+    pub var float dy = 0.0

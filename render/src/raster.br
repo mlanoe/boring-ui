@@ -33,9 +33,18 @@
 # opacity, so overlapping descendants do not become darker). Every other command kind is skipped and its kind
 # listed in `Raster.unsupported` (so a test, or a reader, can see what the picture is missing).
 
-use ui.layout.*
-use ui.raster_font.*
-use ui.scene.*
+use render.display_list.*
+use render.raster_font.*
+
+def float rmax(float a, float b):
+    if a > b:
+        return a
+    b
+
+def float rmin(float a, float b):
+    if a < b:
+        return a
+    b
 
 pub struct Raster:
     pub int width
@@ -46,25 +55,25 @@ pub struct Raster:
 
 # A rectangle by its edges (x0 <= x1, y0 <= y1), in pixels.
 @derive(Clone)
-struct Area:
-    float x0
-    float y0
-    float x1
-    float y1
+pub struct Area:
+    pub float x0
+    pub float y0
+    pub float x1
+    pub float y1
 
-struct Rgba:
-    int r
-    int g
-    int b
-    int a
+pub struct Rgba:
+    pub int r
+    pub int g
+    pub int b
+    pub int a
 
-def Area intersect(Area a, Area b):
-    let x0 = maxOf(a.x0, b.x0)
-    let y0 = maxOf(a.y0, b.y0)
-    Area(x0 = x0, y0 = y0, x1 = maxOf(x0, minOf(a.x1, b.x1)), y1 = maxOf(y0, minOf(a.y1, b.y1)))
+pub def Area intersect(Area a, Area b):
+    let x0 = rmax(a.x0, b.x0)
+    let y0 = rmax(a.y0, b.y0)
+    Area(x0 = x0, y0 = y0, x1 = rmax(x0, rmin(a.x1, b.x1)), y1 = rmax(y0, rmin(a.y1, b.y1)))
 
-def Area areaOf(Command c):
-    Area(x0 = c.x, y0 = c.y, x1 = c.x + maxOf(c.w, 0.0), y1 = c.y + maxOf(c.h, 0.0))
+pub def Area areaOf(Command c):
+    Area(x0 = c.x, y0 = c.y, x1 = c.x + rmax(c.w, 0.0), y1 = c.y + rmax(c.h, 0.0))
 
 def int hexDigit(string c):
     let i = "0123456789abcdefABCDEF".indexOf(c) else (0)
@@ -77,7 +86,7 @@ def int hexByte(string s, int at):
 
 # `#RRGGBB[AA]`, or a few named colours (what `resolveColor` leaves for the painter); anything else is
 # magenta, so a token the rasterizer does not know shows up instead of vanishing.
-def Rgba parseColor(string token):
+pub def Rgba parseColor(string token):
     if (token.length == 7 or token.length == 9) and token[0..<1] == "#":
         var alpha = 255
         if token.length == 9:
@@ -115,16 +124,16 @@ def uint blend(uint dst, float sr, float sg, float sb, float sa):
 def fillArea(mut [uint] px, int base, int width, int height, Area area, Rgba color):
     if area.x1 <= area.x0 or area.y1 <= area.y0 or color.a == 0:
         return
-    let first_x = maxOf(area.x0.floor(), 0.0) as int
-    let first_y = maxOf(area.y0.floor(), 0.0) as int
-    let last_x = minOf(area.x1.ceil() - 1.0, (width - 1) as float) as int
-    let last_y = minOf(area.y1.ceil() - 1.0, (height - 1) as float) as int
+    let first_x = rmax(area.x0.floor(), 0.0) as int
+    let first_y = rmax(area.y0.floor(), 0.0) as int
+    let last_x = rmin(area.x1.ceil() - 1.0, (width - 1) as float) as int
+    let last_y = rmin(area.y1.ceil() - 1.0, (height - 1) as float) as int
     var y = first_y
     while y <= last_y:
-        let cover_y = minOf((y + 1) as float, area.y1) - maxOf(y as float, area.y0)
+        let cover_y = rmin((y + 1) as float, area.y1) - rmax(y as float, area.y0)
         var x = first_x
         while x <= last_x:
-            let cover = (minOf((x + 1) as float, area.x1) - maxOf(x as float, area.x0)) * cover_y
+            let cover = (rmin((x + 1) as float, area.x1) - rmax(x as float, area.x0)) * cover_y
             if cover > 0.0:
                 let a = color.a as float * cover
                 let k = a / 255.0
@@ -136,7 +145,7 @@ def fillArea(mut [uint] px, int base, int width, int height, Area area, Rgba col
 # The inside border of `c`, `c.value` wide (clamped so it never exceeds half the rectangle): top and bottom
 # bands across the full width, left and right bands between them.
 def strokeArea(mut [uint] px, int base, int width, int height, Area box, float line, Area clip, Rgba color):
-    let w = minOf(line, minOf((box.x1 - box.x0) / 2.0, (box.y1 - box.y0) / 2.0))
+    let w = rmin(line, rmin((box.x1 - box.x0) / 2.0, (box.y1 - box.y0) / 2.0))
     if w <= 0.0:
         return
     fillArea(px, base, width, height, intersect(Area(x0 = box.x0, y0 = box.y0, x1 = box.x1, y1 = box.y0 + w), clip), color)
@@ -155,7 +164,7 @@ def float erfOf(float x):
 
 # Length of the overlap of [lo, hi] with [a, b].
 def float overlap1d(float lo, float hi, float a, float b):
-    maxOf(0.0, minOf(hi, b) - maxOf(lo, a))
+    rmax(0.0, rmin(hi, b) - rmax(lo, a))
 
 # Coverage of pixel `i` along one axis by the interval [a, b] blurred with `sigma` (exact overlap when sigma is 0).
 def float gauss1d(int i, float a, float b, float sigma):
@@ -168,16 +177,16 @@ def float gauss1d(int i, float a, float b, float sigma):
 def shadowArea(mut [uint] px, int base, int width, int height, Area box, float radius, float dx, float dy, Area clip, Rgba color):
     if box.x1 <= box.x0 or box.y1 <= box.y0 or color.a == 0:
         return
-    let sigma = maxOf(radius, 0.0) / 2.0
+    let sigma = rmax(radius, 0.0) / 2.0
     let reach = 3.0 * sigma
     let sx0 = box.x0 + dx
     let sx1 = box.x1 + dx
     let sy0 = box.y0 + dy
     let sy1 = box.y1 + dy
-    let first_x = maxOf(maxOf((sx0 - reach).floor(), clip.x0.floor()), 0.0) as int
-    let first_y = maxOf(maxOf((sy0 - reach).floor(), clip.y0.floor()), 0.0) as int
-    let last_x = minOf(minOf((sx1 + reach).ceil(), clip.x1.ceil()) - 1.0, (width - 1) as float) as int
-    let last_y = minOf(minOf((sy1 + reach).ceil(), clip.y1.ceil()) - 1.0, (height - 1) as float) as int
+    let first_x = rmax(rmax((sx0 - reach).floor(), clip.x0.floor()), 0.0) as int
+    let first_y = rmax(rmax((sy0 - reach).floor(), clip.y0.floor()), 0.0) as int
+    let last_x = rmin(rmin((sx1 + reach).ceil(), clip.x1.ceil()) - 1.0, (width - 1) as float) as int
+    let last_y = rmin(rmin((sy1 + reach).ceil(), clip.y1.ceil()) - 1.0, (height - 1) as float) as int
     var y = first_y
     while y <= last_y:
         let cover_y = gauss1d(y, sy0, sy1, sigma)
@@ -203,19 +212,19 @@ def drawGlyph(mut [uint] px, int base, int width, int height, [uint8] atlas, int
         return
     let tw = cw / GLYPH_COLUMNS as float
     let th = ch / GLYPH_ROWS as float
-    let first_x = maxOf(maxOf(cx.floor(), clip.x0.floor()), 0.0) as int
-    let first_y = maxOf(maxOf(cy.floor(), clip.y0.floor()), 0.0) as int
-    let last_x = minOf(minOf((cx + cw).ceil(), clip.x1.ceil()) - 1.0, (width - 1) as float) as int
-    let last_y = minOf(minOf((cy + ch).ceil(), clip.y1.ceil()) - 1.0, (height - 1) as float) as int
+    let first_x = rmax(rmax(cx.floor(), clip.x0.floor()), 0.0) as int
+    let first_y = rmax(rmax(cy.floor(), clip.y0.floor()), 0.0) as int
+    let last_x = rmin(rmin((cx + cw).ceil(), clip.x1.ceil()) - 1.0, (width - 1) as float) as int
+    let last_y = rmin(rmin((cy + ch).ceil(), clip.y1.ceil()) - 1.0, (height - 1) as float) as int
     var y = first_y
     while y <= last_y:
-        let row_lo = maxOf(((y as float - cy) / th).floor(), 0.0) as int
-        let row_hi = minOf(((y + 1) as float - cy) / th, GLYPH_ROWS as float).ceil() as int - 1
+        let row_lo = rmax(((y as float - cy) / th).floor(), 0.0) as int
+        let row_hi = rmin(((y + 1) as float - cy) / th, GLYPH_ROWS as float).ceil() as int - 1
         let clip_y = overlap1d(y as float, (y + 1) as float, clip.y0, clip.y1)
         var x = first_x
         while x <= last_x:
-            let col_lo = maxOf(((x as float - cx) / tw).floor(), 0.0) as int
-            let col_hi = minOf(((x + 1) as float - cx) / tw, GLYPH_COLUMNS as float).ceil() as int - 1
+            let col_lo = rmax(((x as float - cx) / tw).floor(), 0.0) as int
+            let col_hi = rmin(((x + 1) as float - cx) / tw, GLYPH_COLUMNS as float).ceil() as int - 1
             var cover = 0.0
             var r = row_lo
             while r <= row_hi:
@@ -228,7 +237,7 @@ def drawGlyph(mut [uint] px, int base, int width, int height, [uint8] atlas, int
                 r += 1
             cover = cover * overlap1d(x as float, (x + 1) as float, clip.x0, clip.x1) * clip_y
             if cover > 0.0:
-                let a = color.a as float * minOf(cover, 1.0)
+                let a = color.a as float * rmin(cover, 1.0)
                 let k = a / 255.0
                 let i = base + y * width + x
                 px[i] = blend(px[i], color.r as float * k, color.g as float * k, color.b as float * k, a)
@@ -284,7 +293,7 @@ pub def Raster rasterize([Command] list, int width, int height):
             if clips.length > 1:
                 _ = clips.pop()
         elif c.kind == "PushOpacity":
-            opacities.push(maxOf(0.0, minOf(c.value, 1.0)))
+            opacities.push(rmax(0.0, rmin(c.value, 1.0)))
             let top = opacities.length * count
             if store.length < top + count:
                 var k = 0

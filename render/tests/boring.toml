@@ -1,0 +1,12 @@
+[project]
+name    = "boring-ui-render-tests"
+version = "0.1.0"
+
+[deps]
+render = ".."
+
+# `--target simd|wgpu` does not add the crates the grapheme/display-width string methods lower to
+# (`--target std` does): declared here until the compiler does it.
+[dependencies]
+unicode-segmentation = "1"
+unicode-width = "0.1"
