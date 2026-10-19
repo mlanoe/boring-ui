@@ -37,7 +37,7 @@ pub struct Raster:
     pub [string] unsupported
 
 # A rectangle by its edges (x0 <= x1, y0 <= y1), in pixels.
-@derive(Default, Clone)
+@derive(Clone)
 struct Area:
     float x0
     float y0
