@@ -140,9 +140,9 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors, bool off):
                 errors.push("AccessibilityHeading (node {p.id}) applies to static text, not '{target.role}'")
         out.push(target)
         return
-    if k == "List":
+    if (k == "List" or k == "MultiList"):
         mut l = node(p, "list")
-        l.value = p.props["selection"] else ("")
+        l.value = (p.props["selection"] else ("")).split("\n").join(",")
         for c in p.children:
             walk(c, l.children, errors, off)
         out.push(l)

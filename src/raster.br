@@ -20,6 +20,13 @@
 # original rectangle (coverage there is scaled by the rectangle's own uncovered fraction), so a translucent
 # child does not show its own shadow through itself.
 #
+# `DrawText` draws the fixture bitmap font (raster_font.br): a grapheme occupies `displayWidth` cells of
+# `h / 2` by `h` pixels (the layout's text metrics), starting at (`x`, `y`) and advancing left to right; each
+# glyph's 6x8 texel cell is stretched onto its cell and a pixel's coverage is the exact area of the lit texels
+# it overlaps (a box filter, never double-counted), so a glyph anti-aliases like a rectangle does. A grapheme
+# the font has no shape for draws a hollow box; zero-width ones draw nothing. Text is not clipped to `w`, only
+# by `PushClip`.
+#
 # Implemented so far: `FillRect`, `StrokeRect` (an inside border, drawn as four non-overlapping rectangles so
 # a translucent border never double-blends at the corners), `PushClip`/`PopClip` and `PushOpacity`/`PopOpacity`
 # (group opacity: the group is drawn into its own transparent layer, then composited once at the group's
@@ -27,6 +34,7 @@
 # listed in `Raster.unsupported` (so a test, or a reader, can see what the picture is missing).
 
 use ui.layout.*
+use ui.raster_font.*
 use ui.scene.*
 
 pub struct Raster:
@@ -188,6 +196,58 @@ def shadowArea(mut [uint] px, int base, int width, int height, Area box, float r
             x += 1
         y += 1
 
+# One glyph of the atlas stretched onto the cell (`cx`, `cy`, `cw` x `ch`), coverage accumulated per pixel from
+# the lit texels it overlaps, then blended once.
+def drawGlyph(mut [uint] px, int base, int width, int height, [uint8] atlas, int glyph, float cx, float cy, float cw, float ch, Area clip, Rgba color):
+    if cw <= 0.0 or ch <= 0.0 or color.a == 0:
+        return
+    let tw = cw / GLYPH_COLUMNS as float
+    let th = ch / GLYPH_ROWS as float
+    let first_x = maxOf(maxOf(cx.floor(), clip.x0.floor()), 0.0) as int
+    let first_y = maxOf(maxOf(cy.floor(), clip.y0.floor()), 0.0) as int
+    let last_x = minOf(minOf((cx + cw).ceil(), clip.x1.ceil()) - 1.0, (width - 1) as float) as int
+    let last_y = minOf(minOf((cy + ch).ceil(), clip.y1.ceil()) - 1.0, (height - 1) as float) as int
+    var y = first_y
+    while y <= last_y:
+        let row_lo = maxOf(((y as float - cy) / th).floor(), 0.0) as int
+        let row_hi = minOf(((y + 1) as float - cy) / th, GLYPH_ROWS as float).ceil() as int - 1
+        let clip_y = overlap1d(y as float, (y + 1) as float, clip.y0, clip.y1)
+        var x = first_x
+        while x <= last_x:
+            let col_lo = maxOf(((x as float - cx) / tw).floor(), 0.0) as int
+            let col_hi = minOf(((x + 1) as float - cx) / tw, GLYPH_COLUMNS as float).ceil() as int - 1
+            var cover = 0.0
+            var r = row_lo
+            while r <= row_hi:
+                let over_y = overlap1d(y as float, (y + 1) as float, cy + r as float * th, cy + (r + 1) as float * th)
+                var c = col_lo
+                while c <= col_hi:
+                    if atlas[glyph * GLYPH_TEXELS + r * GLYPH_COLUMNS + c] > 0:
+                        cover += overlap1d(x as float, (x + 1) as float, cx + c as float * tw, cx + (c + 1) as float * tw) * over_y
+                    c += 1
+                r += 1
+            cover = cover * overlap1d(x as float, (x + 1) as float, clip.x0, clip.x1) * clip_y
+            if cover > 0.0:
+                let a = color.a as float * minOf(cover, 1.0)
+                let k = a / 255.0
+                let i = base + y * width + x
+                px[i] = blend(px[i], color.r as float * k, color.g as float * k, color.b as float * k, a)
+            x += 1
+        y += 1
+
+def drawText(mut [uint] px, int base, int width, int height, [uint8] atlas, Command c, Area clip, Rgba color):
+    let cell = c.h / 2.0
+    var pen = c.x
+    # `let string` and the local copy of the field: transpiled, `g.displayWidth` on an untyped let and a
+    # `graphemeSlice` on `c.text` (a temporary clone) do not compile; see the compiler tasks filed for them.
+    let string content = c.text
+    for i in 0..<content.graphemeCount:
+        let string g = content.graphemeSlice(i, i + 1)
+        let cells = g.displayWidth
+        if cells > 0:
+            drawGlyph(px, base, width, height, atlas, glyphIndex(g), pen, c.y, cell * cells as float, c.h, clip, color)
+        pen += cell * cells as float
+
 # Composites the layer at offset `src` onto the one at `dst` at `opacity` (0..1): every premultiplied channel of the
 # layer is scaled by it, then blended source-over.
 def compositeLayer(mut [uint] px, int src, int dst, int count, float opacity):
@@ -205,6 +265,8 @@ pub def Raster rasterize([Command] list, int width, int height):
     mut [uint] store = [0 for ..<count]
     mut [float] opacities = []
     mut [string] skipped = []
+    # the glyph atlas is built the first time a DrawText needs it
+    var mut [uint8] atlas = []
     mut [Area] clips = [Area(x0 = 0.0, y0 = 0.0, x1 = width as float, y1 = height as float)]
     for c in list:
         let base = opacities.length * count
@@ -215,6 +277,10 @@ pub def Raster rasterize([Command] list, int width, int height):
             strokeArea(store, base, width, height, areaOf(c), c.value, clip, parseColor(c.hex))
         elif c.kind == "DrawShadow":
             shadowArea(store, base, width, height, areaOf(c), c.value, c.dx, c.dy, clip, parseColor(c.hex))
+        elif c.kind == "DrawText":
+            if atlas.length == 0:
+                atlas = buildAtlas()
+            drawText(store, base, width, height, atlas, c, clip, parseColor(c.hex))
         elif c.kind == "PushClip":
             clips.push(intersect(areaOf(c), clip))
         elif c.kind == "PopClip":

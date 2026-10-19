@@ -170,7 +170,9 @@ opacity: each group is drawn into its own layer and composited once, so overlapp
 nest, a stray pop is ignored and a group left open is composited at the end),
 `DrawShadow` (an outer shadow of the rectangle: offset by `dx`/`dy`, Gaussian-blurred with sigma = radius / 2 by the
 exact box-Gaussian integral at the pixel centre, never drawn inside the rectangle itself, exact area coverage when
-the radius is 0); every other kind is skipped and listed once in `unsupported` (`DrawText`, `DrawImage` come next). `pixelHex(raster, x, y)`
+the radius is 0); `DrawText` (the fixture 5x7 bitmap font of [`src/raster_font.br`](src/raster_font.br): a grapheme is `displayWidth`
+cells of `h / 2` by `h`, its 6x8 texel cell stretched onto the cell with exact area coverage, a hollow box for a
+grapheme the font lacks); every other kind is skipped and listed once in `unsupported` (`DrawImage`, `MarkedText`). `pixelHex(raster, x, y)`
 and `toPpm(raster)` (plain-text P3, over white) serve tests and debugging;
 `boring run tests/render_todo_ppm.br > todo.ppm` renders the Todo application's first frame.
 Tests: `raster_test.br`, `raster_todo_test.br` (interpreter and transpiled).
@@ -315,7 +317,7 @@ disabled handle is ignored.
 Tests: `events_test.br`, `events_extra_test.br` (disabled, capture, editing, Enter/Escape). Behaviour change: a press no longer
 activates (it captures); use `click` (or down + up) where a Button must fire.
 
-Not yet: IME / composition and undo, key capture-target-bubble phases, momentum scrolling, scroll-into-view on focus, multiple selection, a throwing-callback boundary (see Error reporting).
+Not yet: IME / composition and undo, key capture-target-bubble phases, momentum scrolling, scroll-into-view on focus.
 
 ## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
 
@@ -358,6 +360,15 @@ a plain scope groups without trapping. `tests/focus_scope_test.br`.
 active scope (sections as one box, then the same rule inside the winner); candidates lie in the half-plane, ranked by
 main-axis gap, then cross-axis offset, then traversal order. A host sends arrows here unless a focused TextField takes
 them as caret keys. `tests/focus_nav_test.br`. Not here: arrow keys inside `keyPress` (it has no layout).
+
+## Multiple selection
+
+`MultiList(selection: bind {string}, onMove, onDelete)` is `List` with a set of selected row keys. A plain click
+replaces the selection, `clickWith(..., "Toggle")` adds/removes a row, `"Range"` selects from the anchor; Up/Down
+collapse to one row, ShiftUp/ShiftDown extend from the anchor, SelectAll takes every row, Delete/Backspace call
+`onDelete` with the selected rows' ascending indices, and a key that leaves the model is pruned from the set. The runtime
+computes the new set and writes it whole (`setSelection`); `anchor` / `cursor` are mounted slots. Selected rows of a
+`List`/`MultiList` are painted with the theme's `Selection` color (a `FillRect` behind the row). `tests/multi_list_test.br`.
 
 ## Focus ring
 

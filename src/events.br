@@ -333,6 +333,11 @@ def Handle? focusedField(Runtime rt):
 # takes focus and captures the pointer (a TextField also places its caret). Nothing activates yet — that
 # happens on release over the same control. Returns whether a control was hit.
 pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    pointerDownWith(rt, host, placed, x, y, "")
+
+# A press with a selection modifier on a `MultiList` row: "Toggle" (Command/Ctrl) adds or removes the row,
+# "Range" (Shift) selects from the anchor to it; "" replaces the selection. Anything else ignores it.
+pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float x, float y, string mods):
     let path = hitTest(placed, x, y)
     var i = path.length - 1
     while i >= 0:
@@ -353,7 +358,7 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
                         rt.invalidateRoot()
                 return true
         i -= 1
-    selectRowAt(rt, host, placed, path)
+    selectRowAt(rt, host, placed, path, mods)
 
 # ── sliders ────────────────────────────────────────────────────────────────────────────────────
 
@@ -467,7 +472,11 @@ pub def void pointerCancel(mut Runtime rt):
 
 # A press and release at the same point.
 pub def bool click(mut Runtime rt, Builder host, Placed placed, float x, float y):
-    if !pointerDown(rt, host, placed, x, y):
+    clickWith(rt, host, placed, x, y, "")
+
+# The same with a selection modifier (see `pointerDownWith`).
+pub def bool clickWith(mut Runtime rt, Builder host, Placed placed, float x, float y, string mods):
+    if !pointerDownWith(rt, host, placed, x, y, mods):
         return false
     # A press that captured nothing (a list row selected on press) has no release to deliver.
     if rt.capture == nil:
@@ -477,20 +486,68 @@ pub def bool click(mut Runtime rt, Builder host, Placed placed, float x, float y
 # ── keyboard ──────────────────────────────────────────────────────────────────────────────────
 
 # A press that hit no control but a row of a `List` selects that row (by its key).
-def bool selectRowAt(mut Runtime rt, Builder host, Placed placed, [int] path):
+def bool selectRowAt(mut Runtime rt, Builder host, Placed placed, [int] path, string mods):
     var listId = -1
     var rowKey = ""
     for id in path:
         if let node = findPlaced(placed, id):
-            if node.kind == "List":
+            if (node.kind == "List" or node.kind == "MultiList"):
                 listId = id
                 rowKey = ""
             elif listId >= 0 and rowKey == "" and node.key != "":
                 rowKey = node.key
     if listId >= 0 and rowKey != "":
         if let h = rt.handle(listId):
+            if let list = rt.find(listId):
+                if list.kind == "MultiList":
+                    return selectMulti(rt, host, h, list, rowKey, mods)
             return act(rt, host, h, "select", rowKey)
     false
+
+# ── multiple selection ────────────────────────────────────────────────────────────────────────
+# A `MultiList` keeps its selection as a set of row keys; the runtime computes the new set and writes it whole
+# (`setSelection`). Two mounted slots hold the gesture state: `anchor` (where a range starts) and `cursor` (the
+# row keyboard extension moves from).
+
+def [string] rangeKeys([string] rows, int a, int b):
+    var lo = a
+    var hi = b
+    if lo > hi:
+        lo = b
+        hi = a
+    mut [string] out = []
+    for i in lo..=hi:
+        out.push(rows[i])
+    out
+
+def bool setMulti(mut Runtime rt, Builder host, Handle h, [string] keys, int anchor, int cursor):
+    _ = rt.write(h, "anchor", anchor)
+    _ = rt.write(h, "cursor", cursor)
+    act(rt, host, h, "setSelection", keys.join("\n"))
+
+def bool selectMulti(mut Runtime rt, Builder host, Handle h, Mounted list, string key, string mods):
+    let rows = rowKeysOf(list)
+    let idx = indexOfKey(rows, key)
+    if idx < 0:
+        return false
+    let current = selectedKeysOf(list)
+    var anchor = rt.read(h, "anchor") else (-1)
+    if mods == "Toggle":
+        mut [string] next = []
+        var had = false
+        for k in current:
+            if k == key:
+                had = true
+            else:
+                next.push(k)
+        if !had:
+            next.push(key)
+        return setMulti(rt, host, h, next, idx, idx)
+    if mods == "Range":
+        if anchor < 0 or anchor >= rows.length:
+            anchor = idx
+        return setMulti(rt, host, h, rangeKeys(rows, anchor, idx), anchor, idx)
+    setMulti(rt, host, h, [key], idx, idx)
 
 # The first `List` of the window (the one keyboard commands address).
 def Mounted? firstList(Runtime rt):
@@ -516,6 +573,8 @@ def bool listKey(mut Runtime rt, Builder host, string name):
     let keys = rowKeysOf(list)
     if keys.length == 0:
         return false
+    if list.kind == "MultiList":
+        return multiListKey(rt, host, name, list.id, keys)
     let at = indexOfKey(keys, propOf(list, "selection"))
     guard let h = rt.handle(list.id) else:
         return false
@@ -543,6 +602,63 @@ def bool listKey(mut Runtime rt, Builder host, string name):
             if name == "AltDown":
                 to = at + 1
             if to < 0 or to >= keys.length:
+                return false
+            return act(rt, host, h, "move", "{at},{to}")
+    false
+
+# MultiList keys: Up/Down move a single selection, ShiftUp/ShiftDown extend it from the anchor, SelectAll takes every
+# row, Delete/Backspace delete every selected row (`onDelete` gets their ascending indices), AltUp/AltDown move the
+# row when exactly one is selected.
+def bool multiListKey(mut Runtime rt, Builder host, string name, int listId, [string] rows):
+    guard let h = rt.handle(listId) else:
+        return false
+    # (Re-found as a local: `boring build` makes a parameter whose `.control` is moved out an owned one.)
+    guard let list = rt.find(listId) else:
+        return false
+    let current = selectedKeysOf(list)
+    var cursor = rt.read(h, "cursor") else (-1)
+    if cursor < 0 or cursor >= rows.length:
+        cursor = -1
+        if current.length > 0:
+            cursor = indexOfKey(rows, current[0])
+    if name == "SelectAll":
+        return setMulti(rt, host, h, rows, 0, rows.length - 1)
+    if name == "Up" or name == "Down" or name == "ShiftUp" or name == "ShiftDown":
+        let up = name == "Up" or name == "ShiftUp"
+        var next = 0
+        if cursor < 0:
+            if up:
+                next = rows.length - 1
+        else:
+            if up:
+                next = clampTo(cursor - 1, 0, rows.length - 1)
+            else:
+                next = clampTo(cursor + 1, 0, rows.length - 1)
+        if name == "ShiftUp" or name == "ShiftDown":
+            var anchor = rt.read(h, "anchor") else (-1)
+            if anchor < 0 or anchor >= rows.length:
+                anchor = next
+                if cursor >= 0:
+                    anchor = cursor
+            return setMulti(rt, host, h, rangeKeys(rows, anchor, next), anchor, next)
+        return setMulti(rt, host, h, [rows[next]], next, next)
+    if current.length == 0:
+        return false
+    if let control = list.control:
+        if name == "Delete" or name == "Backspace":
+            if !control.viewHandles("delete"):
+                return false
+            mut [string] indices = []
+            for i in 0..<rows.length:
+                if current.contains(rows[i]):
+                    indices.push("{i}")
+            return act(rt, host, h, "delete", indices.join(","))
+        if control.viewHandles("move") and current.length == 1:
+            let at = indexOfKey(rows, current[0])
+            var to = at - 1
+            if name == "AltDown":
+                to = at + 1
+            if to < 0 or to >= rows.length:
                 return false
             return act(rt, host, h, "move", "{at},{to}")
     false
@@ -744,7 +860,7 @@ pub def bool keyPress(mut Runtime rt, Builder host, string name):
                     return act(rt, host, f, "activate", "")
                 if node.kind == "Toggle" and name == "Space":
                     return act(rt, host, f, "toggle", "")
-    if name == "Up" or name == "Down" or name == "Delete" or name == "Backspace" or name == "AltUp" or name == "AltDown":
+    if name == "Up" or name == "Down" or name == "Delete" or name == "Backspace" or name == "AltUp" or name == "AltDown" or name == "ShiftUp" or name == "ShiftDown" or name == "SelectAll":
         if listKey(rt, host, name):
             return true
     if name == "Enter":
@@ -793,7 +909,7 @@ pub def bool scrollBy(mut Runtime rt, Builder host, Placed placed, float x, floa
     var i = path.length - 1
     while i >= 0:
         if let node = findPlaced(placed, path[i]):
-            if node.kind == "Scroll" or node.kind == "List":
+            if node.kind == "Scroll" or (node.kind == "List" or node.kind == "MultiList"):
                 let vertical = (node.props["axis"] else ("Vertical")) == "Vertical"
                 var want = restX
                 if vertical:

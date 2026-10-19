@@ -26,9 +26,10 @@ assert(firstFill >= 0)
 let f = list[firstFill]
 assert(pixelHex(picture, f.x as int, f.y as int) != "#00000000")
 
-# Text is the part this rasterizer does not draw yet, and it says so.
-assert(picture.unsupported.contains("DrawText"))
+# Text is drawn now; nothing the Todo application emits is skipped.
+assert(!picture.unsupported.contains("DrawText"))
 assert(!picture.unsupported.contains("FillRect"))
+assert_eq(picture.unsupported.length, 0)
 assert_eq(picture.pixels.length, 600 * 600)
 
 print "raster todo ok"

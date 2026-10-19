@@ -169,7 +169,7 @@ def bool isVerticalScroll(Mounted n):
     (n.props["axis"] else ("Vertical")) == "Vertical"
 
 def float gapOf(Mounted n):
-    if n.kind == "List":
+    if (n.kind == "List" or n.kind == "MultiList"):
         return 0.0
     numProp(n, "spacing") else (n.theme.metric(MetricRole.StackSpacing))
 
@@ -381,7 +381,7 @@ def Span span(Mounted n, bool horiz, float? cross):
         if grows:
             return Span(min = s.min, ideal = s.ideal, max = unbounded)
         return s
-    if k == "List":
+    if (k == "List" or k == "MultiList"):
         # A scroll viewport over a vertical stack of its rows.
         let s = stackSpan(n, false, horiz, cross)
         if !horiz:
@@ -622,7 +622,7 @@ pub def Size measure(Mounted n, Prop p):
         if flag(n, "height"):
             h = maxOf(cs.h, offeredH)
         return Size(w = w, h = h)
-    if k == "List":
+    if (k == "List" or k == "MultiList"):
         let neg = negotiate(n, false, nil, p.w)
         let listW = p.w else (neg.cross)
         let listH = p.h else (neg.total)
@@ -725,7 +725,7 @@ pub def Placed place(Mounted n, float x, float y, Size size):
         let a = alignmentOf(n)
         let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
         node.children.push(place(n.children[0], x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs))
-    elif k == "List":
+    elif (k == "List" or k == "MultiList"):
         let neg = negotiate(n, false, nil, size.w)
         let keys = flattenKeys(n)
         let most = nonNeg(neg.total - size.h)

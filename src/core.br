@@ -175,6 +175,14 @@ pub def Mounted? trapScopeOf(Mounted m, int id, Mounted? current):
             return found
     nil
 
+# The selected row keys of a `MultiList` (its `selection` prop is the keys, newline-separated).
+pub def [string] selectedKeysOf(Mounted list):
+    mut [string] out = []
+    for part in propText(list, "selection").split("\n"):
+        if part.length > 0:
+            out.push(part)
+    out
+
 # The keys of a `List`'s rows, in displayed order (one per keyed `for` iteration).
 pub def [string] rowKeysOf(Mounted list):
     mut [string] keys = []
@@ -888,7 +896,7 @@ pub struct Runtime:
         out
 
     req void collectLists(Mounted n, mut [Mounted] out):
-        if n.kind == "List":
+        if (n.kind == "List" or n.kind == "MultiList"):
             out.push(n)
         for c in n.children:
             self.collectLists(c, out)
@@ -897,6 +905,19 @@ pub struct Runtime:
     # single selected key that no longer exists is cleared").
     def void pruneSelection():
         for l in self.lists():
+            if l.kind == "MultiList":
+                # A multi-selection is intersected with the remaining keys.
+                let wanted = selectedKeysOf(l)
+                let rows = rowKeysOf(l)
+                mut [string] kept = []
+                for k in wanted:
+                    if rows.contains(k):
+                        kept.push(k)
+                if kept.length != wanted.length:
+                    let before = sink.reports
+                    self.dispatch(l, "setSelection", kept.join("\n"))
+                    self.settle(before)
+                continue
             let chosen = propText(l, "selection")
             if chosen != "":
                 if !rowKeysOf(l).contains(chosen):

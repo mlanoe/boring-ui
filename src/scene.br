@@ -173,11 +173,20 @@ def paintNode(Placed p, mut [Command] out):
         mut text = Command(kind = "DrawText", x = p.x + box + gap, y = p.y, w = p.w - box - gap, h = p.h, text = label, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
-    if p.kind == "Clip" or p.kind == "Scroll" or p.kind == "List":
+    if p.kind == "Clip" or p.kind == "Scroll" or (p.kind == "List" or p.kind == "MultiList"):
         out.push(cmd("PushClip", p, "", ""))
+    if p.kind == "List" or p.kind == "MultiList":
+        # Selected rows get the theme's selection color behind their content (a `MultiList` keeps several keys,
+        # newline-separated in its `selection` prop; a `List` one).
+        let chosen = (p.props["selection"] else ("")).split("\n")
+        for c in p.children:
+            if c.key != "" and chosen.contains(c.key):
+                mut band = cmd("FillRect", c, "", "selected")
+                band.hex = p.theme.color(ColorRole.Selection)
+                out.push(band)
     for c in p.children:
         paint(c, out)
-    if p.kind == "Clip" or p.kind == "Scroll" or p.kind == "List":
+    if p.kind == "Clip" or p.kind == "Scroll" or (p.kind == "List" or p.kind == "MultiList"):
         out.push(cmd("PopClip", p, "", ""))
     if p.kind == "Opacity":
         mut close = cmd("PopOpacity", p, "", "")
