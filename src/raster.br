@@ -238,11 +238,8 @@ def drawGlyph(mut [uint] px, int base, int width, int height, [uint8] atlas, int
 def drawText(mut [uint] px, int base, int width, int height, [uint8] atlas, Command c, Area clip, Rgba color):
     let cell = c.h / 2.0
     var pen = c.x
-    # `let string` and the local copy of the field: transpiled, `g.displayWidth` on an untyped let and a
-    # `graphemeSlice` on `c.text` (a temporary clone) do not compile; see the compiler tasks filed for them.
-    let string content = c.text
-    for i in 0..<content.graphemeCount:
-        let string g = content.graphemeSlice(i, i + 1)
+    for i in 0..<c.text.graphemeCount:
+        let g = c.text.graphemeSlice(i, i + 1)
         let cells = g.displayWidth
         if cells > 0:
             drawGlyph(px, base, width, height, atlas, glyphIndex(g), pen, c.y, cell * cells as float, c.h, clip, color)
