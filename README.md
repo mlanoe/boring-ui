@@ -458,6 +458,23 @@ fixture font measures with `displayWidth` (wide CJK/emoji = 2 cells, combining m
 whole clusters, and a click maps to the nearest cluster boundary (`graphemeAtCells`). Same behaviour interpreted and
 transpiled — `tests/text_unicode_test.br`. A real font engine replaces the cell model with shaped advances.
 
+## Window — [`examples/todo_window`](examples/todo_window)
+
+The Todo application in a native window: the view runtime lays it out headlessly, its display list is encoded once
+(`todoFrame`), and the tiled kernel rasterizer draws it straight into the pixel buffer `screen.present` shows (on
+`--target wgpu` that buffer never goes back to the host).
+
+```bash
+examples/todo_window/run.sh     # boring build --target wgpu, then run (Escape quits)
+```
+
+It is a plain `Screen` program: top-level `let`s (`frame`, `bins`) are ordinary code that runs once before the
+window opens, and `TileKernel(frame.f, frame.u, ...)` takes any expression — its `init` uploads the encoded display
+list, the atlas and the sizes. The compiler needs no patching of the generated crate any more.
+
+Still open: the frame is drawn from one fixed display list (input does not change the picture), and the loop
+renders every frame instead of when something changed.
+
 ## Not here yet
 
 - **Transpiled runtime is real, not interpreter-only** (checked 2026-10-16 against `boring` 4637855e): every

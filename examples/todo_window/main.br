@@ -5,10 +5,7 @@
 # What this does NOT do yet (and why) is the point of the exercise; see README.md, "Window".
 #   - the frame is drawn from one fixed display list: the kernel's buffers cannot be replaced from inside the
 #     render loop, so input does not change the picture;
-#   - the loop renders every frame instead of when something changed;
-#   - the Screen program builds the kernel without running its `init`: the constructor arguments below are
-#     ignored by the compiler today and `run.sh` performs that init on the generated crate (a bare `boring build`
-#     opens a blank 1-pixel-buffer window).
+#   - the loop renders every frame instead of when something changed.
 
 use boring.ui.*
 use ui.core.*
@@ -46,28 +43,13 @@ def [uint] atlasWords():
         atlas.push(small[i] as uint)
     atlas
 
-# A top-level kernel constructor can only take direct expressions (no `let` before it), so each argument
-# recomputes the frame (once, at startup, when the init runs).
-def [float32] frameF():
-    todoFrame().f
-
-def [uint] frameU():
-    todoFrame().u
-
-def int frameCount():
-    todoFrame().count
-
-def [uint] frameStarts():
-    bin(todoFrame(), 640, 360).starts
-
-def [uint] frameList():
-    bin(todoFrame(), 640, 360).list
-
-def int frameAcross():
-    bin(todoFrame(), 640, 360).across
+# Top-level code is ordinary code, run once before the window opens: the frame is laid out and encoded a
+# single time and the kernel constructor takes the values directly (its `init` uploads them).
+let frame = todoFrame()
+let bins = bin(frame, width, height)
 
 let screen = Screen(Dimension(width, height), title = "boring-ui Todo")
-mut k = TileKernel(frameF(), frameU(), atlasWords(), frameStarts(), frameList(), frameAcross(), frameCount(), width, height)
+mut k = TileKernel(frame.f, frame.u, atlasWords(), bins.starts, bins.list, bins.across, frame.count, width, height)
 
 kernel:
     loop:
