@@ -1,0 +1,11 @@
+[project]
+name    = "todo-window"
+version = "0.1.0"
+main    = "main.br"
+
+# The Todo application drawn into a native window by the tiled kernel rasterizer.
+# Build: boring build --target wgpu   (or simd)
+[deps]
+ui     = "../.."
+render = "../../render"
+todo   = "../todo"

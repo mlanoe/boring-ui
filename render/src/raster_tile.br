@@ -25,7 +25,7 @@ kernel TileKernel:
     let [float32]'global f
     let [uint]'global u
     let [uint]'global atlas
-    mut [float32]'unified out
+    mut [uint]'unified out
     let int count
     let int chunks
     let int width
@@ -41,7 +41,7 @@ kernel TileKernel:
         chunks = (n + 255) / 256
         width = w
         height = h
-        out = [0.0 for ..<w * h * 4]
+        out = [0 as uint for ..<w * h]
 
     def ():
         let tid = .thread.y * 16 + .thread.x
@@ -214,12 +214,12 @@ kernel TileKernel:
                             lay[dbase + 3] = mix(cb * k, lay[dbase + 3], keep)
             sync
         if px < width and py < height:
-            # four floats per pixel (alpha, red, green, blue), as in raster_gpu.br
-            let o = (py * width + px) * 4
-            out[o] = lay[0]
-            out[o + 1] = lay[1]
-            out[o + 2] = lay[2]
-            out[o + 3] = lay[3]
+            # packed 0xAARRGGBB (premultiplied, the channels are integral and <= 255): the layout `Screen` presents
+            let pa = lay[0] as uint
+            let pr = lay[1] as uint
+            let pg = lay[2] as uint
+            let pb = lay[3] as uint
+            out[py * width + px] = (pa << 24) | (pr << 16) | (pg << 8) | pb
 
 # The CPU reference's `Raster`, produced by the tiled kernel.
 pub def Raster rasterizeTiled([Command] list, int width, int height) throws:
@@ -233,12 +233,5 @@ pub def Raster rasterizeTiled([Command] list, int width, int height) throws:
     mut k = TileKernel(encoded.f, encoded.u, atlas, encoded.count, width, height)
     kernel:
         k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
-    let [float32] raw = k.out
-    mut [uint] pixels = []
-    for i in 0..<(width * height):
-        let a = raw[i * 4] as int
-        let r = raw[i * 4 + 1] as int
-        let g = raw[i * 4 + 2] as int
-        let b = raw[i * 4 + 3] as int
-        pixels.push((((a << 24) | (r << 16) | (g << 8) | b) as uint))
+    let [uint] pixels = k.out
     Raster(width = width, height = height, pixels = pixels, unsupported = [])

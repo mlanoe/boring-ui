@@ -200,6 +200,28 @@ On `--target simd` (the kernel emulated on CPU threads) the tiled kernel is abou
 but two orders of magnitude slower than the CPU reference: that target is a portability fallback, not a renderer.
 Where the tiled kernel's time goes (dispatch, readback, the host-side packing loop) is not profiled yet.
 
+### Window — [`examples/todo_window`](examples/todo_window)
+
+The Todo application in a native window, drawn by the tiled kernel straight into the buffer `screen.present` shows
+(`--target wgpu`: the pixels never go back to the host). `examples/todo_window/run.sh` builds and runs it; the Todo
+frame it shows is the one `tests/raster_gpu_todo_test.br` already proves bit-identical to the CPU reference on wgpu.
+The tiled kernel's output field is a packed `[uint]'unified`, which `screen.present` accepts as well as `'surface`
+(`rasterizeTiled` reads the same field back for tests). The Todo paints no window background of its own, so
+`main.br` puts the theme's `WindowBackground` under the display list (otherwise the transparent pixels showed
+black). No screen capture was possible where this was written: the kernel's output buffer was dumped and viewed
+instead (all 640 × 360 pixels opaque, the Todo drawn).
+
+What `Screen` lacks for a UI, found by building and probing this on `--target wgpu`:
+
+| Gap | What happens |
+|---|---|
+| Host code in a Screen program | Only a `Screen(...)`/kernel constructor or a literal may appear at top level, and a render loop takes only kernel calls, scalar assignments and `if`s: no `let`, no host function call. The headless part (layout, display list, encode) therefore lives in functions and the kernel constructor's arguments recompute it |
+| Kernel constructor | A Screen program builds its kernel with `TileKernel::new(device, queue)` and **never runs `init`**: the constructor arguments are ignored, every buffer stays empty and the window shows nothing (found the hard way: a blank window). `run.sh` adds the init (upload of the encoded list, atlas, sizes) to the generated crate |
+| Module-level constants | Dropped from the generated crate (emitted as locals of `main`): `run.sh` patches `charWidth`/`unbounded` and the renderer's constants back in |
+| New frame data | The display list lives in kernel array fields, and `k.colors = ...` (an array assigned in the loop) does not compile (`no field`, `screen` out of scope). A scene that changes needs the buffers replaced, so input cannot change the picture yet |
+| Events | `screen.mouse.x` assigned to an `int` kernel field mismatches (`isize` vs `i32`); `screen.resized` does not compile in a loop condition on wgpu (and the surface is not reallocated on resize); there is no text input, IME, wheel or modifier state, only `key("k")` / `key_pressed("k")` with a literal key |
+| Redraw | `loop:` renders every frame; there is no redraw-on-demand tied to the runtime's invalidation |
+
 ### CPU reference rasterizer — [`render/src/raster.br`](render/src/raster.br)
 
 `rasterize(displayList, width, height)` → `Raster` (`width`, `height`, `pixels: [uint]`, `unsupported: [string]`).

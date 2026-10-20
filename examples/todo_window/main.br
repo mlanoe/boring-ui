@@ -1,0 +1,68 @@
+# The Todo application (examples/todo) in a native window: the view runtime lays it out headlessly, its display
+# list is encoded once, and the tiled kernel rasterizer (render/src/raster_tile.br) draws it straight into the
+# pixel buffer `screen.present` shows. On `--target wgpu` that buffer never goes back to the host.
+#
+# What this does NOT do yet (and why) is the point of the exercise; see README.md, "Window".
+#   - the frame is drawn from one fixed display list: the kernel's buffers cannot be replaced from inside the
+#     render loop, so input does not change the picture;
+#   - the loop renders every frame instead of when something changed;
+#   - the Screen program builds the kernel without running its `init`: the constructor arguments below are
+#     ignored by the compiler today and `run.sh` performs that init on the generated crate (a bare `boring build`
+#     opens a blank 1-pixel-buffer window).
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use render.display_list.*
+use render.raster.*
+use render.raster_font.*
+use render.raster_gpu.*
+use render.raster_tile.*
+use todo.todo.*
+
+struct AppRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): TodoApp()
+
+let width = 640
+let height = 360
+
+# The headless part: lay the Todo application out and encode its display list.
+def Encoded todoFrame():
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = AppRoot()))
+    let placed = layout(rt, 640.0, 360.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+    # the Todo paints no window background of its own: put the theme's under it (opaque pixels, not transparent)
+    mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = 640.0, h = 360.0, hex = placed.theme.colorNamed("WindowBackground"))]
+    for c in displayList(placed):
+        list.push(c)
+    encode(list, 640, 360)
+
+def [uint] atlasWords():
+    let small = buildAtlas()
+    mut [uint] atlas = []
+    for i in 0..<small.length:
+        atlas.push(small[i] as uint)
+    atlas
+
+# A top-level kernel constructor can only take direct expressions (no `let` before it), so each argument
+# recomputes the frame (once, at startup, when the init runs).
+def [float32] frameF():
+    todoFrame().f
+
+def [uint] frameU():
+    todoFrame().u
+
+def int frameCount():
+    todoFrame().count
+
+let screen = Screen(Dimension(width, height), title = "boring-ui Todo")
+mut k = TileKernel(frameF(), frameU(), atlasWords(), frameCount(), width, height)
+
+kernel:
+    loop:
+        k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
+        screen.present(k.out)
+        if screen.key("\x1B"):
+            break

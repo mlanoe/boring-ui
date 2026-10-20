@@ -9,3 +9,7 @@
 /render/tests/*_rust/
 /render/bench/*_simd/
 /render/bench/*_wgpu/
+/tests/*_simd/
+/tests/*_wgpu/
+/examples/*/*_simd/
+/examples/*/*_wgpu/

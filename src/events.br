@@ -923,11 +923,6 @@ pub def bool keyPress(mut Runtime rt, Builder host, string name):
         i -= 1
     handled
 
-# Calls an observer. (A free `throws` function: `boring build` drops the error of a throwing trait-object method called
-# directly inside `try`, but propagates it through a function — the same shape as `deliverAction`.)
-def void deliverKey(KeyHandler h, mut KeyEvent e) throws:
-    h.onKey(e)
-
 # What node `id`'s observers of one phase decided, in registration order; nothing once propagation was stopped.
 # A throwing observer is reported (kind "callback", source "key") and counts as no answer.
 def KeyResponse observed(mut Runtime rt, int id, bool capture, KeyEvent seen, bool stopped):
@@ -943,7 +938,7 @@ def KeyResponse observed(mut Runtime rt, int id, bool capture, KeyEvent seen, bo
             continue
         mut ev = KeyEvent(key = seen.key, target = seen.target, handled = seen.handled)
         try:
-            deliverKey(o.handler, ev)
+            o.handler.onKey(ev)
             if ev.stop:
                 stop = true
             if ev.prevent:
