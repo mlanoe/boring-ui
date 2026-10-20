@@ -71,3 +71,22 @@ assert_eq(lerpColor("red", "blue", 0.5), "red")
 assert_eq(lerpColor("red", "blue", 1.0), "blue")
 
 print "anim ok"
+
+# ── keyframes: piecewise-linear progress through the stops, endpoints implicit ───────────────────
+let kf = keyframes(1000.0, [0.4, 0.7], [1.2, 0.95])
+assert(keyframesValid(kf), "valid stops")
+assert_eq(progress(kf, 0.0), 0.0)
+assert_eq(progress(kf, 400.0), 1.2)                       # the first stop
+assert_eq(progress(kf, 200.0), 0.6)                       # halfway to it
+assert_eq(progress(kf, 700.0), 0.95)                      # the dip
+assert_eq(progress(kf, 1000.0), 1.0)                      # settles at the end
+assert(progress(kf, 850.0) > 0.95 and progress(kf, 850.0) < 1.0, "between the last stop and the end")
+assert(isDone(kf, 1000.0), "its duration is the keyframe duration")
+assert(!isDone(kf, 999.0))
+assert_eq(reduced(kf).curve, "Linear")                    # reduced motion drops the curve
+# Invalid stops fall back to a linear ramp instead of misbehaving.
+assert(!keyframesValid(keyframes(1000.0, [0.7, 0.4], [1.0, 1.0])), "times must increase")
+assert(!keyframesValid(keyframes(1000.0, [0.5], [])), "one value per time")
+assert(!keyframesValid(keyframes(1000.0, [1.0], [1.0])), "times stay inside (0, 1)")
+assert_eq(progress(keyframes(1000.0, [0.7, 0.4], [1.0, 1.0]), 500.0), 0.5)
+print("anim keyframes ok")

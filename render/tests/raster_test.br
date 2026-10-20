@@ -25,8 +25,9 @@ assert_eq(one.unsupported.length, 0)
 
 let over = rasterize([rect(0.0, 0.0, 2.0, 1.0, "#0000FF"), rect(0.0, 0.0, 1.0, 1.0, "#FF000080")], 2, 1)
 assert_eq(pixelHex(over, 1, 0), "#FF0000FF")
-# 0x80 red over opaque blue: alpha stays opaque, red = 128, blue = 255 * (1 - 128/255) = 127
-assert_eq(pixelHex(over, 0, 0), "#FF80007F")
+# 0x80 red over opaque blue, blended in LINEAR light: alpha stays opaque; red = enc(0.502) = 188 and blue =
+# enc(1 * (1 - 0.502)) = 187 (a blend in the encoded space would give 128 and 127)
+assert_eq(pixelHex(over, 0, 0), "#FFBC00BB")
 
 # ── fractional edges anti-alias by exact area coverage ────────────────────────────────────────────
 
@@ -98,9 +99,9 @@ assert_eq(pixelHex(cutBorder, 3, 0), "#00000000")
 
 # Two overlapping opaque rectangles at 50%: the overlap is the top rectangle at 50%, not darker.
 let group = rasterize([fade(0.5), rect(0.0, 0.0, 2.0, 1.0, "#FF0000"), rect(1.0, 0.0, 2.0, 1.0, "#0000FF"), unfade()], 3, 1)
-assert_eq(pixelHex(group, 0, 0), "#80800000")
-assert_eq(pixelHex(group, 1, 0), "#80000080")
-assert_eq(pixelHex(group, 2, 0), "#80000080")
+assert_eq(pixelHex(group, 0, 0), "#80BC0000")    # a half-opaque red: 128 alpha, linear 0.5 encodes to 188
+assert_eq(pixelHex(group, 1, 0), "#800000BC")
+assert_eq(pixelHex(group, 2, 0), "#800000BC")
 
 # The same two rectangles each blended at 50% on their own would darken the overlap (control).
 let each = rasterize([rect(0.0, 0.0, 2.0, 1.0, "#FF000080"), rect(1.0, 0.0, 2.0, 1.0, "#0000FF80")], 3, 1)
@@ -113,18 +114,18 @@ assert_eq(pixelHex(rasterize([fade(7.0), rect(0.0, 0.0, 1.0, 1.0, "#FF0000"), un
 
 # The group composites over what was already painted underneath.
 let under = rasterize([rect(0.0, 0.0, 1.0, 1.0, "#0000FF"), fade(0.5), rect(0.0, 0.0, 1.0, 1.0, "#FF0000"), unfade()], 1, 1)
-assert_eq(pixelHex(under, 0, 0), "#FF800080")   # red 128, blue 255 * (1 - 128/255) = 127.5 -> 128
+assert_eq(pixelHex(under, 0, 0), "#FFBC00BC")   # both halves are linear 0.5: 188
 
 # Nested groups multiply: 0.5 * 0.5 = 0.25, and a group left open is still composited.
 let nestedFade = rasterize([fade(0.5), fade(0.5), rect(0.0, 0.0, 1.0, 1.0, "#FFFFFF"), unfade(), unfade()], 1, 1)
-assert_eq(pixelHex(nestedFade, 0, 0), "#40404040")
+assert_eq(pixelHex(nestedFade, 0, 0), "#40898989")   # alpha 0.25; the premultiplied linear value is halved twice (via its 8-bit encoding, 188)
 let open = rasterize([fade(0.5), rect(0.0, 0.0, 1.0, 1.0, "#FFFFFF")], 1, 1)
-assert_eq(pixelHex(open, 0, 0), "#80808080")
+assert_eq(pixelHex(open, 0, 0), "#80BCBCBC")
 
 # A stray PopOpacity is ignored, and a clip inside a group still applies.
 assert_eq(pixelHex(rasterize([unfade(), rect(0.0, 0.0, 1.0, 1.0, "#FF0000")], 1, 1), 0, 0), "#FFFF0000")
 let clippedGroup = rasterize([fade(0.5), clip(0.0, 0.0, 1.0, 1.0), rect(0.0, 0.0, 2.0, 1.0, "#FFFFFF"), pop(), unfade()], 2, 1)
-assert_eq(pixelHex(clippedGroup, 0, 0), "#80808080")
+assert_eq(pixelHex(clippedGroup, 0, 0), "#80BCBCBC")
 assert_eq(pixelHex(clippedGroup, 1, 0), "#00000000")
 
 
@@ -212,13 +213,13 @@ assert_eq(pixelHex(eye, 10, 0), "#00000000")   # column 5 is the gap
 
 # Glyphs advance one cell each; a space is blank; the colour's alpha scales the mask.
 let two = rasterize([text(0.0, 0.0, 24.0, "I I", "#FF000080")], 40, 24)
-assert_eq(pixelHex(two, 4, 0), "#80800000")    # first I
+assert_eq(pixelHex(two, 4, 0), "#80BC0000")    # first I
 assert_eq(pixelHex(two, 16, 0), "#00000000")   # the space's cell
-assert_eq(pixelHex(two, 28, 0), "#80800000")   # second I, two cells (24 px) on
+assert_eq(pixelHex(two, 28, 0), "#80BC0000")   # second I, two cells (24 px) on
 
 # A glyph lands on fractional positions with exact area coverage: shifted half a pixel, column 1 starts at 2.5.
 let shifted = rasterize([text(0.5, 0.0, 24.0, "I", "#FFFFFF")], 12, 24)
-assert_eq(pixelHex(shifted, 2, 0), "#80808080")
+assert_eq(pixelHex(shifted, 2, 0), "#80BCBCBC")
 assert_eq(pixelHex(shifted, 3, 0), "#FFFFFFFF")
 
 # A grapheme without a glyph draws the hollow box (column 0 is 7F: all seven ink rows), a wide one spans two cells.
@@ -244,7 +245,7 @@ assert_eq(pixelHex(cutText, 5, 0), "#00000000")
 let offscreen = rasterize([text(-30.0, -10.0, 24.0, "III", "#FFFFFF"), text(100.0, 100.0, 24.0, "I", "#FFFFFF")], 12, 24)
 assert_eq(offscreen.pixels.length, 12 * 24)
 let fadedText = rasterize([fade(0.5), text(0.0, 0.0, 24.0, "I", "#FFFFFF"), unfade()], 12, 24)
-assert_eq(pixelHex(fadedText, 4, 0), "#80808080")
+assert_eq(pixelHex(fadedText, 4, 0), "#80BCBCBC")
 
 # An ordinary size (the layout's 16 px body: 8 x 16 cells) draws something in every glyph cell of a word.
 let word = rasterize([text(0.0, 0.0, 16.0, "Hello", "#000000")], 40, 16)
@@ -260,6 +261,30 @@ for i in 0..<5:
         inked += 1
 assert_eq(inked, 5)
 
+
+def Command marked(float x, float y, float w, float h, string hex):
+    Command(kind = "MarkedText", x = x, y = y, w = w, h = h, text = "ni", hex = hex)
+
+# ── MarkedText: the input method's composition underline ──────────────────────────────────────────
+
+# One pixel thick at a 16 px row, along the bottom of the row, across the composing text's width only.
+let under = rasterize([marked(2.0, 4.0, 6.0, 16.0, "#000000")], 12, 24)
+assert_eq(pixelHex(under, 3, 19), "#FF000000")
+assert_eq(pixelHex(under, 2, 19), "#FF000000")
+assert_eq(pixelHex(under, 7, 19), "#FF000000")
+assert_eq(pixelHex(under, 8, 19), "#00000000")    # right of the composing text
+assert_eq(pixelHex(under, 1, 19), "#00000000")    # left of it
+assert_eq(pixelHex(under, 3, 18), "#00000000")    # a single pixel row
+assert_eq(pixelHex(under, 3, 20), "#00000000")
+assert_eq(under.unsupported.length, 0)
+
+# Thicker for a taller row (h / 16, rounded down), clipped like anything else.
+let thick = rasterize([clip(0.0, 0.0, 5.0, 40.0), marked(2.0, 4.0, 6.0, 32.0, "#FF0000"), pop()], 12, 40)
+assert_eq(pixelHex(thick, 3, 35), "#FFFF0000")
+assert_eq(pixelHex(thick, 3, 34), "#FFFF0000")
+assert_eq(pixelHex(thick, 3, 33), "#00000000")
+assert_eq(pixelHex(thick, 5, 35), "#00000000")    # cut by the clip
+
 # ── colours ───────────────────────────────────────────────────────────────────────────────────────
 
 let named = rasterize([rect(0.0, 0.0, 1.0, 1.0, "red"), rect(1.0, 0.0, 1.0, 1.0, "no-such-colour"), rect(2.0, 0.0, 1.0, 1.0, "#abcdef")], 3, 1)
@@ -273,6 +298,61 @@ let picture = rasterize([Command(kind = "DrawImage", x = 0.0, y = 0.0, w = 4.0, 
 assert_eq(picture.unsupported.length, 1)
 assert_eq(picture.unsupported[0], "DrawImage")
 assert_eq(pixelHex(picture, 0, 0), "#00000000")
+
+# ── DrawImage: bilinear, linear-light sampling of a decoded image ─────────────────────────────────
+
+def Command picture(float x, float y, float w, float h, string name):
+    Command(kind = "DrawImage", x = x, y = y, w = w, h = h, text = name)
+
+let redBlue = Bitmap(name = "rb", width = 2, height = 1, pixels = [0xFFFF0000 as uint, 0xFF0000FF as uint])
+# 1:1 maps texels onto pixels exactly
+let same = rasterizeImages([picture(0.0, 0.0, 2.0, 1.0, "rb")], [redBlue], 2, 1)
+assert_eq(same.unsupported.length, 0)
+assert_eq(pixelHex(same, 0, 0), "#FFFF0000")
+assert_eq(pixelHex(same, 1, 0), "#FF0000FF")
+# stretched 2x: the outer pixels clamp to the edge texels, the inner ones blend them (in linear light, so the
+# green channel of a red/blue mix stays 0 and red falls off faster than a straight average)
+let wide = rasterizeImages([picture(0.0, 0.0, 4.0, 1.0, "rb")], [redBlue], 4, 1)
+assert_eq(pixelHex(wide, 0, 0), "#FFFF0000")
+assert_eq(pixelHex(wide, 3, 0), "#FF0000FF")
+assert(((wide.pixels[1] >> 16) & 255) > ((wide.pixels[2] >> 16) & 255))
+assert(((wide.pixels[1] >> 16) & 255) < 255 and ((wide.pixels[2] >> 0) & 255) < 255)
+# a translucent texel blends like a translucent fill of the same colour
+let glass = Bitmap(name = "g", width = 1, height = 1, pixels = [0x80FF0000 as uint])
+assert_eq(pixelHex(rasterizeImages([picture(0.0, 0.0, 1.0, 1.0, "g")], [glass], 1, 1), 0, 0), pixelHex(rasterize([rect(0.0, 0.0, 1.0, 1.0, "#FF000080")], 1, 1), 0, 0))
+# edges anti-alias like a rectangle's: half a pixel of cover is half the alpha; a clip cuts the picture
+let edgy = rasterizeImages([picture(0.5, 0.0, 1.0, 1.0, "g")], [glass], 2, 1)
+assert_eq(pixelHex(edgy, 0, 0), pixelHex(rasterize([rect(0.5, 0.0, 1.0, 1.0, "#FF000080")], 2, 1), 0, 0))
+let cut = rasterizeImages([clip(0.0, 0.0, 1.0, 1.0), picture(0.0, 0.0, 2.0, 1.0, "rb"), pop()], [redBlue], 2, 1)
+assert_eq(pixelHex(cut, 1, 0), "#00000000")
+# a name with no image is skipped and reported
+let missing = rasterizeImages([picture(0.0, 0.0, 2.0, 1.0, "other")], [redBlue], 2, 1)
+assert_eq(missing.unsupported[0], "DrawImage")
+
+
+# ── colour pipeline: blending happens in linear light ─────────────────────────────────────────────
+
+# The sRGB transfer functions round-trip every 8-bit value, and mid-gray (0x80) is only 21.6% of white's light.
+var roundTrips = true
+for c in 0..<256:
+    if encode8(srgbToLinear(c as float)) != c:
+        roundTrips = false
+assert(roundTrips)
+assert(srgbToLinear(128.0) > 0.2158 and srgbToLinear(128.0) < 0.2160)
+assert_eq(encode8(srgbToLinear(255.0)), 255)
+assert_eq(encode8(0.0), 0)
+assert_eq(encode8(1.7), 255)                       # clamped
+
+# Half white over black gives 188 (the encoding of linear 0.5), not the 128 an encoded-space blend would;
+# half black over white gives 187, symmetric within rounding. Opaque colours pass through unchanged.
+assert_eq(pixelHex(rasterize([rect(0.0, 0.0, 1.0, 1.0, "#000000"), rect(0.0, 0.0, 1.0, 1.0, "#FFFFFF80")], 1, 1), 0, 0), "#FFBCBCBC")
+assert_eq(pixelHex(rasterize([rect(0.0, 0.0, 1.0, 1.0, "#FFFFFF"), rect(0.0, 0.0, 1.0, 1.0, "#00000080")], 1, 1), 0, 0), "#FFBBBBBB")
+assert_eq(pixelHex(rasterize([rect(0.0, 0.0, 1.0, 1.0, "#336699")], 1, 1), 0, 0), "#FF336699")
+
+# A half-covered pixel of dark text on white is lighter in linear light than the encoded-space 128: the anti-aliasing
+# weight is the geometry's, the lightness the transfer function's.
+let edge2 = rasterize([rect(0.0, 0.0, 1.0, 1.0, "#FFFFFF"), rect(0.5, 0.0, 0.5, 1.0, "#000000")], 1, 1)
+assert_eq(pixelHex(edge2, 0, 0), "#FFBCBCBC")   # linear 0.5 encodes to 188, independently computed
 
 # ── PPM ───────────────────────────────────────────────────────────────────────────────────────────
 

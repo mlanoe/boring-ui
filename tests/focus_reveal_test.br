@@ -1,0 +1,70 @@
+# Scroll-into-view on focus: moving focus outside a viewport scrolls the minimum needed to reveal the control.
+# Run: boring run tests/focus_reveal_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+
+view Page:
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                Button(label = "start", onActivate = ():
+                    pass)
+                for i in 0..<9:
+                    Text("l{i}")
+                Button(label = "end", onActivate = ():
+                    pass)
+
+view Stack:
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                for i in 0..<6:
+                    Button(label = "b{i}", onActivate = ():
+                        pass)
+
+struct StackBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Stack()
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed laid(Runtime rt):
+    let p = layout(rt, 100.0, 48.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def string offset(Runtime rt):
+    laid(rt).children[0].props["scroll"] else ("?")
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+assert_eq(offset(rt), "0")
+
+# `start` is already visible: nothing moves.
+assert(keyPress(rt, host, "Tab"))
+assert(!revealFocus(rt, host, laid(rt)))
+assert_eq(offset(rt), "0")
+
+# `end` lies below the viewport: scrolled until its bottom edge meets the viewport's (clamped to the content).
+assert(keyPress(rt, host, "Tab"))
+assert(revealFocus(rt, host, laid(rt)))
+assert_eq(offset(rt), "160")
+assert(!revealFocus(rt, host, laid(rt)), "now visible")
+
+# Back to `start`: scrolled up just far enough.
+assert(keyPress(rt, host, "ShiftTab"))
+assert(revealFocus(rt, host, laid(rt)))
+assert_eq(offset(rt), "0")
+
+# The minimum scroll: the second 32-tall button ends 16 below a 48 viewport, so the offset is exactly 16.
+let stackHost = ViewRoot(inner = StackBuilder())
+mut sr = Runtime()
+sr.start(stackHost)
+assert(keyPress(sr, stackHost, "Tab"))
+assert(keyPress(sr, stackHost, "Tab"))
+assert(revealFocus(sr, stackHost, laid(sr)))
+assert_eq(offset(sr), "16")
+print("focus reveal ok")

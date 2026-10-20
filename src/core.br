@@ -243,10 +243,21 @@ struct Meta:
     var string taskId = ""
     var bool taskStarted = false
 
+# A subtree in its RETIRING phase (draft, "Animation and transitions"): removed from the active tree — no hit testing,
+# focus traversal, events or reconciliation — with its tasks cancelled and focus/capture released, but its hooks,
+# slots and ids kept until the removal transition finishes (`finishRetired`). `parent` and `identity`
+# (`site|key`) say where it sat, so reinserting that identity before then revives it instead of mounting afresh.
+pub struct Retired:
+    pub Mounted node
+    pub int parent
+    pub string identity
+
 # Scratch lists for one reconciliation: hooks are only emitted after the whole tree committed.
 struct Pass:
     var mut [string] mounts = []
     var mut [Mounted] retiring = []
+    # Subtrees removed under an animated `Transition`: kept mounted (frozen) until their removal finishes.
+    var mut [Retired] deferred = []
     # Ids created by this pass, in structural preorder (outermost modifier first): their `OnMount`
     # hooks run after the commit.
     var mut [int] fresh = []
@@ -302,6 +313,15 @@ pub struct KeyObserver:
     pub bool capture
     pub KeyHandler handler
 
+# Inertial scrolling in flight (draft, "Scroll": "Momentum is driven by platform-timed follow-up transactions"): the
+# scroller it moves, its axis and its velocity in pixels per second (positive = the offset grows). Ended by new input,
+# by hitting an edge or friction, and when the scroller unmounts.
+pub struct Momentum:
+    pub int node
+    pub int generation
+    pub bool vertical
+    pub float velocity
+
 # Undo history of one TextField identity (draft, "Accepted value, editing buffer, and IME"): snapshots of the accepted
 # value (and the caret to restore) before each undo group, the redo side, and what grouping needs to know about the
 # last edit. It lives with the mounted control and is dropped on unmount.
@@ -333,11 +353,17 @@ pub struct Runtime:
     # The control that took the last pointer press: later move/up/cancel go to it wherever the pointer is
     # (generation-checked; cleared when it unmounts — the draft's "unmounting sends cancellation").
     pub var Handle? capture = nil
+    # The enabled interactive control (Button, Toggle, TextField, Slider) under the pointer, set by `pointerMove`
+    # (generation-checked; cleared when it unmounts or a sheet opens). The painter shades it.
+    pub var Handle? hover = nil
     # The composition in progress, if any (see `Composition`); pruned after every update pass.
     pub var Composition? composition = nil
+    pub var Momentum? momentum = nil
     # Per-TextField undo/redo history, keyed by mounted id (generation-checked; dropped when the node unmounts).
     pub var mut {int=EditHistory} histories = {=}
     pub var mut [KeyObserver] keyObservers = []
+    # Subtrees waiting for their animated removal to finish (see `Retired`).
+    pub var mut [Retired] retired = []
     # Modal presentation: the ids of the `Sheet` nodes that are presented, outermost first, and the focus
     # each one displaced (restored on dismissal while that control still exists and is enabled).
     pub var [int] openSheets = []
@@ -572,6 +598,29 @@ pub struct Runtime:
             self.reportAtPath("identity", p, path)
         problems.length == 0
 
+    # A removed child: torn down at once, unless an animated transaction removes it under a `Transition` with a real
+    # removal — then it is retired (kept mounted but frozen) until the host reports the removal finished.
+    def void retire(Mounted old, int parent, mut Pass ctx):
+        var animated = false
+        if let a = lastAnimation:
+            animated = a.curve != "None"
+        if animated and old.kind == "Transition" and propText(old, "removal") != "Identity":
+            ctx.deferred.push(Retired(node = old, parent = parent, identity = "{old.site}|{old.key}"))
+        else:
+            ctx.retiring.push(old)
+
+    # The retired subtree that sat at `identity` under `parent`, taken back into the active tree (nil when none).
+    def Mounted? takeRetired(int parent, string identity, string kind):
+        var Mounted? found = nil
+        mut [Retired] rest = []
+        for r in retired:
+            if found == nil and r.parent == parent and r.identity == identity and r.node.kind == kind:
+                found = r.node
+            else:
+                rest.push(r)
+        retired = rest
+        found
+
     # Same identity, same kind: keep the node (and its slots and state), reconcile its children.
     def reconcileNode(mut Mounted node, Desc d, mut Pass ctx, [EnvValue] scope):
         # An `AnimationScope` whose trigger value changed (never on its first mount) fires its animation.
@@ -606,13 +655,19 @@ pub struct Runtime:
                     self.reconcileNode(kept, child, ctx, below)
                     next.push(kept)
                 else:
-                    ctx.retiring.push(old)
+                    self.retire(old, node.id, ctx)
                     next.push(self.create(child, site, ctx, below))
             else:
-                next.push(self.create(child, site, ctx, below))
+                if let back = self.takeRetired(node.id, identity, child.kind):
+                    # The identity returns before its removal finished: the same mounted node, no second mount.
+                    mut revived = back
+                    self.reconcileNode(revived, child, ctx, below)
+                    next.push(revived)
+                else:
+                    next.push(self.create(child, site, ctx, below))
         for old in node.children:
             if !used.contains("{old.site}|{old.key}"):
-                ctx.retiring.push(old)
+                self.retire(old, node.id, ctx)
         node.children = next
 
     # Unmount hooks first (descendants before parents, siblings in reverse), then mount hooks in
@@ -625,10 +680,67 @@ pub struct Runtime:
         while i >= 0:
             self.release(ctx.retiring[i])
             i -= 1
+        for d in ctx.deferred:
+            self.freeze(d.node)
+            retired.push(d)
+            events.push("retire {d.node.kind}#{d.node.id}")
         for m in ctx.mounts:
             events.push(m)
 
+    # The start of a retiring phase: scoped tasks are cancelled and focus, pointer capture and composition leave the
+    # subtree. Hooks and resources wait for `finishRetired`.
+    def void freeze(Mounted node):
+        self.cancelTasks(node)
+        self.dropInteraction(node)
+
+    def void dropInteraction(Mounted n):
+        if let f = focus:
+            if f.id == n.id:
+                focus = nil
+        if let c = capture:
+            if c.id == n.id:
+                capture = nil
+        for c in n.children:
+            self.dropInteraction(c)
+
+    # Ends the retiring phase of the subtree that sat under `parent` (or of every one when `all`): `onUnmount` hooks
+    # run, slots and identities are dropped. Returns how many were torn down.
+    def int finishRetiredUnder(int parent):
+        mut [Retired] keep = []
+        mut [Retired] done = []
+        for r in retired:
+            if r.parent == parent:
+                done.push(r)
+            else:
+                keep.push(r)
+        retired = keep
+        for d in done:
+            self.release(d.node)
+        done.length
+
+    def int finishRetired(int id, bool all):
+        mut [Retired] keep = []
+        mut [Retired] done = []
+        for r in retired:
+            if all or r.node.id == id:
+                done.push(r)
+            else:
+                keep.push(r)
+        retired = keep
+        var i = done.length - 1
+        while i >= 0:
+            self.release(done[i].node)
+            i -= 1
+        done.length
+
     def release(Mounted node):
+        # Removing an ancestor ends the transitions of descendants still retiring under it (they go as one group).
+        var below = 0
+        for r in retired:
+            if r.parent == node.id:
+                below += 1
+        if below > 0:
+            _ = self.finishRetiredUnder(node.id)
         var i = node.children.length - 1
         while i >= 0:
             self.release(node.children[i])
@@ -639,6 +751,9 @@ pub struct Runtime:
         if let c = capture:
             if c.id == node.id:
                 capture = nil
+        if let hv = hover:
+            if hv.id == node.id:
+                hover = nil
         events.push("unmount {node.kind}#{node.id}")
         # The hook runs with the node's own identity (and the inputs it captured) still valid.
         if node.kind == "OnUnmount":
@@ -648,6 +763,9 @@ pub struct Runtime:
                 self.settle(before)
         meta.remove(node.id)
         histories.remove(node.id)
+        if let m = momentum:
+            if m.node == node.id:
+                momentum = nil
         self.dropObservers(node.id)
         freeIds.push(node.id)
 
@@ -863,6 +981,7 @@ pub struct Runtime:
             return
         if now.length > openSheets.length:
             capture = nil
+            hover = nil
             if let f = focus:
                 if self.valid(f):
                     focusReturn.push(f)

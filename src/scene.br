@@ -89,6 +89,11 @@ def paintNode(Placed p, mut [Command] out):
             mut face = cmd("FillRect", p, "", "button")
             face.hex = p.theme.colorNamed(spec.background)
             out.push(face)
+        if propOrLive(p, "hovered", "false") == "true":
+            # the pointer is over it: a translucent shade over the face, under the label
+            mut shade = cmd("FillRect", p, "", "hover")
+            shade.hex = p.theme.color(ColorRole.ShadowColor)
+            out.push(shade)
         let label = p.props["label"] else ("")
         mut text = Command(kind = "DrawText", x = p.x + pad, y = p.y + pad, w = p.w - 2.0 * pad, h = body, text = label, color = "", node = p.id)
         text.hex = p.theme.colorNamed(spec.text)
@@ -110,11 +115,39 @@ def paintNode(Placed p, mut [Command] out):
             if markedAt > valueCount:
                 markedAt = valueCount
             shownText = "{value.graphemeSlice(0, markedAt)}{marked}{value.graphemeSlice(markedAt, value.graphemeCount)}"
+        let bodyHeight = p.theme.fontSizeNamed("Body")
+        let focusedField = propOrLive(p, "focused", "false") == "true"
+        var caret = (propOrLive(p, "caret", "0")).parseInt() else (0)
+        var anchor = (propOrLive(p, "anchor", "0")).parseInt() else (0)
+        # the selection sits under the text (not while composing: the marked text replaces it)
+        if focusedField and marked == "" and caret != anchor:
+            var lo = caret
+            var hi = anchor
+            if anchor < caret:
+                lo = anchor
+                hi = caret
+            let startX = p.x + 4.0 + (value.graphemeSlice(0, lo).displayWidth as float) * cell
+            let endX = p.x + 4.0 + (value.graphemeSlice(0, hi).displayWidth as float) * cell
+            mut band = Command(kind = "FillRect", x = startX, y = p.y + 4.0, w = endX - startX, h = bodyHeight, text = "", color = "selection", node = p.id)
+            band.hex = p.theme.color(ColorRole.Selection)
+            out.push(band)
         mut text = Command(kind = "DrawText", x = p.x + 4.0, y = p.y + 4.0, w = p.w - 8.0, h = p.theme.fontSizeNamed("Body"), text = shownText, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
+        if focusedField:
+            # a one-pixel bar before the grapheme at `caret`; while composing, at the cursor inside the marked text
+            var cells = value.graphemeSlice(0, caret).displayWidth
+            if marked != "":
+                let cursorText = propOrLive(p, "markedCursor", "0")
+                let cursor = cursorText.parseInt() else (0)
+                cells = value.graphemeSlice(0, markedAt).displayWidth + marked.graphemeSlice(0, cursor).displayWidth
+            mut bar = Command(kind = "FillRect", x = p.x + 4.0 + (cells as float) * cell, y = p.y + 4.0, w = 1.0, h = bodyHeight, text = "", color = "caret", node = p.id)
+            bar.hex = p.theme.color(ColorRole.PrimaryText)
+            out.push(bar)
         if marked != "":
-            out.push(Command(kind = "MarkedText", x = p.x + 4.0 + (value.graphemeSlice(0, markedAt).displayWidth as float) * cell, y = p.y + 4.0, w = (marked.displayWidth as float) * cell, h = p.theme.fontSizeNamed("Body"), text = marked, color = "", node = p.id))
+            mut underline = Command(kind = "MarkedText", x = p.x + 4.0 + (value.graphemeSlice(0, markedAt).displayWidth as float) * cell, y = p.y + 4.0, w = (marked.displayWidth as float) * cell, h = p.theme.fontSizeNamed("Body"), text = marked, color = "", node = p.id)
+            underline.hex = p.theme.color(ColorRole.PrimaryText)
+            out.push(underline)
     if p.kind == "Separator":
         mut line = cmd("FillRect", p, "", "separator")
         line.hex = p.theme.color(ColorRole.Separator)
@@ -155,6 +188,10 @@ def paintNode(Placed p, mut [Command] out):
         else:
             mark.hex = p.theme.color(ColorRole.ControlBorder)
         out.push(mark)
+        if propOrLive(p, "hovered", "false") == "true":
+            mut shade = Command(kind = "FillRect", x = p.x, y = p.y, w = box, h = box, text = "", color = "hover", node = p.id)
+            shade.hex = p.theme.color(ColorRole.ShadowColor)
+            out.push(shade)
         mut text = Command(kind = "DrawText", x = p.x + box + gap, y = p.y, w = p.w - box - gap, h = p.h, text = label, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)

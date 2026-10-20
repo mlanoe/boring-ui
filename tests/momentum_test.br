@@ -1,0 +1,66 @@
+# Momentum scrolling: a fling hands off to friction-decayed inertia driven by per-frame steps.
+# Run: boring run tests/momentum_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+
+view Page:
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                for i in 0..<30:
+                    Text("l{i}")
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed laid(Runtime rt):
+    let p = layout(rt, 100.0, 48.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def float offset(Runtime rt):
+    (laid(rt).children[0].props["scroll"] else ("0")).parseFloat() else (-1.0)
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+assert_eq(offset(rt), 0.0)
+assert(!momentumActive(rt))
+
+# Flinging upwards at the top edge has nowhere to go; downwards starts inertia.
+assert(!fling(rt, laid(rt), 10.0, 10.0, 0.0, -400.0))
+assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 600.0))
+assert(momentumActive(rt))
+
+# Each frame moves the content less than the one before (friction), and it always moves forward.
+var last = 0.0
+var previousStep = 1000000.0
+var frames = 0
+while stepMomentum(rt, host, laid(rt), 1.0 / 60.0):
+    let now = offset(rt)
+    let step = now - last
+    assert(step > 0.0, "inertia keeps scrolling forward")
+    assert(step < previousStep, "friction slows it")
+    previousStep = step
+    last = now
+    frames += 1
+    assert(frames < 500, "inertia must end")
+assert(frames > 5, "it coasts for a while")
+assert(!momentumActive(rt))
+let rest = offset(rt)
+assert(rest > 20.0, "it travelled")
+
+# New input cancels inertia: a wheel event stops it where it is.
+assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 600.0))
+assert(stepMomentum(rt, host, laid(rt), 1.0 / 60.0))
+assert(scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, 0.0) == false)
+assert(!momentumActive(rt), "a wheel event cancels momentum")
+
+# Hitting the end stops it exactly at the content's edge.
+assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 100000.0))
+assert(!stepMomentum(rt, host, laid(rt), 1.0))
+assert_eq(offset(rt), 30.0 * 16.0 - 48.0)
+assert(!momentumActive(rt))
+print("momentum ok")

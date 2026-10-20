@@ -17,6 +17,9 @@
 #   - Reduced motion: every animation becomes a short opacity-only cross-fade; geometry snaps; scale and
 #     slide transitions become fades.
 #
+#   - `MatchedGeometry(id)`: a wrapper that appears while another with the same `id` disappears (a different
+#     mounted identity) presents from the old frame to its own, and the old one's ghost is not drawn.
+#
 # Deviation: the draft's retiring phase also delays `onUnmount` and slot teardown until the transition ends;
 # here the runtime still unmounts immediately and only the DISPLAY of the removal is kept (ghosts).
 
@@ -28,6 +31,14 @@ pub struct NodeAnim:
     pub int id
     pub Animation animation
 
+# A shared element: the entering `MatchedGeometry` wrapper `node` starts from the frame of the one it replaced.
+pub struct Match:
+    pub int node
+    pub float x
+    pub float y
+    pub float w
+    pub float h
+
 pub struct Animator:
     pub var Placed? from = nil
     pub var Placed? to = nil
@@ -37,6 +48,11 @@ pub struct Animator:
     pub var bool snapAll = false
     pub var [NodeAnim] scopes = []
     pub var bool reducedMotion = false
+    # Whether the end of the latest run was already reported by `takeCompletion`.
+    pub var bool completionTaken = true
+    pub var [Match] matches = []
+    # Mounted ids of the wrappers whose frame was handed over (a ghost containing one is not drawn).
+    pub var [int] absorbed = []
 
 def Placed emptyPlaced():
     Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
@@ -74,6 +90,62 @@ pub def void commit(mut Animator a, Placed target, Animation? transaction, [Trig
     mut [NodeAnim] scopes = []
     collectScopes(target, triggers, nil, scopes)
     a.scopes = scopes
+    a.completionTaken = false
+    findMatches(a, current, target)
+
+def void collectMatched(Placed p, mut [Placed] out):
+    if p.kind == "MatchedGeometry":
+        out.push(p)
+    for c in p.children:
+        collectMatched(c, out)
+
+# Pairs each wrapper new in `target` with the same-`id` one that is gone from it (looked up in `current`, the
+# presentation the run starts from, so a retargeted run keeps matching).
+def void findMatches(mut Animator a, Placed current, Placed target):
+    mut [Placed] before = []
+    mut [Placed] after = []
+    collectMatched(current, before)
+    collectMatched(target, after)
+    mut [Match] found = []
+    mut [int] taken = []
+    for n in after:
+        var kept = false
+        for b in before:
+            if b.id == n.id:
+                kept = true
+        if kept:
+            continue
+        for b in before:
+            if (b.props["id"] else ("")) == (n.props["id"] else ("")) and !taken.contains(b.id):
+                var stays = false
+                for m in after:
+                    if m.id == b.id:
+                        stays = true
+                if !stays:
+                    found.push(Match(node = n.id, x = b.x, y = b.y, w = b.w, h = b.h))
+                    taken.push(b.id)
+                    break
+    a.matches = found
+    a.absorbed = taken
+
+def bool containsAbsorbed(Placed p, [int] ids):
+    if ids.contains(p.id):
+        return true
+    for c in p.children:
+        if containsAbsorbed(c, ids):
+            return true
+    false
+
+# True ONCE when the latest committed run has finished (every animation done, or none ever started): a host-level
+# observation to stop scheduling frames or to release resources — not an application lifecycle hook (draft: "Animation
+# completion is not a general lifecycle hook in the first API"). A new `commit` re-arms it.
+pub def bool takeCompletion(mut Animator a, float now):
+    if a.completionTaken:
+        return false
+    if isAnimating(a, now):
+        return false
+    a.completionTaken = true
+    true
 
 def Animation animationFor(Animator a, int id):
     if a.snapAll:
@@ -160,7 +232,7 @@ def Placed blendNode(Animator a, Placed f, Placed t, float now, bool inGhost):
     if !a.snapAll:
         for fc in f.children:
             if childById(t.children, fc.id) == nil:
-                if fc.kind == "Transition" or fc.ghost:
+                if (fc.kind == "Transition" or fc.ghost) and !containsAbsorbed(fc, a.absorbed):
                     let ghost = ghostNode(a, fc, now)
                     if ghost != nil:
                         kids.push(ghost else (emptyPlaced()))
@@ -170,6 +242,9 @@ def Placed blendNode(Animator a, Placed f, Placed t, float now, bool inGhost):
     if t.kind == "Offset":
         for v in offsetLive(f, t, p):
             live.push(v)
+    # what the runtime marked the node with (focus, hover, caret, composition) is not animated: the target's stays
+    for v in t.live:
+        live.push(v)
     Placed(id = t.id, kind = t.kind, x = lerp(f.x, t.x, pg), y = lerp(f.y, t.y, pg), w = lerp(f.w, t.w, pg), h = lerp(f.h, t.h, pg), props = t.props, children = kids, theme = t.theme, key = t.key, alpha = t.alpha, ghost = t.ghost, live = live)
 
 # ── transitions ────────────────────────────────────────────────────────────────────────────────────
@@ -212,11 +287,42 @@ def Placed transitioned(Animator a, Placed t, string kind, float state, bool gho
 # A node new in this commit: a `Transition` presents from its insertion state toward its rest; anything
 # else appears as committed (its parent's transition, if any, carries it).
 def Placed enterNode(Animator a, Placed t, float now):
+    let placed = fitMatches(a, t, now)
     if t.kind != "Transition":
-        return t
+        return placed
     let anim = animationFor(a, t.id)
     let p = progress(anim, now - a.start)
-    transitioned(a, t, kindOf(t, "insertion"), 1.0 - p, false)
+    transitioned(a, placed, kindOf(t, "insertion"), 1.0 - p, false)
+
+# `t` (a subtree new in this commit) with every matched wrapper presented between its predecessor's frame and its own.
+def Placed fitMatches(Animator a, Placed t, float now):
+    if a.matches.length == 0:
+        return t
+    if t.kind == "MatchedGeometry":
+        for m in a.matches:
+            if m.node == t.id:
+                let anim = animationFor(a, t.id)
+                var p = progress(anim, now - a.start)
+                if a.reducedMotion:
+                    p = 1.0
+                return refit(t, t.x, t.y, lerp(m.x, t.x, p), lerp(m.y, t.y, p), scaleBetween(m.w, t.w, p), scaleBetween(m.h, t.h, p))
+    mut [Placed] kids = []
+    for c in t.children:
+        kids.push(fitMatches(a, c, now))
+    Placed(id = t.id, kind = t.kind, x = t.x, y = t.y, w = t.w, h = t.h, props = t.props, children = kids, theme = t.theme, key = t.key, alpha = t.alpha, ghost = t.ghost, live = t.live)
+
+# The factor taking `to` (the rest size) to the size interpolated from `from` at progress `p`.
+def float scaleBetween(float from, float to, float p):
+    if to <= 0.0:
+        return 1.0
+    lerp(from, to, p) / to
+
+# `t` with its top-left moved to (nx, ny) and its geometry scaled by (sx, sy) about it, recursively.
+def Placed refit(Placed t, float ox, float oy, float nx, float ny, float sx, float sy):
+    mut [Placed] kids = []
+    for c in t.children:
+        kids.push(refit(c, ox, oy, nx, ny, sx, sy))
+    Placed(id = t.id, kind = t.kind, x = nx + (t.x - ox) * sx, y = ny + (t.y - oy) * sy, w = t.w * sx, h = t.h * sy, props = t.props, children = kids, theme = t.theme, key = t.key, alpha = t.alpha, ghost = t.ghost, live = t.live)
 
 # A removed `Transition` as a ghost heading to its removal state; nil once the removal finished.
 def Placed? ghostNode(Animator a, Placed f, float now):

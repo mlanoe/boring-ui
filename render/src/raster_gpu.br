@@ -12,8 +12,14 @@
 #     `MAX_DEPTH` groups nest (a kernel has fixed per-thread storage); a deeper one is drawn as if it were
 #     not a group (the CPU reference has no such limit; deeper nesting is the one intended difference).
 #
+# Images: a `DrawImage` is op 6; its float slots 8 and 9 hold the image's width and height in texels, `u[4 i + 3]` the
+# offset of its texels in `Encoded.pool`.
+#
+# Glyph masks: a `DrawGlyph` is op 7; its box is the mask's pixel rectangle (pen snapped, `left`/`top` applied), float
+# slot 8 holds the mask width and `u[4 i + 3]` the offset of its bytes in `Encoded.pool` (one byte per entry).
+#
 # Layout, per command `i`: `f[12 i ..]` = box x0 y0 x1 y1, clip x0 y0 x1 y1, value, dx, dy, (unused);
-# `u[4 i ..]` = op, colour, glyph, (unused). Ops: 0 fill, 1 stroke, 2 shadow, 3 glyph, 4 push opacity, 5 pop.
+# `u[4 i ..]` = op, colour, glyph, (unused). Ops: 0 fill, 1 stroke, 2 shadow, 3 glyph, 4 push opacity, 5 pop, 6 image.
 #
 # Everything the kernel calls is a top-level function over float32 scalars (the one helper shape that every
 # target accepts: `boring run`, `--target simd`, `--target wgpu`).
@@ -27,6 +33,8 @@ pub let MAX_DEPTH = 4
 pub struct Encoded:
     pub [float32] f
     pub [uint] u
+    # the texels of every image a `DrawImage` uses, back to back (one spare entry when none: kernels reject empty buffers)
+    pub [uint] pool
     pub int count
 
 def push(mut [float32] f, mut [uint] u, int op, Area box, Area clip, float value, float dx, float dy, uint color, int glyph):
@@ -58,8 +66,20 @@ def float clampUnit(float v):
     v
 
 pub def Encoded encode([Command] list, int width, int height):
+    encodeImages(list, [], width, height)
+
+pub def Encoded encodeImages([Command] list, [Bitmap] images, int width, int height):
+    encodeWith(list, images, GlyphAtlas(), width, height)
+
+# `encodeImages` plus the glyph atlas `DrawGlyph` commands index.
+pub def Encoded encodeWith([Command] list, [Bitmap] images, GlyphAtlas glyphs, int width, int height):
     mut [float32] f = []
     mut [uint] u = []
+    mut [uint] pool = [0 as uint]
+    # where each image's texels start in `pool`, or -1 while the image is not used
+    mut [int] placed = [0 - 1 for ..<images.length]
+    # where each atlas glyph's mask starts in `pool`, or -1 while the glyph is not used
+    mut [int] maskAt = [0 - 1 for ..<glyphs.width.length]
     var count = 0
     mut [Area] clips = [Area(x0 = 0.0, y0 = 0.0, x1 = width as float, y1 = height as float)]
     # one entry per open PushOpacity: whether it became a real group (false once MAX_DEPTH are open)
@@ -72,6 +92,11 @@ pub def Encoded encode([Command] list, int width, int height):
             let color = parseColor(c.hex)
             if color.a > 0:
                 push(f, u, 0, areaOf(c), clip, 0.0, 0.0, 0.0, pack(color), 0)
+                count += 1
+        elif c.kind == "MarkedText":
+            let color = parseColor(c.hex)
+            if color.a > 0:
+                push(f, u, 0, underlineOf(c), clip, 0.0, 0.0, 0.0, pack(color), 0)
                 count += 1
         elif c.kind == "StrokeRect":
             let color = parseColor(c.hex)
@@ -97,6 +122,35 @@ pub def Encoded encode([Command] list, int width, int height):
                         push(f, u, 3, Area(x0 = pen, y0 = c.y, x1 = pen + span, y1 = c.y + c.h), clip, 0.0, 0.0, 0.0, pack(color), glyphIndex(g))
                         count += 1
                     pen += cell * cells as float
+        elif c.kind == "DrawGlyph":
+            let color = parseColor(c.hex)
+            let gi = c.glyph
+            if color.a > 0 and gi >= 0 and gi < glyphs.width.length and glyphs.width[gi] > 0 and glyphs.height[gi] > 0:
+                if maskAt[gi] < 0:
+                    maskAt[gi] = pool.length
+                    var b = 0
+                    while b < glyphs.width[gi] * glyphs.height[gi]:
+                        pool.push(glyphs.alpha[glyphs.offset[gi] + b] as uint)
+                        b += 1
+                let ox = (c.x + 0.5).floor() + glyphs.left[gi] as float
+                let oy = (c.y + 0.5).floor() - glyphs.top[gi] as float
+                push(f, u, 7, Area(x0 = ox, y0 = oy, x1 = ox + glyphs.width[gi] as float, y1 = oy + glyphs.height[gi] as float), clip, glyphs.width[gi] as float, 0.0, 0.0, pack(color), gi)
+                let tail = u.length - 1
+                u[tail] = maskAt[gi] as uint
+                count += 1
+        elif c.kind == "DrawImage" and findImage(images, c.text) >= 0:
+            let which = findImage(images, c.text)
+            let img = images[which]
+            if img.width > 0 and img.height > 0 and c.w > 0.0 and c.h > 0.0:
+                if placed[which] < 0:
+                    placed[which] = pool.length
+                    for t in img.pixels:
+                        pool.push(t)
+                # value = texel columns, dx = texel rows (the glyph/shadow slots of the float row), u[3] = pool offset
+                push(f, u, 6, areaOf(c), clip, img.width as float, img.height as float, 0.0, 0 as uint, which)
+                let tail = u.length - 1
+                u[tail] = placed[which] as uint
+                count += 1
         elif c.kind == "PushClip":
             clips.push(intersect(areaOf(c), clip))
         elif c.kind == "PopClip":
@@ -123,7 +177,7 @@ pub def Encoded encode([Command] list, int width, int height):
         push(f, u, 5, Area(x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0), Area(x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0), 0.0, 0.0, 0.0, 0 as uint, 0)
         count += 1
         open -= 1
-    Encoded(f = f, u = u, count = count)
+    Encoded(f = f, u = u, pool = pool, count = count)
 
 # ── device helpers (top-level so every target accepts them) ───────────────────────────────────────
 
@@ -158,27 +212,59 @@ pub def float32 gauss(float32 i, float32 a, float32 b, float32 sigma):
     let k = sigma * 1.4142135
     0.5 * (erfOfDevice((b - c) / k) - erfOfDevice((a - c) / k))
 
-# One blended channel: source (already scaled by its alpha) over a destination kept at `keep`, rounded.
+# One blended ALPHA channel: source (already scaled by its alpha) over a destination kept at `keep`, rounded. (Colour
+# channels blend in linear light: `mixLinear`.)
 pub def float32 mix(float32 src, float32 dst, float32 keep):
     floor(src + dst * keep + 0.5)
+
+# One blended COLOUR channel in linear light, the device twin of raster.br's `blend`: `dstEnc` is the stored
+# (sRGB-encoded, premultiplied-linear) channel on the 0..255 scale, `srcLin` the source's premultiplied linear value;
+# decode, `src + dst * keep`, encode, round, clamp. (`lin8`/`enc8` are the device sRGB transfer functions.)
+pub def float32 lin8(float32 c):
+    let x = c / 255.0
+    if x <= 0.04045:
+        return x / 12.92
+    pow((x + 0.055) / 1.055, 2.4)
+
+pub def float32 mixLinear(float32 srcLin, float32 dstEnc, float32 keep):
+    let v = srcLin + lin8(dstEnc) * keep
+    var e = 255.0 * 12.92 * v
+    if v > 0.0031308:
+        e = 255.0 * (1.055 * pow(v, 1.0 / 2.4) - 0.055)
+    floor(minf(maxf(e + 0.5, 0.0), 255.5))
+
+# A texel's alpha (0..1) and its premultiplied linear colour channels, from a straight-alpha sRGB `0xAARRGGBB`.
+pub def float32 texA(uint t):
+    ((t >> 24) & 255) as float32 / 255.0
+
+pub def float32 texR(uint t):
+    lin8(((t >> 16) & 255) as float32) * texA(t)
+
+pub def float32 texG(uint t):
+    lin8(((t >> 8) & 255) as float32) * texA(t)
+
+pub def float32 texB(uint t):
+    lin8((t & 255) as float32) * texA(t)
 
 kernel RasterKernel:
     let [float32]'global f
     let [uint]'global u
     let [uint]'global atlas
-    mut [float32]'unified out
+    let [uint]'global img
+    mut [uint]'unified out
     let int count
     let int width
     let int height
 
-    init([float32]'global fi, [uint]'global ui, [uint]'global ai, int n, int w, int h):
+    init([float32]'global fi, [uint]'global ui, [uint]'global ai, [uint]'global ii, int n, int w, int h):
         f = fi
         u = ui
         atlas = ai
+        img = ii
         count = n
         width = w
         height = h
-        out = [0.0 for ..<w * h * 4]
+        out = [0 as uint for ..<w * h]
 
     def ():
         let px = .block.x * .block_dim.x + .thread.x
@@ -209,9 +295,9 @@ kernel RasterKernel:
                         let db = sb - 4
                         let keep = 1.0 - sa / 255.0
                         lay[db] = mix(sa, lay[db], keep)
-                        lay[db + 1] = mix(lay[sb + 1] * o, lay[db + 1], keep)
-                        lay[db + 2] = mix(lay[sb + 2] * o, lay[db + 2], keep)
-                        lay[db + 3] = mix(lay[sb + 3] * o, lay[db + 3], keep)
+                        lay[db + 1] = mixLinear(lin8(lay[sb + 1]) * o, lay[db + 1], keep)
+                        lay[db + 2] = mixLinear(lin8(lay[sb + 2]) * o, lay[db + 2], keep)
+                        lay[db + 3] = mixLinear(lin8(lay[sb + 3]) * o, lay[db + 3], keep)
                     depth -= 1
                 else:
                     let col = u[ub + 1]
@@ -279,6 +365,58 @@ kernel RasterKernel:
                                 let inside = overlap(fx, fx + 1.0, bx0, bx1) * overlap(fy, fy + 1.0, by0, by1)
                                 let clipped = overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
                                 cover = gauss(fx, sx0, sx1, sigma) * gauss(fy, sy0, sy1, sigma) * (1.0 - inside) * clipped
+                        elif op == 6:
+                            # image: bilinear sample (clamped to the edge) of the `iw` x `ih` texels at `img[off ..]`, blended here
+                            let iw = f[fb + 8]
+                            let ih = f[fb + 9]
+                            let off = u[ub + 3] as int
+                            let ex0 = maxf(bx0, kx0)
+                            let ey0 = maxf(by0, ky0)
+                            let ex1 = maxf(ex0, minf(bx1, kx1))
+                            let ey1 = maxf(ey0, minf(by1, ky1))
+                            let icover = overlap(fx, fx + 1.0, ex0, ex1) * overlap(fy, fy + 1.0, ey0, ey1)
+                            if icover > 0.0 and bx1 > bx0 and by1 > by0 and iw > 0.0 and ih > 0.0:
+                                let su = maxf(0.0, minf(((fx + 0.5 - bx0) / (bx1 - bx0)) * iw - 0.5, iw - 1.0))
+                                let sv = maxf(0.0, minf(((fy + 0.5 - by0) / (by1 - by0)) * ih - 0.5, ih - 1.0))
+                                let tx0 = floor(su) as int
+                                let ty0 = floor(sv) as int
+                                let wx = su - floor(su)
+                                let wy = sv - floor(sv)
+                                let iwi = iw as int
+                                let ihi = ih as int
+                                var tx1 = tx0 + 1
+                                if tx1 > iwi - 1:
+                                    tx1 = iwi - 1
+                                var ty1 = ty0 + 1
+                                if ty1 > ihi - 1:
+                                    ty1 = ihi - 1
+                                let t00 = img[off + ty0 * iwi + tx0]
+                                let t10 = img[off + ty0 * iwi + tx1]
+                                let t01 = img[off + ty1 * iwi + tx0]
+                                let t11 = img[off + ty1 * iwi + tx1]
+                                let w00 = (1.0 - wx) * (1.0 - wy)
+                                let w10 = wx * (1.0 - wy)
+                                let w01 = (1.0 - wx) * wy
+                                let w11 = wx * wy
+                                let isa = (texA(t00) * w00 + texA(t10) * w10 + texA(t01) * w01 + texA(t11) * w11) * 255.0 * icover
+                                if isa > 0.0:
+                                    let ir = (texR(t00) * w00 + texR(t10) * w10 + texR(t01) * w01 + texR(t11) * w11) * icover
+                                    let ig = (texG(t00) * w00 + texG(t10) * w10 + texG(t01) * w01 + texG(t11) * w11) * icover
+                                    let ib = (texB(t00) * w00 + texB(t10) * w10 + texB(t01) * w01 + texB(t11) * w11) * icover
+                                    let ikeep = 1.0 - isa / 255.0
+                                    lay[dbase] = mix(isa, lay[dbase], ikeep)
+                                    lay[dbase + 1] = mixLinear(ir, lay[dbase + 1], ikeep)
+                                    lay[dbase + 2] = mixLinear(ig, lay[dbase + 2], ikeep)
+                                    lay[dbase + 3] = mixLinear(ib, lay[dbase + 3], ikeep)
+                        elif op == 7:
+                            # glyph mask: one byte per pixel at `img[off ..]`, the box is exactly the mask's pixels
+                            let mw = f[fb + 8] as int
+                            let moff = u[ub + 3] as int
+                            if fx >= bx0 and fx < bx1 and fy >= by0 and fy < by1:
+                                let mcol = (fx - bx0) as int
+                                let mrow = (fy - by0) as int
+                                let m = img[moff + mrow * mw + mcol] as float32
+                                cover = overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1) * (m / 255.0)
                         else:
                             # glyph: the cell (bx0..bx1 by by0..by1) holds a 6 x 8 texel glyph; sum the lit texels' area
                             let g = u[ub + 2] as int
@@ -307,37 +445,37 @@ kernel RasterKernel:
                             let k = a / 255.0
                             let keep = 1.0 - k
                             lay[dbase] = mix(a, lay[dbase], keep)
-                            lay[dbase + 1] = mix(cr * k, lay[dbase + 1], keep)
-                            lay[dbase + 2] = mix(cg * k, lay[dbase + 2], keep)
-                            lay[dbase + 3] = mix(cb * k, lay[dbase + 3], keep)
-            # four floats per pixel (alpha, red, green, blue): reading a [uint] back from a kernel does not
-            # type-check on the host yet, and these are integral values <= 255, so exact
-            let o = (py * width + px) * 4
-            out[o] = lay[0]
-            out[o + 1] = lay[1]
-            out[o + 2] = lay[2]
-            out[o + 3] = lay[3]
+                            lay[dbase + 1] = mixLinear(lin8(cr) * k, lay[dbase + 1], keep)
+                            lay[dbase + 2] = mixLinear(lin8(cg) * k, lay[dbase + 2], keep)
+                            lay[dbase + 3] = mixLinear(lin8(cb) * k, lay[dbase + 3], keep)
+            # packed straight-alpha 0xAARRGGBB, like the CPU reference's pixels (the channels are integral, <= 255)
+            let pa = lay[0] as uint
+            let pr = lay[1] as uint
+            let pg = lay[2] as uint
+            let pb = lay[3] as uint
+            out[py * width + px] = (pa << 24) | (pr << 16) | (pg << 8) | pb
 
 # The CPU reference's `Raster`, produced by the kernel.
 pub def Raster rasterizeGpu([Command] list, int width, int height) throws:
-    let encoded = encode(list, width, height)
+    rasterizeGpuImages(list, [], width, height)
+
+# `rasterizeGpu` with the images `DrawImage` commands name (see `Bitmap`).
+pub def Raster rasterizeGpuImages([Command] list, [Bitmap] images, int width, int height) throws:
+    rasterizeGpuWith(list, images, GlyphAtlas(), width, height)
+
+# `rasterizeGpuImages` plus the glyph atlas `DrawGlyph` commands index.
+pub def Raster rasterizeGpuWith([Command] list, [Bitmap] images, GlyphAtlas glyphs, int width, int height) throws:
+    let encoded = encodeWith(list, images, glyphs, width, height)
     if encoded.count == 0 or width <= 0 or height <= 0:
         return rasterize([], width, height)
     let small = buildAtlas()
     mut [uint] atlas = []
     for i in 0..<small.length:
         atlas.push(small[i] as uint)
-    mut k = RasterKernel(encoded.f, encoded.u, atlas, encoded.count, width, height)
+    mut k = RasterKernel(encoded.f, encoded.u, atlas, encoded.pool, encoded.count, width, height)
     kernel:
         k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
-    let [float32] raw = k.out
-    mut [uint] pixels = []
-    for i in 0..<(width * height):
-        let a = raw[i * 4] as int
-        let r = raw[i * 4 + 1] as int
-        let g = raw[i * 4 + 2] as int
-        let b = raw[i * 4 + 3] as int
-        pixels.push((((a << 24) | (r << 16) | (g << 8) | b) as uint))
+    let [uint] pixels = k.out
     Raster(width = width, height = height, pixels = pixels, unsupported = [])
 
 # The largest per-channel difference between two pictures of the same size (255 when the sizes differ).

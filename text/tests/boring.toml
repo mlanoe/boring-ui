@@ -1,0 +1,16 @@
+[project]
+name    = "boring-ui-text-tests"
+version = "0.1.0"
+main    = "shape_test.br"
+
+[deps]
+text = ".."
+
+[dependencies]
+swash = "0.2.10"
+
+[external_fns]
+"FontRef::fromIndex" = ["&", ""]
+"Render::new" = ["&"]
+"Render::render" = ["&", "&mut", ""]
+"Render::format" = ["&mut", ""]

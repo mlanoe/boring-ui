@@ -1,0 +1,83 @@
+# Theme variants: per-appearance color overrides, increased contrast, text scale (src/theme.br).
+# Run: boring run tests/theme_variants_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.theme.*
+use ui.layout.*
+use ui.scene.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed lay(View root):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    let p = layout(rt, 300.0, 100.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+let sys = systemTheme()
+assert_eq(sys.color(ColorRole.PrimaryText), "#1D1D1F")
+
+# An override for every variant (the old `withColor`) applies in light, dark and contrast alike.
+let all = sys.withColor(ColorRole.Accent, "#7357FF")
+assert_eq(all.color(ColorRole.Accent), "#7357FF")
+assert_eq(all.asDark().color(ColorRole.Accent), "#7357FF")
+assert_eq(all.withContrast(true).color(ColorRole.Accent), "#7357FF")
+
+# A per-appearance override wins over the all-variants one only in that appearance.
+let split = all.withColorVariant(ColorRole.Accent, "dark", "#9F8CFF")
+assert_eq(split.color(ColorRole.Accent), "#7357FF")
+assert_eq(split.asDark().color(ColorRole.Accent), "#9F8CFF")
+assert_eq(split.colors.length, 2)
+let again = split.withColorVariant(ColorRole.Accent, "dark", "#B0A0FF")
+assert_eq(again.colors.length, 2)                          # one entry per (role, scheme)
+assert_eq(again.asDark().color(ColorRole.Accent), "#B0A0FF")
+
+# Increased contrast switches the built-in base; roles without a high-contrast value inherit the normal palette.
+let hc = sys.withContrast(true)
+assert_eq(hc.color(ColorRole.PrimaryText), "#000000")
+assert_eq(hc.color(ColorRole.ControlBorder), "#000000")
+assert_eq(hc.color(ColorRole.WindowBackground), sys.color(ColorRole.WindowBackground))
+assert_eq(hc.asDark().color(ColorRole.PrimaryText), "#FFFFFF")
+assert_eq(sys.color(ColorRole.PrimaryText), "#1D1D1F")      # the receiver is untouched
+
+# A `contrast` override beats everything while contrast is on, and is ignored otherwise.
+let branded = sys.withColor(ColorRole.PrimaryText, "#202020").withColorVariant(ColorRole.PrimaryText, "contrast", "#000001")
+assert_eq(branded.color(ColorRole.PrimaryText), "#202020")
+assert_eq(branded.withContrast(true).color(ColorRole.PrimaryText), "#000001")
+
+# Text scale multiplies every font size (the Body cell grows with it); metrics are untouched.
+let big = sys.withTextScale(1.5)
+assert_eq(big.fontSize(FontRole.Body), 24.0)
+assert_eq(big.fontSize(FontRole.Title), 36.0)
+assert_eq(big.fontSizeNamed("Caption"), 18.0)
+assert_eq(big.metric(MetricRole.ControlPadding), 8.0)
+let sized = sys.withFontSize(FontRole.Body, 20.0).withTextScale(2.0)
+assert_eq(sized.fontSize(FontRole.Body), 40.0)               # an override scales too
+assert_eq(sys.fontSize(FontRole.Body), 16.0)
+
+# Builders keep the variant settings.
+assert_eq(sys.withTextScale(1.25).withColor(ColorRole.Accent, "#112233").fontSize(FontRole.Body), 20.0)
+assert(sys.withContrast(true).withMetric(MetricRole.ControlRadius, 2.0).contrast, "contrast survives builders")
+
+# Validation.
+assert_eq(sys.issues().length, 0)
+assert_eq(sys.withTextScale(0.0).issues().length, 1)
+assert_eq(sys.withTextScale(9.0).issues().length, 1)
+assert_eq(sys.withColorVariant(ColorRole.Accent, "sepia", "#FFFFFF").issues().length, 1)
+
+# Through the pipeline: a text-scaled provider enlarges the measured text; increased contrast repaints it.
+let normal = lay(Text("abcd"))
+assert_eq(normal.w, 32.0)                       # 4 cells of the 8 x 16 Body cell
+let scaled = lay(Provide(value = systemTheme().withTextScale(2.0), children = [Text("abcd")]))
+assert_eq(scaled.children[0].w, 64.0)
+assert_eq(scaled.children[0].h, 32.0)
+let contrasty = lay(Provide(value = systemTheme().withContrast(true), children = [Text("abcd")]))
+var hex = ""
+for c in displayList(contrasty):
+    if c.kind == "DrawText":
+        hex = c.hex
+assert_eq(hex, "#000000")
+print("theme variants ok")

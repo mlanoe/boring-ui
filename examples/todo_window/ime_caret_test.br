@@ -1,0 +1,26 @@
+# Byte offsets from the platform to grapheme indices (ime_caret.br). Run from this directory: boring run ime_caret_test.br
+
+use ime_caret
+
+# ASCII: bytes are graphemes; none / past the end mean the end
+assert_eq(graphemeAtByte("nihao", 0), 0)
+assert_eq(graphemeAtByte("nihao", 2), 2)
+assert_eq(graphemeAtByte("nihao", 5), 5)
+assert_eq(graphemeAtByte("nihao", 9), 5)
+assert_eq(graphemeAtByte("nihao", 0 - 1), 5)
+
+# CJK: three bytes per character ("你好" = 6 bytes)
+assert_eq(graphemeAtByte("你好", 3), 1)
+assert_eq(graphemeAtByte("你好", 6), 2)
+# an offset inside a character rounds forward to the next boundary
+assert_eq(graphemeAtByte("你好", 4), 2)
+# 2-byte and 4-byte scalars, and a combining cluster ("e" + U+0301 is one grapheme, 3 bytes)
+assert_eq(graphemeAtByte("é!", 2), 1)
+assert_eq(graphemeAtByte("😀a", 4), 1)
+assert_eq(graphemeAtByte("éx", 3), 1)
+
+# columns: wide characters take two cells
+assert_eq(composingCells("ab", 2, "你好", 1), 4)
+assert_eq(composingCells("ab", 1, "nihao", 5), 6)
+assert_eq(composingCells("", 0, "", 0), 0)
+print "ime caret ok"

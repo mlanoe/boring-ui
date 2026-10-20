@@ -7,6 +7,10 @@
 # `damping`). Durations and parameters are finite and non-negative; a zero duration is a valid
 # immediate change. `progress` maps elapsed time to 0...1 (a spring may overshoot above 1).
 #
+# Keyframes (`Keyframes` curve): `stopTimes` (strictly increasing, inside (0, 1) = fractions of the duration) and
+# `stopValues` (the progress reached at each) define a piecewise-linear progress, implicitly starting at (0, 0) and
+# ending at (1, 1) — e.g. times [0.4, 0.7], values [1.2, 0.95] overshoots, dips and settles. Values may leave 0...1.
+#
 # Colors blend in LINEAR light with premultiplied alpha (the draft's working space): `#RRGGBB[AA]`
 # strings in, string out; anything that is not a hex color switches at the end instead.
 #
@@ -19,6 +23,9 @@ pub struct Animation:
     # Spring only: the natural period in milliseconds, and the damping ratio (1 = critical).
     pub float response = 300.0
     pub float damping = 0.8
+    # Keyframes only: parallel lists, one progress value per time fraction.
+    pub [float] stopTimes = []
+    pub [float] stopValues = []
 
 # A change of an `AnimationScope` value: which mounted node's wrapper fired and with what animation.
 pub struct Trigger:
@@ -39,6 +46,35 @@ pub def Animation easeOut(float ms):
 
 pub def Animation easeInOut(float ms):
     Animation(curve = "EaseInOut", duration = ms)
+
+# A piecewise-linear progress through the given stops over `ms` (see the module comment).
+pub def Animation keyframes(float ms, [float] times, [float] values):
+    Animation(curve = "Keyframes", duration = ms, stopTimes = times, stopValues = values)
+
+# Whether keyframe stops are usable: equal lengths, times strictly increasing and inside (0, 1), values finite.
+pub def bool keyframesValid(Animation a):
+    if a.stopTimes.length != a.stopValues.length:
+        return false
+    var last = 0.0
+    for i in 0..<a.stopTimes.length:
+        let t = a.stopTimes[i]
+        if !(t > last) or !(t < 1.0):
+            return false
+        if !(a.stopValues[i] > -1000000.0) or !(a.stopValues[i] < 1000000.0):
+            return false
+        last = t
+    true
+
+def float keyframeAt(Animation a, float t):
+    var prevT = 0.0
+    var prevV = 0.0
+    for i in 0..<a.stopTimes.length:
+        if t <= a.stopTimes[i]:
+            let span = a.stopTimes[i] - prevT
+            return lerp(prevV, a.stopValues[i], (t - prevT) / span)
+        prevT = a.stopTimes[i]
+        prevV = a.stopValues[i]
+    lerp(prevV, 1.0, (t - prevT) / (1.0 - prevT))
 
 pub def Animation spring(float response, float damping):
     Animation(curve = "Spring", response = response, damping = damping)
@@ -104,6 +140,10 @@ pub def float progress(Animation a, float elapsed):
     if a.curve == "Spring":
         return springAt(a, elapsed)
     let t = elapsed / total
+    if a.curve == "Keyframes":
+        if !keyframesValid(a):
+            return t
+        return keyframeAt(a, t)
     if a.curve == "EaseIn":
         return t * t
     if a.curve == "EaseOut":

@@ -1,0 +1,52 @@
+# Text engine (src/engine.br). Build and run: tests/run_tests.sh (needs `boring build`: it calls swash).
+
+use text.engine.*
+use render.display_list.*
+use render.raster.*
+use text.glyph_run.*
+
+let font = fs.readBytes("/System/Library/Fonts/Supplemental/Arial.ttf")
+
+let hello = shape(font, "Hello", 16.0)
+assert_eq(hello.length, 5)
+# proportional advances: 'H' is wider than 'l'
+assert(hello[0].advance > hello[2].advance)
+assert_eq(hello[2].advance, hello[3].advance)
+assert(hello[1].x == hello[0].advance)
+assert_eq(runWidth(hello) > 30.0, true)
+
+# a bigger size scales the run
+assert(runWidth(shape(font, "Hello", 32.0)) > 1.9 * runWidth(hello))
+
+let aOpt = rasterize(font, hello[0].id, 32.0)
+guard let a = aOpt else:
+    print "FAILED: no image for H"
+    exit(1)
+assert_eq(a.alpha.length, a.width * a.height)
+assert(a.width > 10 and a.height > 10)
+var ink = 0
+for b in a.alpha:
+    if b > 0:
+        ink += 1
+assert(ink > 20)
+
+mut cache = GlyphCache(font = font)
+let run = cache.draw("Hello", 20.0, 2.0, 18.0, "#000000")
+# 'l' twice: 5 letters, 4 distinct glyphs in the atlas
+assert_eq(run.length, 5)
+assert_eq(cache.atlas.width.length, 4)
+assert_eq(run[2].glyph, run[3].glyph)
+# drawing again reuses the cache
+let again = cache.draw("Hello", 20.0, 2.0, 18.0, "#000000")
+assert_eq(cache.atlas.width.length, 4)
+# a space has no image: no command
+assert_eq(cache.draw("a b", 20.0, 0.0, 18.0, "#000000").length, 2)
+
+let picture = rasterizeWith(run, [], cache.atlas, 64, 24)
+var inked = 0
+for p in picture.pixels:
+    if p != 0:
+        inked += 1
+assert(inked > 40)
+assert_eq(picture.unsupported.length, 0)
+print "glyph run ok"

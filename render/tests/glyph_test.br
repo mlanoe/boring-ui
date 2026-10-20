@@ -1,0 +1,34 @@
+# DrawGlyph and the glyph atlas in the CPU reference rasterizer. Run: boring run tests/glyph_test.br
+
+use render.display_list.*
+use render.raster.*
+
+# a 2x2 mask: full, half / none, full; its top-left corner sits 1 px right of the pen and 2 px above the baseline
+mut atlas = GlyphAtlas()
+let g = atlas.addGlyph(2, 2, 1, 2, [255, 128, 0, 255])
+assert_eq(g, 0)
+let second = atlas.addGlyph(1, 1, 0, 1, [255])
+assert_eq(second, 1)
+
+def Command glyph(int index, float x, float y, string hex):
+    Command(kind = "DrawGlyph", x = x, y = y, w = 0.0, h = 0.0, glyph = index, hex = hex)
+
+let r = rasterizeWith([glyph(0, 1.0, 3.0, "#FFFFFF")], [], atlas, 5, 4)
+# origin pixel = (pen.x + left, pen.y - top) = (2, 1)
+assert_eq(pixelHex(r, 2, 1), "#FFFFFFFF")
+assert_eq(pixelHex(r, 3, 1), "#80BCBCBC")
+assert_eq(pixelHex(r, 2, 2), "#00000000")
+assert_eq(pixelHex(r, 3, 2), "#FFFFFFFF")
+assert_eq(pixelHex(r, 1, 1), "#00000000")
+assert_eq(r.unsupported.length, 0)
+
+# the pen snaps to the nearest pixel
+let snapped = rasterizeWith([glyph(1, 0.6, 1.4, "#FF0000")], [], atlas, 3, 3)
+assert_eq(pixelHex(snapped, 1, 0), "#FFFF0000")
+
+# clipped, and an out-of-range index draws nothing
+let clipped = rasterizeWith([Command(kind = "PushClip", x = 0.0, y = 0.0, w = 3.0, h = 4.0), glyph(0, 1.0, 3.0, "#FFFFFF"), Command(kind = "PopClip", x = 0.0, y = 0.0, w = 0.0, h = 0.0)], [], atlas, 5, 4)
+assert_eq(pixelHex(clipped, 3, 1), "#00000000")
+let none = rasterizeWith([glyph(9, 1.0, 3.0, "#FFFFFF")], [], atlas, 5, 4)
+assert_eq(pixelHex(none, 2, 1), "#00000000")
+print "glyph ok"

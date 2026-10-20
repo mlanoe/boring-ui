@@ -118,7 +118,7 @@ def bool isTransparent(Mounted n):
 
 # Wrappers that forward all layout to their one child (they only add behaviour elsewhere).
 def [string] transparentKinds():
-    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition", "DefaultFocus", "Focused", "FocusedAs", "FocusScope", "FocusOrder", "Focusable", "FocusSection"]
+    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition", "DefaultFocus", "Focused", "FocusedAs", "FocusScope", "FocusOrder", "Focusable", "FocusSection", "MatchedGeometry"]
 
 # A stack's children with every `KeyedGroup` replaced by its items, in order.
 def [Mounted] flatten(Mounted n):
@@ -828,7 +828,25 @@ def Placed withComposition(Placed p, int node, string marked, int at, int cursor
         kids.push(withComposition(c, node, marked, at, cursor))
     var live = p.live
     if p.id == node:
-        live = [PropValue(key = "marked", value = marked), PropValue(key = "markedAt", value = "{at}"), PropValue(key = "markedCursor", value = "{cursor}")]
+        # the composition's props come first; the field keeps its other live props (focus, caret)
+        mut composing = [PropValue(key = "marked", value = marked), PropValue(key = "markedAt", value = "{at}"), PropValue(key = "markedCursor", value = "{cursor}")]
+        for v in p.live:
+            composing.push(v)
+        live = composing
+    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
+
+# The focused text field's caret and selection anchor (grapheme indices of its value), as live props `caret` and
+# `anchor`, so the painter can draw them.
+def Placed withCaret(Placed p, int node, int caret, int anchor):
+    mut kids = []
+    for c in p.children:
+        kids.push(withCaret(c, node, caret, anchor))
+    var live = p.live
+    if p.id == node:
+        mut shown = [PropValue(key = "caret", value = "{caret}"), PropValue(key = "anchor", value = "{anchor}")]
+        for v in p.live:
+            shown.push(v)
+        live = shown
     Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
 
 # The keyboard-focused control, marked with a live `focused` prop so the painter draws its focus ring.
@@ -844,6 +862,19 @@ def Placed withFocus(Placed p, int node):
         live = marked
     Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
 
+# The control under the pointer, marked with a live `hovered` prop so the painter shades it.
+def Placed withHover(Placed p, int node):
+    mut kids = []
+    for c in p.children:
+        kids.push(withHover(c, node))
+    var live = p.live
+    if p.id == node:
+        mut marked = [PropValue(key = "hovered", value = "true")]
+        for v in p.live:
+            marked.push(v)
+        live = marked
+    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
+
 # Lays out the whole window: the root gets the window as its proposal.
 pub def Placed? layout(Runtime rt, float width, float height):
     if let r = rt.root:
@@ -852,6 +883,19 @@ pub def Placed? layout(Runtime rt, float width, float height):
         if let f = rt.focus:
             if rt.valid(f):
                 placed = withFocus(placed, f.id)
+                if let field = rt.find(f.id):
+                    if field.kind == "TextField":
+                        let valueLen = (field.props["value"] else ("")).graphemeCount
+                        var caret = rt.read(f, "caret") else (-1)
+                        if caret < 0 or caret > valueLen:
+                            caret = valueLen
+                        var anchor = rt.read(f, "anchor") else (-1)
+                        if anchor < 0 or anchor > valueLen:
+                            anchor = caret
+                        placed = withCaret(placed, f.id, caret, anchor)
+        if let hv = rt.hover:
+            if rt.valid(hv):
+                placed = withHover(placed, hv.id)
         if let c = rt.composition:
             var at = 0
             if let field = rt.find(c.node):

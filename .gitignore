@@ -14,3 +14,4 @@
 /examples/*/*_simd/
 /examples/*/*_wgpu/
 /render/bench/stages_*/
+/text/tests/*_rust/

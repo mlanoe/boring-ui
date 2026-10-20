@@ -51,7 +51,42 @@ assert(compare([rect(0.0, 0.0, 12.0, 4.0, "#0000FF"), fade(0.5), fade(0.5), rect
 assert(compare([unfade(), fade(0.4), rect(0.0, 0.0, 6.0, 4.0, "#FFFFFF")], 12, 4) <= 1)
 assert(compare([fade(0.5), shadow(2.0, 2.0, 4.0, 4.0, 2.0, 1.0, 1.0, "#000000"), text(0.0, 0.0, 16.0, "Hi", "#000000"), unfade()], 24, 16) <= 1)
 
+assert(compare([text(0.0, 0.0, 16.0, "nihao", "#000000"), Command(kind = "MarkedText", x = 0.0, y = 0.0, w = 20.0, h = 16.0, text = "nihao", hex = "#0A84FF")], 48, 16) <= 1)
+assert(compare([clip(0.0, 0.0, 9.0, 40.0), Command(kind = "MarkedText", x = 2.0, y = 4.0, w = 12.0, h = 32.0, text = "ni", hex = "#FF0000"), pop()], 24, 40) <= 1)
+
+
+# DrawImage: a 3 x 2 image with an opaque, a translucent and a transparent texel, stretched to non-integer boxes,
+# clipped, inside a group, and one that overlaps a fill (plus a name no image has, which both skip).
+def [Bitmap] sampleList():
+    [Bitmap(name = "s", width = 3, height = 2, pixels = [0xFFFF0000 as uint, 0x8000FF00 as uint, 0x000000FF as uint, 0xFF336699 as uint, 0xFFFFFFFF as uint, 0xC0102030 as uint])]
+def Command pic(float x, float y, float w, float h, string name):
+    Command(kind = "DrawImage", x = x, y = y, w = w, h = h, text = name)
+def int compareImages([Command] list, int w, int h) throws:
+    maxDifference(rasterizeImages(list, sampleList(), w, h), rasterizeGpuImages(list, sampleList(), w, h))
+
+assert(compareImages([pic(1.0, 1.0, 3.0, 2.0, "s")], 6, 4) <= 1)
+assert(compareImages([rect(0.0, 0.0, 20.0, 12.0, "#FFFFFF"), pic(2.5, 1.25, 13.7, 8.3, "s")], 20, 12) <= 1)
+assert(compareImages([clip(4.0, 2.0, 7.0, 5.0), pic(2.5, 1.25, 13.7, 8.3, "s"), pop(), pic(0.0, 0.0, 2.0, 2.0, "nope")], 20, 12) <= 1)
+assert(compareImages([fade(0.5), pic(1.0, 1.0, 9.0, 6.0, "s"), rect(4.0, 0.0, 6.0, 4.0, "#0000FF"), unfade()], 12, 8) <= 1)
+
 # Nothing to draw: no kernel dispatch, same empty picture.
 assert_eq(compare([], 4, 4), 0)
+
+# DrawGlyph: masks from an atlas (varied coverage), pens at fractional positions, clipped, inside a group,
+# one glyph straddling the 16 pixel tile edge, and an index the atlas has not got (both skip it).
+def GlyphAtlas sampleGlyphs():
+    mut a = GlyphAtlas()
+    _ = a.addGlyph(5, 4, 1, 4, [0, 64, 128, 255, 255, 30, 90, 180, 220, 10, 255, 255, 255, 255, 255, 0, 0, 0, 7, 0])
+    _ = a.addGlyph(3, 3, 0, 3, [255, 128, 0, 128, 255, 128, 0, 128, 255])
+    a
+def Command mark(int index, float x, float y, string hex):
+    Command(kind = "DrawGlyph", x = x, y = y, w = 0.0, h = 0.0, glyph = index, hex = hex)
+
+def int compareGlyphs([Command] list, int w, int h) throws:
+    maxDifference(rasterizeWith(list, [], sampleGlyphs(), w, h), rasterizeGpuWith(list, [], sampleGlyphs(), w, h))
+assert(compareGlyphs([mark(0, 3.0, 6.0, "#000000"), mark(1, 14.4, 6.6, "#FF8800")], 40, 20) <= 1)
+assert(compareGlyphs([rect(0.0, 0.0, 40.0, 20.0, "#FFFFFF"), mark(0, 13.0, 10.0, "#336699"), mark(1, 15.5, 10.0, "#FF000080"), mark(7, 2.0, 2.0, "#000000")], 40, 20) <= 1)
+assert(compareGlyphs([clip(0.0, 0.0, 15.0, 20.0), mark(0, 13.0, 10.0, "#000000"), pop()], 40, 20) <= 1)
+assert(compareGlyphs([fade(0.5), rect(0.0, 0.0, 20.0, 20.0, "#0000FF"), mark(0, 3.0, 8.0, "#FFFFFF"), unfade()], 40, 20) <= 1)
 
 print "raster gpu ok"

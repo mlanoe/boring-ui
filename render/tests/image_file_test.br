@@ -1,0 +1,27 @@
+# PPM decoding (src/image_file.br). Run: boring run tests/image_file_test.br
+
+use render.display_list.*
+use render.image_file.*
+
+# 2 x 1: red, then blue; a comment in the header (the ASCII of `P6\n# two texels\n2 1\n255\n`)
+let header = [80, 54, 10, 35, 32, 116, 119, 111, 32, 116, 101, 120, 101, 108, 115, 10, 50, 32, 49, 10, 50, 53, 53, 10]
+mut [uint8] bytes = []
+for ch in header:
+    bytes.push(ch as uint8)
+for v in [255, 0, 0, 0, 0, 255]:
+    bytes.push(v as uint8)
+
+if let img = decodePpm("rb", bytes):
+    assert_eq(img.name, "rb")
+    assert_eq(img.width, 2)
+    assert_eq(img.height, 1)
+    assert_eq(img.pixels[0] as int, 0xFFFF0000)
+    assert_eq(img.pixels[1] as int, 0xFF0000FF)
+else:
+    assert(false)
+
+# not a P6, truncated, and a maxval other than 255 are refused
+assert(decodePpm("x", [80 as uint8, 51 as uint8, 32 as uint8, 49 as uint8, 32 as uint8, 49 as uint8, 32 as uint8, 50 as uint8, 53 as uint8, 53 as uint8, 10 as uint8]) == nil)
+assert(decodePpm("x", [bytes[0], bytes[1], bytes[2], bytes[3]]) == nil)
+
+print "image file ok"

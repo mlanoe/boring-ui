@@ -1,0 +1,36 @@
+# From a string to `DrawGlyph` commands: shapes it with the engine (engine.br), rasterizes every glyph it has not
+# drawn yet at that size into the renderer's `GlyphAtlas` (render/src/display_list.br), and returns one command per
+# glyph. The cache keys a glyph by (id, size), so a run of text only ever rasterizes each distinct glyph once.
+
+use render.display_list.*
+use text.engine.*
+
+pub struct GlyphCache:
+    # the font file; owned here so the methods below never have to move it around
+    pub let [uint8] font
+    pub var mut GlyphAtlas atlas = GlyphAtlas()
+    # "<glyph id>@<size>" -> index in `atlas`, or -1 for a glyph with no image (a space)
+    var mut {string=int} index = {=}
+
+    # The atlas index of `glyph` at `size`, rasterizing it on first use; -1 when it has no image.
+    def int glyphFor(uint glyph, float size):
+        let key = "{glyph}@{size}"
+        let known = index[key] else (0 - 2)
+        if known != 0 - 2:
+            return known
+        var found = 0 - 1
+        let imgOpt = rasterize(self.font, glyph, size)
+        if let img = imgOpt:
+            if img.width > 0 and img.height > 0:
+                found = atlas.addGlyph(img.width, img.height, img.left, img.top, img.alpha)
+        index[key] = found
+        found
+
+    # `DrawGlyph` commands for `text` at `size` px per em, pen starting at (`x`, `baseline`), colour `hex`.
+    def [Command] draw(string text, float size, float x, float baseline, string hex):
+        var mut out = [] as [Command]
+        for g in shape(self.font, text, size):
+            let at = self.glyphFor(g.id, size)
+            if at >= 0:
+                out.push(Command(kind = "DrawGlyph", x = x + g.x + g.dx, y = baseline + g.dy, w = 0.0, h = 0.0, glyph = at, hex = hex))
+        out

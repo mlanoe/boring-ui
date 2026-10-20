@@ -66,4 +66,41 @@ assert(compare(many(520), 40, 20) <= 1)
 # A tile no command reaches stays transparent, a tile with only an empty group too.
 assert(compare([fade(0.5), rect(0.0, 0.0, 4.0, 4.0, "#FFFFFF"), unfade()], 48, 20) <= 1)
 
+
+# DrawImage: a 3 x 2 image with an opaque, a translucent and a transparent texel, stretched to non-integer boxes,
+# clipped, inside a group, and one that overlaps a fill (plus a name no image has, which both skip).
+def [Bitmap] sampleList():
+    [Bitmap(name = "s", width = 3, height = 2, pixels = [0xFFFF0000 as uint, 0x8000FF00 as uint, 0x000000FF as uint, 0xFF336699 as uint, 0xFFFFFFFF as uint, 0xC0102030 as uint])]
+def Command pic(float x, float y, float w, float h, string name):
+    Command(kind = "DrawImage", x = x, y = y, w = w, h = h, text = name)
+def int compareImages([Command] list, int w, int h) throws:
+    let pixel = rasterizeGpuImages(list, sampleList(), w, h)
+    let tiled = rasterizeTiledImages(list, sampleList(), w, h)
+    assert_eq(maxDifference(pixel, tiled), 0)
+    maxDifference(rasterizeImages(list, sampleList(), w, h), tiled)
+
+# an image spanning several tiles, clipped mid-tile, plus one under a group
+assert(compareImages([rect(0.0, 0.0, 40.0, 20.0, "#FFFFFF"), clip(5.0, 3.0, 30.0, 12.0), pic(2.5, 1.25, 36.7, 17.3, "s"), pop()], 40, 20) <= 1)
+assert(compareImages([fade(0.6), pic(1.0, 1.0, 38.0, 18.0, "s"), rect(10.0, 4.0, 20.0, 8.0, "#0000FF80"), unfade()], 40, 20) <= 1)
+
+# DrawGlyph: masks from an atlas (varied coverage), pens at fractional positions, clipped, inside a group,
+# one glyph straddling the 16 pixel tile edge, and an index the atlas has not got (both skip it).
+def GlyphAtlas sampleGlyphs():
+    mut a = GlyphAtlas()
+    _ = a.addGlyph(5, 4, 1, 4, [0, 64, 128, 255, 255, 30, 90, 180, 220, 10, 255, 255, 255, 255, 255, 0, 0, 0, 7, 0])
+    _ = a.addGlyph(3, 3, 0, 3, [255, 128, 0, 128, 255, 128, 0, 128, 255])
+    a
+def Command mark(int index, float x, float y, string hex):
+    Command(kind = "DrawGlyph", x = x, y = y, w = 0.0, h = 0.0, glyph = index, hex = hex)
+
+def int compareGlyphs([Command] list, int w, int h) throws:
+    let pixel = rasterizeGpuWith(list, [], sampleGlyphs(), w, h)
+    let tiled = rasterizeTiledWith(list, [], sampleGlyphs(), w, h)
+    assert_eq(maxDifference(pixel, tiled), 0)
+    maxDifference(rasterizeWith(list, [], sampleGlyphs(), w, h), tiled)
+assert(compareGlyphs([mark(0, 3.0, 6.0, "#000000"), mark(1, 14.4, 6.6, "#FF8800")], 40, 20) <= 1)
+assert(compareGlyphs([rect(0.0, 0.0, 40.0, 20.0, "#FFFFFF"), mark(0, 13.0, 10.0, "#336699"), mark(1, 15.5, 10.0, "#FF000080"), mark(7, 2.0, 2.0, "#000000")], 40, 20) <= 1)
+assert(compareGlyphs([clip(0.0, 0.0, 15.0, 20.0), mark(0, 13.0, 10.0, "#000000"), pop()], 40, 20) <= 1)
+assert(compareGlyphs([fade(0.5), rect(0.0, 0.0, 20.0, 20.0, "#0000FF"), mark(0, 3.0, 8.0, "#FFFFFF"), unfade()], 40, 20) <= 1)
+
 print "raster tile ok"

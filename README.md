@@ -217,10 +217,16 @@ CPU reference: that target is a portability fallback, not a renderer.
 
 `rasterize(displayList, width, height)` → `Raster` (`width`, `height`, `pixels: [uint]`, `unsupported: [string]`).
 It is the oracle GPU kernels will be compared against, so it favours exact semantics over speed. Pixels are
-`0xAARRGGBB`, **premultiplied**, starting fully transparent. A rectangle gets exact area coverage (a half-covered
-pixel has alpha 0.5) and a clip is the geometric intersection with the clip rectangle. Blending is source-over in
-the encoded (sRGB) space for now — the colour-pipeline decision in the renderer draft is still open, and only
-`blend` would change. Colours are `#RRGGBB[AA]` plus a few named ones; an unknown token paints magenta rather than
+`0xAARRGGBB`, starting fully transparent. A rectangle gets exact area coverage (a half-covered pixel has alpha 0.5) and a
+clip is the geometric intersection with the clip rectangle. **Blending is in linear light** (the draft's linear
+working space): colours arrive sRGB-encoded, each blend decodes the destination channel to linear, adds the
+premultiplied linear source, and encodes the result back, rounding to 8 bits per operation; a stored channel is the
+sRGB encoding of the *premultiplied linear* value (an opaque pixel is simply its sRGB colour, which is what a window
+shows) and alpha is linear. So half-white over black is `#BCBCBC` (linear 0.5), not `#808080`, which keeps
+anti-aliased text weight right (`lerpColor` in the animator makes the same choice). `srgbToLinear`/`linearToSrgb`/`encode8` are public;
+all 256 8-bit values round-trip. Both kernels carry the same math (`lin8`/`mixLinear`, f32): they stay within one LSB
+of the CPU reference in the tests and matched it exactly on the benchmark scene, at no measurable cost (the GPU part of a
+1080p frame is still about 5 ms). Colours are `#RRGGBB[AA]` plus a few named ones; an unknown token paints magenta rather than
 vanishing. Implemented: `FillRect`, `StrokeRect` (inside border, four non-overlapping bands so a translucent
 border blends once, clamped to half the rectangle), `PushClip`/`PopClip` and `PushOpacity`/`PopOpacity` (group
 opacity: each group is drawn into its own layer and composited once, so overlapping children do not darken; groups
@@ -229,7 +235,9 @@ nest, a stray pop is ignored and a group left open is composited at the end),
 exact box-Gaussian integral at the pixel centre, never drawn inside the rectangle itself, exact area coverage when
 the radius is 0); `DrawText` (the fixture 5x7 bitmap font of [`src/raster_font.br`](src/raster_font.br): a grapheme is `displayWidth`
 cells of `h / 2` by `h`, its 6x8 texel cell stretched onto the cell with exact area coverage, a hollow box for a
-grapheme the font lacks); every other kind is skipped and listed once in `unsupported` (`DrawImage`, `MarkedText`).
+grapheme the font lacks); `MarkedText` (the IME composition underline: `h / 16` pixels thick, at least one, along the bottom of the composing text's
+row, in the command's colour, which the scene sets to the primary text colour); `DrawImage` (the `Bitmap` (display_list.br) named by the command's `text`, decoded elsewhere, passed as `rasterizeImages(list, bitmaps, w, h)`: stretched over the rectangle, sampled bilinearly in premultiplied linear light, edge-anti-aliased like a fill; a name with no image is skipped and listed in `unsupported`; the kernels take the same list through `rasterizeGpuImages`/`rasterizeTiledImages`); every other kind is skipped and listed once
+in `unsupported`.
 `pixelHex(raster, x, y)` and `toPpm(raster)` (plain-text P3, over white) serve tests and debugging;
 `boring run tests/render_todo_ppm.br > todo.ppm` renders the Todo application's first frame.
 Tests: `render/tests/raster_test.br`, `tests/raster_todo_test.br` (interpreter and transpiled).
@@ -313,11 +321,16 @@ TARGET; painting, hit testing and accessibility bounds use the animator's **pres
 - **Reduced motion** (`animator.reducedMotion`): animations become a short (≤ 100 ms) opacity-only cross-fade; geometry snaps; scale and slide
   transitions become fades.
 
-Deviations from the draft: the retiring phase only keeps the DISPLAY of a removal (ghosts) — the runtime still unmounts at once, so `onUnmount`
-and slot teardown are not delayed; `TransitionKind` is `Fade`/`Slide` (an `Opacity`/`Offset` variant would shadow the views); an `AnimationScope`
+Deviations from the draft: the retiring phase only keeps the DISPLAY of a removal (ghosts) — the runtime unmounts at once unless the removal is retired as above; `TransitionKind` is `Fade`/`Slide` (an `Opacity`/`Offset` variant would shadow the views); an `AnimationScope`
 trigger is a string; compound transitions and a ghost retargeted mid-removal restart from their rest state; layout properties are interpolated as
-placements between committed layouts rather than by re-running layout per frame. Not yet: completion callbacks, keyframes, matched geometry, `Sheet`
-presentation transitions.
+placements between committed layouts rather than by re-running layout per frame. `Keyframes` curve: `keyframes(ms, times, values)` is a piecewise-linear progress through the stops (endpoints (0, 0) and (1, 1) implicit,
+values may overshoot; invalid stops fall back to linear). `takeCompletion(animator, now)` is true ONCE when the latest run has finished
+(a host observation, not an application lifecycle hook; a new `commit` re-arms it). **Retiring phase**: a subtree removed under an animated `Transition` (removal not `Identity`) stays mounted but frozen — out of hit testing, focus,
+events and reconciliation, tasks cancelled, focus/capture released — with its `onUnmount` hooks, slots and ids kept until the host ends it
+(`endRetirement(rt, host, id)`, typically on `takeCompletion`; `retiringIds`; `endRetirements` = forced teardown). Reinserting the identity
+first revives the same mounted node (no second mount, no unmount; its cancelled tasks do not restart); removing an ancestor ends it with them.
+**`MatchedGeometry(id)`**: a wrapper that appears while another with the same id disappears presents from the old frame to its own (children refit),
+and the old one's ghost is not drawn. Tests: `retire_test.br`, `matched_test.br`. Not yet: per-property keyframe tracks, `Sheet` presentation transitions.
 
 Tests: `anim_test.br` (curves, springs, colors, reduced motion), `animator_test.br` (transactions, scopes, retargeting, transitions, ghosts, colors).
 
@@ -344,7 +357,11 @@ style names built in.
   (an enum variant named like a view would shadow `Text(...)`; `.Destructive` clashes with `ButtonRole`); a few headless metrics are
   added; colors are hex strings, not a `Color` type; token tables are entry lists (dictionary iteration differs under `boring build`);
   the library `Theme` name is taken, so an application's own `env` struct must be named differently.
-- Not yet: adaptive spacing pairs, text scale and per-token light/dark/contrast variants, custom style traits
+- **Variants**: `withColorVariant(role, "light"|"dark"|"contrast", hex)` overrides one appearance (most specific wins: `contrast` while
+  on, then the appearance, then an all-variants `withColor`); `withContrast(true)` switches the base to its increased-contrast
+  palette; `withTextScale(x)` multiplies every font size (so measured text). Validated: scheme names, scale in (0, 5].
+  `tests/theme_variants_test.br`.
+- Not yet: adaptive spacing pairs, `.textScale`/`.tint` provider modifiers, custom style traits
   (`<View> body(Context)`), inherited `.buttonStyle(...)` providers, `Toggle`/`TextField` styles.
 
 Tests: `theme_test.br` (value), `theme_scene_test.br` (nearest provider, dark base, tokens in layout/painting, styles, validation).
@@ -371,10 +388,17 @@ disabled handle is ignored.
   places the caret at the clicked cell. Counted in grapheme clusters; click offsets use display-width cells.
 - Scroll wheel input is `scrollBy` (see "Composition, scrolling and effects").
 
+- **Hover**: `pointerMove(rt, host, placed, x, y)` sets `rt.hover` to the deepest enabled Button / Toggle / TextField /
+  Slider under the pointer (a disabled one, or anything under a modal sheet's scrim, is never hovered; one update
+  pass only when it changes, `false` otherwise), `pointerLeave` clears it, it is dropped when the control unmounts or
+  a sheet opens, and `layout` marks it with a live `hovered` prop. The painter shades a hovered Button (over its face,
+  under its label) and a Toggle's box with the theme's `ShadowColor` (`FillRect` with color token `hover`). While a
+  slider holds the pointer the same call still drags it. The Todo window forwards every pointer position.
+
 Tests: `events_test.br`, `events_extra_test.br` (disabled, capture, editing, Enter/Escape). Behaviour change: a press no longer
 activates (it captures); use `click` (or down + up) where a Button must fire.
 
-Not yet: momentum scrolling, scroll-into-view on focus.
+Not yet: (nothing from this list — see "Not here yet").
 
 ## The Todo application — [`examples/todo/src/todo.br`](examples/todo/src/todo.br), [`tests/todo_test.br`](tests/todo_test.br)
 
@@ -427,6 +451,21 @@ collapse to one row, ShiftUp/ShiftDown extend from the anchor, SelectAll takes e
 computes the new set and writes it whole (`setSelection`); `anchor` / `cursor` are mounted slots. Selected rows of a
 `List`/`MultiList` are painted with the theme's `Selection` color (a `FillRect` behind the row). `tests/multi_list_test.br`.
 
+## Momentum scrolling
+
+`fling(rt, placed, x, y, vx, vy)` (pixels per second) hands a swipe over to inertia on the deepest scroller under the pointer
+that can still move that way; the host calls `stepMomentum(rt, host, placed, dt)` each frame (one event transaction per
+call; `true` = keep scheduling frames). Friction is x0.95 per 1/60 s, inertia ends below 20 px/s or at an edge, and a wheel
+event, a press or a new fling cancels it (`cancelMomentum`, `momentumActive`). It does not bubble to a parent at an edge.
+`tests/momentum_test.br`.
+
+## Scroll into view on focus
+
+`revealFocus(rt, host, placed)` scrolls every ancestor viewport (`Scroll`, `List`, `MultiList`) of the focused control by
+the minimum needed to show its bounds: innermost first, each later one seeing the control where the earlier scrolls left
+it, offsets clamped to the content, a control taller than its viewport aligned to the top edge. A host calls it after a
+focus change with the laid-out window (`keyPress` has no layout). `tests/focus_reveal_test.br`.
+
 ## Key dispatch phases
 
 A key travels the path root → focused target → root (`keyPress`): CAPTURE observers (root toward the target), the target's
@@ -466,14 +505,66 @@ The Todo application in a native window: the view runtime lays it out headlessly
 
 ```bash
 examples/todo_window/run.sh     # boring build --target wgpu, then run (Escape quits)
+# the window shows `assets/logo.ppm` through an `Image` view: render/src/image_file.br decodes binary PPM (P6) into a
+# `Bitmap`, `encodeImages` puts its texels in the kernel's `img` buffer (the generated crate runs from main_wgpu/,
+# hence the `../assets` path)
 ```
 
 It is a plain `Screen` program: top-level `let`s (`frame`, `bins`) are ordinary code that runs once before the
 window opens, and `TileKernel(frame.f, frame.u, ...)` takes any expression — its `init` uploads the encoded display
 list, the atlas and the sizes. The compiler needs no patching of the generated crate any more.
 
-Still open: the frame is drawn from one fixed display list (input does not change the picture), and the loop
-renders every frame instead of when something changed.
+### Window input and resize (the `Screen` event API)
+
+A `Screen` hands the loop everything the runtime in [`src/events.br`](src/events.br) consumes, as per-frame values
+(full reference: `boring/docs/gpu-display.md`, "Input" and "Resizing"; the same on `simd`/`metal`/`wgpu`/`cuda`/`rocm`):
+
+| Runtime input (`events.br`) | `Screen` member |
+|---|---|
+| pointer position / click (`pointerDown`/`pointerUp`/`click`) | `screen.mouse.x`, `.y` (buffer pixels), `screen.mouse_pressed("left")`, `screen.mouse_released("left")`, `.left`/`.right`/`.middle` held |
+| keys (`Tab`, `Enter`, `Escape`, `Backspace`, `Delete`, `Left`/`Right`/`Up`/`Down`, `Home`, `End`, Space) | `screen.key_repeat(name)` (press **or** OS auto-repeat — use for editing), `key_pressed`, `key_released`, `key(name)`, `screen.last_key`; the names are the ones `events.br` uses (`"Space"` is accepted for `" "`; `last_key` reports `" "`) |
+| Shift / Ctrl / Alt / Cmd variants, SelectAll | `screen.shift`, `.ctrl`, `.alt`, `.meta` |
+| key events in order (a slow frame loses none) | `for k in screen.key_events:` / `screen.key_up_events` (auto-repeats included) |
+| typed text (`typeText`) | `screen.text` — characters typed this frame (no control characters, none while Ctrl/Cmd is held) |
+| IME composition (`marked`) | `screen.marked` + `screen.marked_start`/`.marked_end` (byte offsets, `-1` = none); the committed text arrives in `screen.text`; `screen.setImeArea(x, y, w, h)` places the candidate window at the caret |
+| scroll (`scrollBy`) | `screen.mouse.scroll_x`, `.scroll_y` (pixels; positive = wheel away from the user) |
+| window focus | `screen.focused`, `.focus_gained`, `.focus_lost` |
+| window size | `screen.width`, `.height` (live), `screen.resized` |
+
+On resize the pixel buffer is *not* reallocated for you: re-lay out for `screen.width × screen.height`, then rebuild the
+kernel for that size — on `wgpu` `k = TileKernel(frame.f, ..., screen.width, screen.height)` in the loop re-runs the
+setup construction (the swapchain and blit follow), or set the size fields and re-upload the `'surface` field
+(`k.out = blank(screen.width * screen.height)`); on every target a kernel built as `K(Dimension(w, h))` can be
+reassigned (`k = K(Dimension(screen.width, screen.height))`). `todo_window` uses the pointer, key,
+text, wheel, IME-composition and window-size rows (not the focus rows).
+
+`examples/todo_window` is interactive: `Screen(..., redraw = "demand")` runs the loop once at start and then only on an
+input event; the loop feeds `pointerDown`/`pointerUp`, `scrollBy`, `keyPress` (one call per entry of
+`screen.key_events`, with the Shift/Cmd variants mapped to `events.br`'s names) and `typeText` from `screen.text`,
+then re-lays out, re-encodes and re-bins the frame and assigns the kernel's arrays (`k.f = next.f`, ...) before the
+dispatch. Checked headlessly with synthetic input in place of the window's events (click Add, type "Write tests",
+Enter: the third row appears and the Add button keeps its focus ring); real clicks and typing in the window were
+not tried here.
+
+The window also follows resizes (`if screen.resized:` rebuilds the kernel for the new size, `k = TileKernel(frame.f, ..., screen.width, screen.height)`,
+which is what re-points the presentation at the new buffer; the layout, display list and bins are computed for
+`screen.width × screen.height` every frame) and handles IME composition
+(`screen.marked` goes to `imeUpdate`, the text that ends a composition to `imeCommit`, an empty `marked` with a live
+composition to `imeCancel`; `screen.setImeArea` puts the candidate window at the focused field's caret). The first version re-uploaded the kernel's `out` field instead
+(`k.width = …; k.out = blank(…)`): the buffer was the right size but the presentation kept the old size and the dispatch
+grid covered only the old window, so enlarging the window showed the old picture in a corner and a white (transparent)
+rest, apparently frozen. That is a compiler gap for a presented `'unified` field (only a `'surface` field or a reassigned
+kernel re-points the blit; a `'surface` field cannot be read back on the host on wgpu, which the renderer's tests need).
+Both checked
+the same synthetic way: a composition "nihao" shows in the New-item field, a request for a 480 × 300 window gives a
+480 × 300 buffer and a re-flowed layout, and the text that ends the composition lands in the field as an edit. Not done:
+animation, and the caret *inside* a composition (`screen.marked_end` is a byte offset and strings have no byte-length API, so the
+caret sits at the end of the composing text).
+
+Found while wiring it, filed as a compiler task: a top-level `mut rt = Runtime()` in a Screen program lowers to a
+`&mut` of a temporary (build error; the program builds `rt` in a function instead), a host function named `release`
+is mis-lowered in the loop (renamed `lift`), and `screen.mouse.scroll_x as float` as a call argument is an
+unsupported expression (the function takes `float32`).
 
 ## Not here yet
 

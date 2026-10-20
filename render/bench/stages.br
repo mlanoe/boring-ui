@@ -56,7 +56,7 @@ def once(int cards, int width, int height) throws:
         atlas.push(small[i] as uint)
     let atlasUs = micros(t1)
     let t2 = Instant.now()
-    mut k = TileKernel(encoded.f, encoded.u, atlas, bins.starts, bins.list, bins.across, encoded.count, width, height)
+    mut k = TileKernel(encoded.f, encoded.u, atlas, encoded.pool, bins.starts, bins.list, bins.across, encoded.count, width, height)
     let buildUs = micros(t2)
     let t3 = Instant.now()
     kernel:

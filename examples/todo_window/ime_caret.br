@@ -1,0 +1,36 @@
+# Where the caret is inside an input-method composition. The platform reports the caret in the marked text as a UTF-8
+# BYTE offset (`screen.marked_end`, -1 when the IME gave none); boring-ui's runtime works in grapheme indices
+# (`imeUpdate`'s `cursor`), and Boring itself never exposes bytes, so the offset is walked scalar by scalar.
+# Apart from main.br so ime_caret_test.br can run headlessly.
+
+# The UTF-8 length of the scalar value `code`.
+def int utf8Length(int code):
+    if code < 128:
+        return 1
+    if code < 2048:
+        return 2
+    if code < 65536:
+        return 3
+    4
+
+# The grapheme index of byte offset `byteOffset` in `text`: the first cluster boundary at or after it (the offset of
+# a caret never splits a cluster, and rounding forward never leaves the caret before text the IME has passed). A
+# negative offset, or one past the end, is the end of the text.
+pub def int graphemeAtByte(string text, int byteOffset):
+    let count = text.graphemeCount
+    if byteOffset < 0:
+        return count
+    var seen = 0
+    var i = 0
+    while i < count:
+        if seen >= byteOffset:
+            return i
+        for c in text.graphemeSlice(i, i + 1).chars():
+            seen += utf8Length(ord(c))
+        i += 1
+    count
+
+# The caret's column in the field's text, in terminal cells: `caret` graphemes of `value` precede the composition,
+# and the composing `marked` text shows from there with its own caret `cursor` graphemes in.
+pub def int composingCells(string value, int caret, string marked, int cursor):
+    value.graphemeSlice(0, caret).displayWidth + marked.graphemeSlice(0, cursor).displayWidth

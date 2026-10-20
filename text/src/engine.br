@@ -1,0 +1,94 @@
+# boring-ui text engine, first slice: shaping and glyph rasterization with `swash`.
+#
+# `shape` turns a string into positioned glyph ids (proportional advances, ligatures, kerning); `rasterize` renders
+# one glyph id at a size into an 8-bit coverage image with its placement, the input of the renderer's glyph
+# atlas. Both take the raw font file bytes, so no Rust lifetime ever leaks into a Boring struct.
+#
+# Needs in the consuming project's boring.toml (see tests/boring.toml):
+#   [dependencies]  swash = "0.2.10"
+#   [external_fns]  the swash borrow forms listed there.
+
+use swash.FontRef
+use swash.Charmap
+use swash.shape.ShapeContext
+use swash.shape.cluster.GlyphCluster
+use swash.scale.ScaleContext
+use swash.scale.Render
+use swash.scale.Source
+use swash.zeno.Format
+
+# One shaped glyph: its id in the font, pen position along the baseline (`x`, in pixels, from the run origin), its
+# own offset from that pen (`dx`, `dy`) and its advance.
+pub struct PlacedGlyph:
+    pub uint id
+    pub float x
+    pub float dx
+    pub float dy
+    pub float advance
+
+# One rasterized glyph: `width` x `height` coverage bytes (row-major), `left`/`top` the offset of the image's
+# top-left corner from the pen on the baseline (`top` is positive upward, as swash reports it).
+pub struct GlyphImage:
+    pub uint id
+    pub int width
+    pub int height
+    pub int left
+    pub int top
+    pub [uint8] alpha
+
+# Vertical metrics at a size, in pixels.
+pub struct LineMetrics:
+    pub float ascent
+    pub float descent
+    pub float leading
+
+# The closure `shapeWith` takes cannot hold a `for` yet (transpiler gap, task_3ac1e4fb), hence a function.
+def collect(GlyphCluster& cluster, var mut [PlacedGlyph] out, var mut [float] pen):
+    for g in cluster.glyphs:
+        let uint16 gid = g.id
+        let float32 adv = g.advance
+        let float32 gx = g.x
+        let float32 gy = g.y
+        out.push(PlacedGlyph(id = gid as uint, x = pen[0], dx = gx as float, dy = gy as float, advance = adv as float))
+        pen[0] = pen[0] + adv as float
+
+# The glyphs of `text` at `size` pixels per em, left to right.
+pub def [PlacedGlyph] shape([uint8] fontBytes, string text, float size):
+    let fontOpt = FontRef.fromIndex(fontBytes, 0)
+    guard let font = fontOpt else:
+        return []
+    mut ctx = ShapeContext.new()
+    mut shaper = ctx.builder(font).size(size as float32).build()
+    shaper.addStr(text)
+    var mut out = [] as [PlacedGlyph]
+    var mut pen = [0.0]
+    shaper.shapeWith((cluster): collect(cluster, out, pen))
+    out
+
+# The width of a shaped run.
+pub def float runWidth([PlacedGlyph] glyphs):
+    var w = 0.0
+    for g in glyphs:
+        w += g.advance
+    w
+
+# Renders one glyph; `nil` when the font has no outline for it. Not hinted, grayscale coverage.
+pub def GlyphImage? rasterize([uint8] fontBytes, uint glyph, float size):
+    let fontOpt = FontRef.fromIndex(fontBytes, 0)
+    guard let font = fontOpt else:
+        return nil
+    mut ctx = ScaleContext.new()
+    mut scaler = ctx.builder(font).size(size as float32).hint(false).build()
+    let sources = [Source.Outline]
+    mut r = Render.new(sources)
+    Render.format(r, Format.Alpha)
+    let imgOpt = Render.render(r, scaler, glyph as uint16)
+    guard let img = imgOpt else:
+        return nil
+    # typed locals: a cast straight off an external field is mis-emitted as a string parse (task_0e731860)
+    let place = img.placement
+    let uint32 w = place.width
+    let uint32 h = place.height
+    let int32 l = place.left
+    let int32 t = place.top
+    GlyphImage(id = glyph, width = w as int, height = h as int, left = l as int, top = t as int, alpha = img.data)

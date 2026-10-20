@@ -1,0 +1,76 @@
+# The window's frame pacing with the animated logo (pace.br, window_app.br). Run from this directory:
+#   boring run pace_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.animator.*
+use pace
+use window_app
+
+let host = ViewRoot(inner = AppRoot())
+mut rt = Runtime()
+rt.start(host)
+mut pace = Motion()
+begin(pace, placedOf(rt, 640, 360))
+
+def Placed? firstOf(Placed p, string kind):
+    if p.kind == kind:
+        return p
+    for c in p.children:
+        if let found = firstOf(c, kind):
+            return found
+    nil
+
+# The smallest group opacity anywhere in the picture (1 when nothing fades).
+def float lowest(Placed p):
+    var low = p.alpha
+    for c in p.children:
+        let l = lowest(c)
+        if l < low:
+            low = l
+    low
+
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.001 and d > 0.0 - 0.001
+
+def bool hasImage(Placed p):
+    firstOf(p, "Image") != nil
+
+# Where the Todo's list starts: it moves as the logo above it changes height.
+def float imageHeightOf(Placed p):
+    if let todo = firstOf(p, "List"):
+        return todo.y
+    0.0
+
+# idle: the first frame settles, and then nothing is pending
+let first = paceFrame(pace, rt, host, false, 0, 0, 640, 360, 0.0)
+assert(hasImage(first))
+assert_eq(lowest(first), 1.0)
+_ = paceFrame(pace, rt, host, false, 0, 0, 640, 360, 1.0)
+assert(!pacePending(pace, 1.0))
+
+# click the toggle button: the logo fades and shrinks over 300 ms, and the rest of the layout slides up meanwhile
+let before = placedOf(rt, 640, 360)
+let button = firstOf(before, "Button") else (before)
+let bx = (button.x + button.w / 2.0) as int
+let by = (button.y + button.h / 2.0) as int
+let todoBefore = imageHeightOf(before)
+_ = pointerDown(rt, host, before, bx as float, by as float)
+_ = pointerUp(rt, host, placedOf(rt, 640, 360), bx as float, by as float)
+let atStart = paceFrame(pace, rt, host, true, bx, by, 640, 360, 2.0)
+assert(near(imageHeightOf(atStart), todoBefore))      # starts where it was
+assert(pacePending(pace, 2.0))
+let midway = paceFrame(pace, rt, host, false, bx, by, 640, 360, 2.15)
+assert(imageHeightOf(midway) < todoBefore and imageHeightOf(midway) > imageHeightOf(placedOf(rt, 640, 360)))
+# pointer motion while it runs must not snap it
+let moved = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.2)
+assert(imageHeightOf(moved) > imageHeightOf(placedOf(rt, 640, 360)))
+# after 300 ms it has arrived, and the next frame finds nothing left to do
+let arrived = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.4)
+assert(near(imageHeightOf(arrived), imageHeightOf(placedOf(rt, 640, 360))))
+_ = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.5)
+assert(!pacePending(pace, 2.5))
+print "pace ok"

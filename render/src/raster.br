@@ -2,11 +2,15 @@
 # Turns the backend-neutral display list (`[Command]`, see scene.br) into a pixel buffer. It is the ORACLE
 # every GPU kernel is later compared against, so it favours exact, boring semantics over speed.
 #
-# Pixel format: `0xAARRGGBB`, premultiplied, one `uint` per pixel (the layout `Screen`'s `'surface` buffers
-# present as BGRA8). The buffer starts fully transparent.
+# Pixel format: `0xAARRGGBB`, one `uint` per pixel (the layout `Screen`'s `'surface` buffers present as BGRA8). The
+# buffer starts fully transparent.
 #
-# Colour pipeline (OPEN DECISION, see the renderer draft): for now sources are blended in the *encoded*
-# (sRGB) space, with no linear-light conversion. When the decision lands, only `blend` changes.
+# Colour pipeline (the renderer draft's: a LINEAR working space): colours arrive sRGB-encoded, every blend decodes to
+# linear light, composites premultiplied there and encodes the result back, rounding to 8 bits per operation. A
+# stored channel is therefore the sRGB encoding of the *premultiplied linear* value (for an opaque pixel simply its
+# sRGB colour, which is what a window shows); alpha is stored linearly. Blending in the encoded space instead makes
+# anti-aliased dark-on-light edges (text) too heavy and light-on-dark too thin; the encoded-space version of this
+# file is in git history (before this change).
 #
 # Coverage: an axis-aligned rectangle is rasterized with exact area coverage (a pixel half inside a
 # rectangle gets alpha 0.5), and a clip is the geometric intersection of the rectangle with the clip
@@ -27,11 +31,19 @@
 # the font has no shape for draws a hollow box; zero-width ones draw nothing. Text is not clipped to `w`, only
 # by `PushClip`.
 #
-# Implemented so far: `FillRect`, `StrokeRect` (an inside border, drawn as four non-overlapping rectangles so
+# `MarkedText` is the input method's composition marker: an underline under the composing text, `h / 16` pixels thick
+# (at least one), along the bottom of its cell row, in the command's colour; the text itself is a `DrawText`.
+#
+# `DrawImage` stretches the named `Bitmap` (see display_list.br) over the command's rectangle: for each pixel the
+# image is sampled bilinearly at the pixel centre (texel centres at half-integers, coordinates clamped to the edge),
+# in premultiplied linear light, and the result is blended with the rectangle's exact area coverage, so the edges
+# anti-alias like a rectangle's. A name that matches no image draws nothing and is listed in `unsupported`.
+#
+# Implemented so far: `DrawGlyph` (an atlas mask, pen snapped to the pixel grid), `DrawImage`, `FillRect`, `StrokeRect` (an inside border, drawn as four non-overlapping rectangles so
 # a translucent border never double-blends at the corners), `PushClip`/`PopClip` and `PushOpacity`/`PopOpacity`
 # (group opacity: the group is drawn into its own transparent layer, then composited once at the group's
 # opacity, so overlapping descendants do not become darker). Every other command kind is skipped and its kind
-# listed in `Raster.unsupported` (so a test, or a reader, can see what the picture is missing).
+# listed in `Raster.unsupported` (a `DrawImage` with no matching image included; so a test, or a reader, can see what the picture is missing).
 
 use render.display_list.*
 use render.raster_font.*
@@ -72,6 +84,11 @@ pub def Area intersect(Area a, Area b):
     let y0 = rmax(a.y0, b.y0)
     Area(x0 = x0, y0 = y0, x1 = rmax(x0, rmin(a.x1, b.x1)), y1 = rmax(y0, rmin(a.y1, b.y1)))
 
+# The underline of a `MarkedText` command: along the bottom of its rows, `h / 16` thick (at least one pixel).
+pub def Area underlineOf(Command c):
+    let thick = rmax(1.0, (c.h / 16.0).floor())
+    Area(x0 = c.x, y0 = c.y + c.h - thick, x1 = c.x + rmax(c.w, 0.0), y1 = c.y + c.h)
+
 pub def Area areaOf(Command c):
     Area(x0 = c.x, y0 = c.y, x1 = c.x + rmax(c.w, 0.0), y1 = c.y + rmax(c.h, 0.0))
 
@@ -109,14 +126,37 @@ pub def Rgba parseColor(string token):
 def int byteOf(uint p, int shift):
     ((p >> shift) & 255) as int
 
-# Source-over of a premultiplied source (`sr`,`sg`,`sb` already scaled by `sa`, all 0..255 floats) onto one
-# destination pixel. Each channel is `src + dst * (1 - sa)`, rounded to nearest.
-def uint blend(uint dst, float sr, float sg, float sb, float sa):
+# The sRGB transfer functions (IEC 61966-2-1): `srgbToLinear` takes an encoded channel on the 0..255 scale and
+# returns linear light in 0..1; `linearToSrgb` is its inverse back to 0..255, not rounded.
+pub def float srgbToLinear(float c):
+    let x = c / 255.0
+    if x <= 0.04045:
+        return x / 12.92
+    pow((x + 0.055) / 1.055, 2.4)
+
+pub def float linearToSrgb(float v):
+    if v <= 0.0031308:
+        return 255.0 * 12.92 * v
+    255.0 * (1.055 * pow(v, 1.0 / 2.4) - 0.055)
+
+# A linear-light value as an sRGB-encoded 8-bit channel: rounded to nearest, clamped to 0..255.
+pub def int encode8(float linear):
+    let e = (linearToSrgb(linear) + 0.5).floor()
+    if e > 255.0:
+        return 255
+    if e < 0.0:
+        return 0
+    e as int
+
+# Source-over onto one destination pixel, in linear light. The source is premultiplied linear (`lr`,`lg`,`lb` in 0..1,
+# already scaled by its alpha) with alpha `sa` on the 0..255 scale; each destination channel is decoded to linear,
+# `src + dst * (1 - sa)` is formed, and the sum is encoded back and rounded. Alpha: `sa + dst alpha * (1 - sa)`.
+def uint blend(uint dst, float lr, float lg, float lb, float sa):
     let keep = 1.0 - sa / 255.0
     let a = ((sa + byteOf(dst, 24) as float * keep) + 0.5).floor() as int
-    let r = ((sr + byteOf(dst, 16) as float * keep) + 0.5).floor() as int
-    let g = ((sg + byteOf(dst, 8) as float * keep) + 0.5).floor() as int
-    let b = ((sb + byteOf(dst, 0) as float * keep) + 0.5).floor() as int
+    let r = encode8(lr + srgbToLinear(byteOf(dst, 16) as float) * keep)
+    let g = encode8(lg + srgbToLinear(byteOf(dst, 8) as float) * keep)
+    let b = encode8(lb + srgbToLinear(byteOf(dst, 0) as float) * keep)
     (((a << 24) | (r << 16) | (g << 8) | b) as uint)
 
 # Layers are stored back to back in one buffer: layer `k` occupies `[k * width * height, (k + 1) * width * height)`.
@@ -138,7 +178,7 @@ def fillArea(mut [uint] px, int base, int width, int height, Area area, Rgba col
                 let a = color.a as float * cover
                 let k = a / 255.0
                 let i = base + y * width + x
-                px[i] = blend(px[i], color.r as float * k, color.g as float * k, color.b as float * k, a)
+                px[i] = blend(px[i], srgbToLinear(color.r as float) * k, srgbToLinear(color.g as float) * k, srgbToLinear(color.b as float) * k, a)
             x += 1
         y += 1
 
@@ -201,7 +241,7 @@ def shadowArea(mut [uint] px, int base, int width, int height, Area box, float r
                 let a = color.a as float * cover
                 let k = a / 255.0
                 let i = base + y * width + x
-                px[i] = blend(px[i], color.r as float * k, color.g as float * k, color.b as float * k, a)
+                px[i] = blend(px[i], srgbToLinear(color.r as float) * k, srgbToLinear(color.g as float) * k, srgbToLinear(color.b as float) * k, a)
             x += 1
         y += 1
 
@@ -240,7 +280,7 @@ def drawGlyph(mut [uint] px, int base, int width, int height, [uint8] atlas, int
                 let a = color.a as float * rmin(cover, 1.0)
                 let k = a / 255.0
                 let i = base + y * width + x
-                px[i] = blend(px[i], color.r as float * k, color.g as float * k, color.b as float * k, a)
+                px[i] = blend(px[i], srgbToLinear(color.r as float) * k, srgbToLinear(color.g as float) * k, srgbToLinear(color.b as float) * k, a)
             x += 1
         y += 1
 
@@ -254,18 +294,120 @@ def drawText(mut [uint] px, int base, int width, int height, [uint8] atlas, Comm
             drawGlyph(px, base, width, height, atlas, glyphIndex(g), pen, c.y, cell * cells as float, c.h, clip, color)
         pen += cell * cells as float
 
-# Composites the layer at offset `src` onto the one at `dst` at `opacity` (0..1): every premultiplied channel of the
-# layer is scaled by it, then blended source-over.
+# One atlas glyph (a `DrawGlyph`): its mask is copied with the pen snapped to the pixel grid, each pixel's coverage
+# the mask byte times the clip's coverage of the pixel, blended like a rectangle's.
+def drawAtlasGlyph(mut [uint] px, int base, int width, int height, GlyphAtlas atlas, Command c, Area clip, Rgba color):
+    let g = c.glyph
+    if g < 0 or g >= atlas.width.length or color.a == 0:
+        return
+    let w = atlas.width[g]
+    let h = atlas.height[g]
+    let ox = (c.x + 0.5).floor() as int + atlas.left[g]
+    let oy = (c.y + 0.5).floor() as int - atlas.top[g]
+    let start = atlas.offset[g]
+    var row = 0
+    while row < h:
+        let y = oy + row
+        if y >= 0 and y < height:
+            let clip_y = overlap1d(y as float, (y + 1) as float, clip.y0, clip.y1)
+            var col = 0
+            while col < w:
+                let x = ox + col
+                if x >= 0 and x < width:
+                    let m = atlas.alpha[start + row * w + col]
+                    if m > 0:
+                        let cover = overlap1d(x as float, (x + 1) as float, clip.x0, clip.x1) * clip_y * (m as float / 255.0)
+                        if cover > 0.0:
+                            let a = color.a as float * cover
+                            let k = a / 255.0
+                            let i = base + y * width + x
+                            px[i] = blend(px[i], srgbToLinear(color.r as float) * k, srgbToLinear(color.g as float) * k, srgbToLinear(color.b as float) * k, a)
+                col += 1
+        row += 1
+
+# The index of the image called `name`, or -1.
+pub def int findImage([Bitmap] images, string name):
+    var i = 0
+    while i < images.length:
+        if images[i].name == name:
+            return i
+        i += 1
+    0 - 1
+
+# One texel as premultiplied linear light, [r, g, b, a] with a on the 0..1 scale.
+def [float] texelLinear(Bitmap img, int x, int y):
+    let t = img.pixels[y * img.width + x]
+    let a = byteOf(t, 24) as float / 255.0
+    [srgbToLinear(byteOf(t, 16) as float) * a, srgbToLinear(byteOf(t, 8) as float) * a, srgbToLinear(byteOf(t, 0) as float) * a, a]
+
+def drawImage(mut [uint] px, int base, int width, int height, Bitmap img, Command c, Area clip):
+    let box = intersect(areaOf(c), clip)
+    if box.x1 <= box.x0 or box.y1 <= box.y0 or c.w <= 0.0 or c.h <= 0.0 or img.width <= 0 or img.height <= 0:
+        return
+    let first_x = rmax(box.x0.floor(), 0.0) as int
+    let first_y = rmax(box.y0.floor(), 0.0) as int
+    let last_x = rmin(box.x1.ceil() - 1.0, (width - 1) as float) as int
+    let last_y = rmin(box.y1.ceil() - 1.0, (height - 1) as float) as int
+    let maxu = (img.width - 1) as float
+    let maxv = (img.height - 1) as float
+    var y = first_y
+    while y <= last_y:
+        let cover_y = overlap1d(y as float, (y + 1) as float, box.y0, box.y1)
+        let v = rmax(0.0, rmin(((y as float + 0.5 - c.y) / c.h) * img.height as float - 0.5, maxv))
+        let y0 = v.floor() as int
+        let y1 = (y0 + 1) as int
+        let wy = v - y0 as float
+        var x = first_x
+        while x <= last_x:
+            let cover = overlap1d(x as float, (x + 1) as float, box.x0, box.x1) * cover_y
+            if cover > 0.0:
+                let u = rmax(0.0, rmin(((x as float + 0.5 - c.x) / c.w) * img.width as float - 0.5, maxu))
+                let x0 = u.floor() as int
+                let wx = u - x0 as float
+                var x1 = x0 + 1
+                if x1 > img.width - 1:
+                    x1 = img.width - 1
+                var yy = y1
+                if yy > img.height - 1:
+                    yy = img.height - 1
+                let t00 = texelLinear(img, x0, y0)
+                let t10 = texelLinear(img, x1, y0)
+                let t01 = texelLinear(img, x0, yy)
+                let t11 = texelLinear(img, x1, yy)
+                let w00 = (1.0 - wx) * (1.0 - wy)
+                let w10 = wx * (1.0 - wy)
+                let w01 = (1.0 - wx) * wy
+                let w11 = wx * wy
+                let lr = (t00[0] * w00 + t10[0] * w10 + t01[0] * w01 + t11[0] * w11) * cover
+                let lg = (t00[1] * w00 + t10[1] * w10 + t01[1] * w01 + t11[1] * w11) * cover
+                let lb = (t00[2] * w00 + t10[2] * w10 + t01[2] * w01 + t11[2] * w11) * cover
+                let sa = (t00[3] * w00 + t10[3] * w10 + t01[3] * w01 + t11[3] * w11) * 255.0 * cover
+                if sa > 0.0:
+                    let i = base + y * width + x
+                    px[i] = blend(px[i], lr, lg, lb, sa)
+            x += 1
+        y += 1
+
+# Composites the layer at offset `src` onto the one at `dst` at `opacity` (0..1): the layer's premultiplied linear
+# channels and its alpha are scaled by it, then blended source-over.
 def compositeLayer(mut [uint] px, int src, int dst, int count, float opacity):
     var i = 0
     while i < count:
         let s = px[src + i]
         if s != 0:
-            px[dst + i] = blend(px[dst + i], byteOf(s, 16) as float * opacity, byteOf(s, 8) as float * opacity, byteOf(s, 0) as float * opacity, byteOf(s, 24) as float * opacity)
+            px[dst + i] = blend(px[dst + i], srgbToLinear(byteOf(s, 16) as float) * opacity, srgbToLinear(byteOf(s, 8) as float) * opacity, srgbToLinear(byteOf(s, 0) as float) * opacity, byteOf(s, 24) as float * opacity)
         i += 1
 
-# Draws `list` into a fresh `width` x `height` buffer. Paint order is list order.
+# Draws `list` into a fresh `width` x `height` buffer. Paint order is list order. `DrawImage` is skipped (no images).
 pub def Raster rasterize([Command] list, int width, int height):
+    rasterizeImages(list, [], width, height)
+
+# `rasterize` with the images `DrawImage` commands name (see `Bitmap`).
+pub def Raster rasterizeImages([Command] list, [Bitmap] images, int width, int height):
+    rasterizeWith(list, images, GlyphAtlas(), width, height)
+
+# `rasterizeImages` plus the glyph atlas `DrawGlyph` commands index (see `GlyphAtlas`).
+pub def Raster rasterizeWith([Command] list, [Bitmap] images, GlyphAtlas glyphs, int width, int height):
     let count = width * height
     # layer 0 is the picture; each open `PushOpacity` adds one layer on top (grown on demand, reused after)
     mut [uint] store = [0 for ..<count]
@@ -279,6 +421,8 @@ pub def Raster rasterize([Command] list, int width, int height):
         let clip = clips[clips.length - 1]
         if c.kind == "FillRect":
             fillArea(store, base, width, height, intersect(areaOf(c), clip), parseColor(c.hex))
+        elif c.kind == "MarkedText":
+            fillArea(store, base, width, height, intersect(underlineOf(c), clip), parseColor(c.hex))
         elif c.kind == "StrokeRect":
             strokeArea(store, base, width, height, areaOf(c), c.value, clip, parseColor(c.hex))
         elif c.kind == "DrawShadow":
@@ -287,6 +431,11 @@ pub def Raster rasterize([Command] list, int width, int height):
             if atlas.length == 0:
                 atlas = buildAtlas()
             drawText(store, base, width, height, atlas, c, clip, parseColor(c.hex))
+        elif c.kind == "DrawGlyph":
+            drawAtlasGlyph(store, base, width, height, glyphs, c, clip, parseColor(c.hex))
+        elif c.kind == "DrawImage" and findImage(images, c.text) >= 0:
+            let which = findImage(images, c.text)
+            drawImage(store, base, width, height, images[which], c, clip)
         elif c.kind == "PushClip":
             clips.push(intersect(areaOf(c), clip))
         elif c.kind == "PopClip":
@@ -322,14 +471,14 @@ pub def Raster rasterize([Command] list, int width, int height):
 pub def string pixelHex(Raster r, int x, int y):
     "#{r.pixels[y * r.width + x]:08X}"
 
-# The picture as a plain-text PPM (P3), composited over white (PPM has no alpha channel).
+# The picture as a plain-text PPM (P3), composited over white in linear light (PPM has no alpha channel).
 pub def string toPpm(Raster r):
     mut rows = []
     for y in 0..<r.height:
         mut cells = []
         for x in 0..<r.width:
             let p = r.pixels[y * r.width + x]
-            let rest = 255 - byteOf(p, 24)
-            cells.push("{byteOf(p, 16) + rest} {byteOf(p, 8) + rest} {byteOf(p, 0) + rest}")
+            let rest = 1.0 - byteOf(p, 24) as float / 255.0
+            cells.push("{encode8(srgbToLinear(byteOf(p, 16) as float) + rest)} {encode8(srgbToLinear(byteOf(p, 8) as float) + rest)} {encode8(srgbToLinear(byteOf(p, 0) as float) + rest)}")
         rows.push(cells.join(" "))
     "P3\n{r.width} {r.height}\n255\n{rows.join("\n")}\n"

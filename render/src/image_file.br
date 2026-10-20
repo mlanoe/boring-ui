@@ -1,0 +1,60 @@
+# Bitmap files for the renderers: binary PPM (`P6`, 8 bits per channel, no alpha) decoded into an `Bitmap`
+# (display_list.br). PPM is the one raster format simple enough to decode in a few lines of Boring; PNG/JPEG need an
+# inflate/DCT decoder and stay outside (convert with any tool: `magick logo.png logo.ppm`). The image's `name` is
+# the string a `DrawImage` command carries (the `Bitmap` view's `source`), so a window keeps one list of loaded files.
+
+use render.display_list.*
+
+def bool isSpace(int b):
+    b == 32 or b == 10 or b == 13 or b == 9
+
+# The unsigned decimal number starting at `at` (after white space and `#` comments), as [value, index after it];
+# [-1, at] when there is none.
+def [int] headerNumber([uint8] bytes, int at):
+    var i = at
+    var seeking = true
+    while seeking and i < bytes.length:
+        let b = bytes[i] as int
+        if b == 35:
+            while i < bytes.length and (bytes[i] as int) != 10:
+                i += 1
+        elif isSpace(b):
+            i += 1
+        else:
+            seeking = false
+    var value = 0 - 1
+    while i < bytes.length and (bytes[i] as int) >= 48 and (bytes[i] as int) <= 57:
+        if value < 0:
+            value = 0
+        value = value * 10 + (bytes[i] as int) - 48
+        i += 1
+    [value, i]
+
+# Decodes a `P6` file; nil when it is not one, is truncated, or has a `maxval` other than 255.
+pub def Bitmap? decodePpm(string name, [uint8] bytes):
+    if bytes.length < 11 or (bytes[0] as int) != 80 or (bytes[1] as int) != 54:
+        return nil
+    let w = headerNumber(bytes, 2)
+    let h = headerNumber(bytes, w[1])
+    let m = headerNumber(bytes, h[1])
+    if w[0] <= 0 or h[0] <= 0 or m[0] != 255:
+        return nil
+    # exactly one white-space byte separates the header from the texels
+    let start = m[1] + 1
+    if bytes.length < start + w[0] * h[0] * 3:
+        return nil
+    mut [uint] pixels = []
+    var i = start
+    for _ in 0..<(w[0] * h[0]):
+        let r = bytes[i] as uint
+        let g = bytes[i + 1] as uint
+        let b = bytes[i + 2] as uint
+        let alpha = 255 as uint
+        pixels.push((alpha << 24) | (r << 16) | (g << 8) | b)
+        i += 3
+    Bitmap(name = name, width = w[0], height = h[0], pixels = pixels)
+
+# Reads and decodes the file at `path` under the name `name`; nil when it is not a P6 file (an unreadable file throws).
+pub def Bitmap? loadPpm(string name, string path) throws:
+    let bytes = fs.readBytes(path)
+    decodePpm(name, bytes)

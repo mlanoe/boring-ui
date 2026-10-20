@@ -244,4 +244,27 @@ assert(near(reducedEnter[0].w, 50.0))                           # Scale became a
 assert(near(reducedEnter[0].alpha, 0.5))                        # 100 ms linear cross-fade
 assert_eq(rt.errors.length, 0)
 
+# ── keyframes and the completion observation ─────────────────────────────────────────────────────
+
+mut kan = Animator()
+mut krt = Runtime()
+krt.start(host)
+commit(kan, layedOut(krt), krt.takeAnimation(), krt.takeTriggers(), 0.0)
+assert(!takeCompletion(kan, 0.0), "nothing ran yet")
+mut kst = panelState(krt)
+krt.animate(keyframes(100.0, [0.5], [1.5]), host, ():
+    Panel().setWide(true, kst))
+commit(kan, layedOut(krt), krt.takeAnimation(), krt.takeTriggers(), 1000.0)
+assert(near(frameAt(presentation(kan, 1000.0), 0).w, 100.0))
+assert(near(frameAt(presentation(kan, 1050.0), 0).w, 400.0))     # 100 + 200 * 1.5: overshoots the 300 target
+assert(near(frameAt(presentation(kan, 1100.0), 0).w, 300.0))     # and settles on it
+assert(!takeCompletion(kan, 1050.0), "still running")
+assert(takeCompletion(kan, 1100.0), "reported once when the run ends")
+assert(!takeCompletion(kan, 1200.0), "and only once")
+krt.animate(linear(50.0), host, ():
+    Panel().setWide(false, kst))
+commit(kan, layedOut(krt), krt.takeAnimation(), krt.takeTriggers(), 2000.0)
+assert(!takeCompletion(kan, 2000.0), "a new run re-arms it")
+assert(takeCompletion(kan, 2100.0))
+
 print "animator ok"

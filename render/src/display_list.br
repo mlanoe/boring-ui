@@ -3,7 +3,10 @@
 # can be built for the kernel targets without pulling it in.
 #
 # Vocabulary (`kind`): `FillRect`, `StrokeRect` (inside border), `DrawShadow`, `DrawText`, `DrawImage`,
-# `MarkedText`, `PushClip`/`PopClip`, `PushOpacity`/`PopOpacity`.
+# `DrawGlyph`, `MarkedText`, `PushClip`/`PopClip`, `PushOpacity`/`PopOpacity`.
+#
+# `DrawGlyph` is one shaped glyph of a real font: `glyph` is its index in the `GlyphAtlas` handed next to the list,
+# (`x`, `y`) the pen position on the baseline (pixels, snapped to the pixel grid by the renderers), `hex` its colour.
 
 pub struct Command:
     pub string kind
@@ -14,9 +17,45 @@ pub struct Command:
     pub string text = ""
     pub string color = ""
     pub int node = -1
+    # `DrawGlyph`: the index of the glyph in the atlas.
+    pub int glyph = -1
     # Border width / opacity / shadow radius, and a shadow's offset.
     # The color token resolved against the node's theme (`#RRGGBB[AA]`); `color` keeps the semantic token.
     pub var string hex = ""
     pub var float value = 0.0
     pub var float dx = 0.0
     pub var float dy = 0.0
+
+# A decoded image a `DrawImage` command refers to by `name` (the command's `text`): `width` x `height` texels, row-major,
+# straight-alpha sRGB `0xAARRGGBB`. Decoding files (PNG, JPEG, ...) is outside Boring; a renderer is handed the
+# result next to the display list (`rasterizeImages` and its kernel twins). A `DrawImage` whose name matches no
+# image is not drawn.
+pub struct Bitmap:
+    pub string name
+    pub int width
+    pub int height
+    pub [uint] pixels
+
+# The glyph images a `DrawGlyph` command refers to, as one pool of 8-bit coverage masks (struct of arrays, so a
+# kernel reads plain numeric buffers). Glyph `g` is `width[g]` x `height[g]` bytes starting at `offset[g]` in
+# `alpha`, row-major; `left[g]`/`top[g]` locate its top-left corner from the pen on the baseline (`top` positive
+# upward). Nothing is packed in 2D: a mask is contiguous, so a sample is `alpha[offset + row * width + col]`.
+# The host (the text engine) renders each glyph once at its size and adds it with `addGlyph`.
+pub struct GlyphAtlas:
+    pub var mut [int] width = []
+    pub var mut [int] height = []
+    pub var mut [int] left = []
+    pub var mut [int] top = []
+    pub var mut [int] offset = []
+    pub var mut [uint8] alpha = []
+
+    # Appends a glyph mask (`w` * `h` bytes) and returns its index.
+    def int addGlyph(int w, int h, int l, int t, [uint8] mask):
+        width.push(w)
+        height.push(h)
+        left.push(l)
+        top.push(t)
+        offset.push(alpha.length)
+        for b in mask:
+            alpha.push(b)
+        width.length - 1

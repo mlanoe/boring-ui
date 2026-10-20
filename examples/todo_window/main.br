@@ -1,40 +1,66 @@
-# The Todo application (examples/todo) in a native window: the view runtime lays it out headlessly, its display
-# list is encoded once, and the tiled kernel rasterizer (render/src/raster_tile.br) draws it straight into the
-# pixel buffer `screen.present` shows. On `--target wgpu` that buffer never goes back to the host.
+# The Todo application (examples/todo) in a native window, interactive: the view runtime lays it out headlessly,
+# its display list is encoded and binned on the host, and the tiled kernel rasterizer
+# (render/src/raster_tile.br) draws it straight into the pixel buffer `screen.present` shows. On `--target wgpu`
+# that buffer never goes back to the host. The loop runs only when an input event arrives (`redraw = "demand"`):
+# mouse presses and releases, keys, typed text and the wheel go to the runtime (src/events.br), and a changed
+# frame is re-encoded and uploaded to the kernel's buffers.
 #
-# What this does NOT do yet (and why) is the point of the exercise; see README.md, "Window".
-#   - the frame is drawn from one fixed display list: the kernel's buffers cannot be replaced from inside the
-#     render loop, so input does not change the picture;
-#   - the loop renders every frame instead of when something changed.
+# The window is resizable (the layout, the display list and the kernel's picture follow `screen.width/height`),
+# IME composition is shown at the caret and the input method's candidate window is placed next to it, and
+# pointer motion reaches the runtime (it only matters to a slider drag: the runtime has no hover state).
+#
+# The `Image` view's `source` is resolved through `loadImages` (binary PPM, render/src/image_file.br).
+#
+# Animation: the "Toggle logo" button shrinks and fades the logo (window_app.br, an `AnimationScope` triggered by the
+# toggled value). Each frame paints the animator's presentation (pace.br); while one runs the loop asks for another
+# frame (`screen.requestRedraw()`), otherwise it sleeps. Pointer motion in the middle of an animation waits instead of
+# snapping it. Momentum scrolling is not driven: a mouse wheel has no fling (a touch host would call `fling` and
+# `stepMomentum`).
+#
+# The caret inside an IME composition comes from `screen.marked_end` (a byte offset, converted by ime_caret.br) and
+# places the input method's candidate window; the focused field draws its own caret bar and selection (scene.br).
 
 use boring.ui.*
 use ui.core.*
 use ui.layout.*
 use ui.scene.*
 use ui.theme.*
+use ui.events.*
+use ui.anim.*
+use ui.animator.*
 use render.display_list.*
 use render.raster.*
 use render.raster_font.*
 use render.raster_gpu.*
 use render.raster_tile.*
+use render.image_file.*
 use todo.todo.*
+use pace
+use ime_caret
+use window_app
 
-struct AppRoot as ViewBuilder:
-    req View buildView(mut Runtime rt): TodoApp()
+# The decoded files the window's `Image` views refer to. The program runs from the generated crate (main_wgpu/), so
+# the path is relative to that. A file that is missing or not a binary PPM is simply not drawn.
+def [Bitmap] readImages() throws:
+    mut images = []
+    if fs.exists("../assets/logo.ppm"):
+        if let img = loadPpm("logo.ppm", "../assets/logo.ppm"):
+            images.push(img)
+    images
 
-let width = 640
-let height = 360
+def [Bitmap] loadImages():
+    if let found = try? readImages():
+        return found
+    []
 
-# The headless part: lay the Todo application out and encode its display list.
-def Encoded todoFrame():
-    mut rt = Runtime()
-    rt.start(ViewRoot(inner = AppRoot()))
-    let placed = layout(rt, 640.0, 360.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+# Encode the display list of the layout `placed` (the animator's presentation) for a `w` x `h` window; `images` are the decoded files its
+# `Image` views name by `source`.
+def Encoded encodeFrame(Placed placed, [Bitmap] images, int w, int h):
     # the Todo paints no window background of its own: put the theme's under it (opaque pixels, not transparent)
-    mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = 640.0, h = 360.0, hex = placed.theme.colorNamed("WindowBackground"))]
+    mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = w as float, h = h as float, hex = placed.theme.colorNamed("WindowBackground"))]
     for c in displayList(placed):
         list.push(c)
-    encode(list, 640, 360)
+    encodeImages(list, images, w, h)
 
 def [uint] atlasWords():
     let small = buildAtlas()
@@ -43,17 +69,149 @@ def [uint] atlasWords():
         atlas.push(small[i] as uint)
     atlas
 
-# Top-level code is ordinary code, run once before the window opens: the frame is laid out and encoded a
-# single time and the kernel constructor takes the values directly (its `init` uploads them).
-let frame = todoFrame()
+# A transparent picture for a window of `n` pixels (the kernel overwrites every one of them).
+def [uint] blank(int n):
+    [0 as uint for ..<n]
+
+def Runtime startedRuntime(Builder host):
+    mut fresh = Runtime()
+    fresh.start(host)
+    fresh
+
+# The picture the kernel is built with. The loop body runs once before the window is first shown and replaces it
+# with the live runtime's frame, so a throwaway runtime is enough here (a read-only `rt` argument in the setup code
+# is not borrowed by the Screen lowering yet).
+def Encoded firstFrame(Builder host, [Bitmap] images, int w, int h):
+    encodeFrame(placedOf(startedRuntime(host), w, h), images, w, h)
+
+# ── input, as the runtime understands it ─────────────────────────────────────────────────────────
+
+def void press(mut Runtime rt, Builder host, int w, int h, int x, int y):
+    _ = pointerDown(rt, host, placedOf(rt, w, h), x as float, y as float)
+
+def void release(mut Runtime rt, Builder host, int w, int h, int x, int y):
+    _ = pointerUp(rt, host, placedOf(rt, w, h), x as float, y as float)
+
+def void motion(mut Runtime rt, Builder host, int w, int h, int x, int y):
+    _ = pointerMove(rt, host, placedOf(rt, w, h), x as float, y as float)
+
+def void wheel(mut Runtime rt, Builder host, int w, int h, int x, int y, float dx, float dy):
+    _ = scrollBy(rt, host, placedOf(rt, w, h), x as float, y as float, dx as float, dy as float)
+
+# A key as events.br names it: Space, Shift-variants, and the editing shortcuts of the platform's command key.
+def void keyDown(mut Runtime rt, Builder host, string name, bool shift, bool command):
+    var mapped = name
+    if name == " ":
+        mapped = "Space"
+    if shift and (name == "Tab" or name == "Left" or name == "Right" or name == "Home" or name == "End" or name == "Up" or name == "Down"):
+        mapped = "Shift{name}"
+    if command and name == "a":
+        mapped = "SelectAll"
+    if command and name == "z":
+        if shift:
+            mapped = "Redo"
+        else:
+            mapped = "Undo"
+    _ = keyPress(rt, host, mapped)
+
+# One frame of text input. While the input method composes, its marked text is shown at the caret (the bound
+# value is untouched); the text that arrives with the end of a composition is committed as one edit, and typed
+# text is inserted. An empty `marked` with no text, while a composition is on, abandons it.
+def void textInput(mut Runtime rt, Builder host, string marked, int markedEnd, string text):
+    if marked != "":
+        # the caret inside the composing text, from the platform's byte offset (the end when it gave none)
+        _ = imeUpdate(rt, host, marked, graphemeAtByte(marked, markedEnd))
+    if text != "":
+        if rt.composition != nil:
+            _ = imeCommit(rt, host, text)
+        else:
+            _ = typeText(rt, host, text)
+    if marked == "" and text == "":
+        if rt.composition != nil:
+            _ = imeCancel(rt, host)
+
+# ── animation ────────────────────────────────────────────────────────────────────────────────────
+
+# ── where the caret is, for the input method's candidate window ──────────────────────────────────
+
+def Placed? nodeOf(Placed p, int id):
+    if p.id == id:
+        return p
+    for c in p.children:
+        if let found = nodeOf(c, id):
+            return found
+    nil
+
+# The focused text field's caret as [x, y] in window pixels (the window's corner when none).
+def [int] caretAt(Runtime rt, int w, int h):
+    let placed = placedOf(rt, w, h)
+    if let f = rt.focus:
+        if let node = nodeOf(placed, f.id):
+            if node.kind == "TextField":
+                let cell = placed.theme.fontSizeNamed("Body") / 2.0
+                let caret = selectionOf(rt, f)[0]
+                let value = node.props["value"] else ("")
+                var cells = value.graphemeSlice(0, caret).displayWidth
+                if let c = rt.composition:
+                    cells = composingCells(value, caret, c.text, c.cursor)
+                return [(node.x + 4.0 + cells as float * cell) as int, (node.y + 4.0) as int]
+    [0, 0]
+
+def int caretX(Runtime rt, int w, int h):
+    caretAt(rt, w, h)[0]
+
+def int caretY(Runtime rt, int w, int h):
+    caretAt(rt, w, h)[1]
+
+# ── setup, run once before the window opens ──────────────────────────────────────────────────────
+
+let host = ViewRoot(inner = AppRoot())
+mut rt = Runtime()
+rt.start(host)
+
+let width = 640
+let height = 360
+let images = loadImages()
+let frame = firstFrame(host, images, width, height)
 let bins = bin(frame, width, height)
 
-let screen = Screen(Dimension(width, height), title = "boring-ui Todo")
-mut k = TileKernel(frame.f, frame.u, atlasWords(), bins.starts, bins.list, bins.across, frame.count, width, height)
+mut pace = Motion()
+begin(pace, placedOf(rt, width, height))
+
+let screen = Screen(Dimension(width, height), title = "boring-ui Todo", redraw = "demand")
+mut k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins.list, bins.across, frame.count, width, height)
 
 kernel:
     loop:
-        k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
+        if screen.resized:
+            k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins.list, bins.across, frame.count, screen.width, screen.height)
+        motion(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y)
+        if screen.mouse_pressed("left"):
+            press(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y)
+        if screen.mouse_released("left"):
+            release(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y)
+        if screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0:
+            wheel(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y, screen.mouse.scroll_x as float, screen.mouse.scroll_y as float)
+        for name in screen.key_events:
+            keyDown(rt, host, name, screen.shift, screen.meta or screen.ctrl)
+        textInput(rt, host, screen.marked, screen.marked_end, screen.text)
+        for name in screen.key_events:
+            touch(pace)
+        let eventful = screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
+        let shown = paceFrame(pace, rt, host, eventful, screen.mouse.x, screen.mouse.y, screen.width, screen.height, screen.time)
+        let next = encodeFrame(shown, images, screen.width, screen.height)
+        let nextBins = bin(next, screen.width, screen.height)
+        k.f = next.f
+        k.u = next.u
+        k.img = next.pool
+        k.bstart = nextBins.starts
+        k.blist = nextBins.list
+        k.across = nextBins.across
+        k.count = next.count
+        k(block = (16, 16), grid = ((screen.width + 15) / 16, (screen.height + 15) / 16))
         screen.present(k.out)
-        if screen.key("\x1B"):
+        if pacePending(pace, screen.time):
+            screen.requestRedraw()
+        screen.setImeArea(caretX(rt, screen.width, screen.height), caretY(rt, screen.width, screen.height), 2, 16)
+        if screen.meta and screen.key("q"):
             break

@@ -1,0 +1,115 @@
+# MatchedGeometry: a wrapper that appears while another with the same id disappears presents from the old frame to
+# its own, and the old one's ghost is not drawn (src/animator.br).
+# Run: boring run tests/matched_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.anim.*
+use ui.animator.*
+
+view Gallery:
+    state bool open = false
+    state string leaving = "hero"
+
+    def setOpen(bool v):
+        open = v
+
+    def setLeaving(string v):
+        leaving = v
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Frame(width = 40.0, height = 20.0):
+                Text("top")
+            if open:
+                Frame(width = 200.0, height = 100.0):
+                    MatchedGeometry(id = "hero"):
+                        Frame(width = 200.0, height = 100.0):
+                            Text("detail")
+            else:
+                Transition(removal = .Fade):
+                    Frame(width = 50.0, height = 30.0):
+                        MatchedGeometry(id = leaving):
+                            Frame(width = 50.0, height = 30.0):
+                                Text("thumb")
+
+struct GalleryBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Gallery()
+
+def Gallery__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Gallery__State else (Gallery__State())
+
+def Placed laid(Runtime rt):
+    let p = layout(rt, 400.0, 400.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.001 and d > 0.0 - 0.001
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def int run(string leavingId, mut Animator an, mut Runtime rt, Builder host, float t0):
+    var st = state(rt)
+    Gallery().setLeaving(leavingId, st)
+    rt.invalidateRoot()
+    _ = rt.flush(host)
+    commit(an, laid(rt), rt.takeAnimation(), rt.takeTriggers(), t0)
+    rt.animate(linear(100.0), host, ():
+        Gallery().setOpen(true, st))
+    commit(an, laid(rt), rt.takeAnimation(), rt.takeTriggers(), t0 + 1000.0)
+    ofKind(presentation(an, t0 + 1050.0), "MatchedGeometry").length
+
+# Matching ids: the thumbnail's frame (50 x 30 at (0, 20)) hands over to the detail, and its ghost is not drawn.
+let host = ViewRoot(inner = GalleryBuilder())
+mut rt = Runtime()
+rt.start(host)
+mut an = Animator()
+let matchedNow = run("hero", an, rt, host, 0.0)
+assert_eq(matchedNow, 1, "only the entering wrapper is drawn: the thumbnail ghost is suppressed")
+let at0 = ofKind(presentation(an, 1000.0), "MatchedGeometry")[0]
+assert(near(at0.x, 0.0) and near(at0.y, 20.0), "starts at the old frame")
+assert(near(at0.w, 50.0) and near(at0.h, 30.0), "with the old size")
+let mid = ofKind(presentation(an, 1050.0), "MatchedGeometry")[0]
+assert(near(mid.w, 125.0) and near(mid.h, 65.0), "halfway between the two sizes")
+assert(near(mid.y, 20.0), "both frames start at the same y here")
+let end = ofKind(presentation(an, 1100.0), "MatchedGeometry")[0]
+assert(near(end.w, 200.0) and near(end.h, 100.0), "arrives at its own frame")
+# The content scales with the wrapper: the detail's frame inside is stretched likewise at the start.
+let inner0 = ofKind(presentation(an, 1000.0), "Frame")
+var stretched = false
+for f in inner0:
+    if near(f.w, 50.0) and near(f.h, 30.0):
+        stretched = true
+assert(stretched, "children are refit to the matched frame")
+
+# A different id: no match, so the thumbnail's ghost stays and both wrappers are drawn.
+mut other = Runtime()
+other.start(host)
+mut an2 = Animator()
+let unmatched = run("elsewhere", an2, other, host, 0.0)
+assert_eq(unmatched, 2, "without a match the removal ghost is drawn as usual")
+
+# Without an animation the entering node is simply at its rest frame.
+mut calm = Runtime()
+calm.start(host)
+mut an3 = Animator()
+commit(an3, laid(calm), calm.takeAnimation(), calm.takeTriggers(), 0.0)
+var cst = state(calm)
+Gallery().setOpen(true, cst)
+calm.invalidateRoot()
+_ = calm.flush(host)
+commit(an3, laid(calm), calm.takeAnimation(), calm.takeTriggers(), 10.0)
+let rest = ofKind(presentation(an3, 10.0), "MatchedGeometry")[0]
+assert(near(rest.w, 200.0) and near(rest.h, 100.0), "no animation: at rest at once")
+print("matched geometry ok")

@@ -16,8 +16,9 @@
 # `StackSpacing`) because the fixture layout needs them; `MinimumHitSize` defaults to 0 (touch
 # themes raise it); colors are `#RRGGBB` / `#RRGGBBAA` strings, not a `Color` type; token values
 # live in entry lists rather than dictionaries (dictionary iteration differs under `boring build`).
-# Not here yet: adaptive spacing pairs, text scale, light/dark/contrast variants per token,
-# custom style traits (`<View> body(Context)`), inherited `.buttonStyle(...)` providers.
+# Variants: a color override may be for one appearance (`light`, `dark`, `contrast`) or for all; `contrast` also
+# switches the built-in base to its increased-contrast palettes, and `textScale` multiplies every font size.
+# Not here yet: adaptive spacing pairs, custom style traits (`<View> body(Context)`), inherited `.buttonStyle(...)` providers.
 
 use boring.ui.*
 
@@ -58,6 +59,8 @@ pub enum MetricRole:
 pub struct ColorEntry:
     pub string role
     pub string hex
+    # "" = every variant; otherwise "light", "dark" or "contrast" (only while that appearance is in effect).
+    pub string scheme = ""
 
 pub struct MetricEntry:
     pub string role
@@ -143,6 +146,48 @@ def string darkColor(string role):
         return "#2F5C9C"
     "#00000066"
 
+# The increased-contrast base: only the roles that change are listed; everything else inherits the normal palette.
+def string contrastColor(bool dark, string role):
+    if dark:
+        if role == "PrimaryText":
+            return "#FFFFFF"
+        if role == "SecondaryText":
+            return "#E5E5EA"
+        if role == "PlaceholderText":
+            return "#C7C7CC"
+        if role == "DisabledText":
+            return "#AEAEB2"
+        if role == "Accent" or role == "FocusRing":
+            return "#409CFF"
+        if role == "Danger":
+            return "#FF6961"
+        if role == "ControlBorder":
+            return "#FFFFFF"
+        if role == "Separator":
+            return "#8E8E93"
+        if role == "Selection":
+            return "#3D6FB5"
+        return ""
+    if role == "PrimaryText":
+        return "#000000"
+    if role == "SecondaryText":
+        return "#2C2C2E"
+    if role == "PlaceholderText":
+        return "#48484A"
+    if role == "DisabledText":
+        return "#6E6E73"
+    if role == "Accent" or role == "FocusRing":
+        return "#0040DD"
+    if role == "Danger":
+        return "#D70015"
+    if role == "ControlBorder":
+        return "#000000"
+    if role == "Separator":
+        return "#8E8E93"
+    if role == "Selection":
+        return "#80B3FF"
+    ""
+
 # The fixture metrics the headless layout always used (see layout.br), now named.
 def float systemMetric(string role):
     if role == "ControlPadding":
@@ -209,20 +254,19 @@ pub def ButtonSpec buttonSpec(string style):
 pub struct Theme as EnvValue:
     pub string name = "system"
     pub bool dark = false
+    # Increased contrast: the built-in base switches to its high-contrast palette, `contrast` color overrides apply.
+    pub bool contrast = false
+    # Accessibility text scale: multiplies every font size (and so every measured text).
+    pub float textScale = 1.0
     pub [ColorEntry] colors = []
     pub [MetricEntry] metrics = []
     pub [MetricEntry] fontSizes = []
     pub [StyleEntry] buttonStyles = []
 
-    # The resolved color of a role (`#RRGGBB[AA]`): an override, else the base.
+    # The resolved color of a role (`#RRGGBB[AA]`): the most specific override for the appearance in effect (a
+    # `contrast` one under increased contrast, then `light`/`dark`, then one for every variant), else the base.
     pub req string color(ColorRole role):
-        let key = "{role}"
-        for e in colors:
-            if e.role == key:
-                return e.hex
-        if dark:
-            return darkColor(key)
-        lightColor(key)
+        self.colorNamed("{role}")
 
     pub req float metric(MetricRole role):
         let key = "{role}"
@@ -232,17 +276,34 @@ pub struct Theme as EnvValue:
         systemMetric(key)
 
     pub req float fontSize(FontRole role):
-        let key = "{role}"
-        for e in fontSizes:
-            if e.role == key:
-                return e.value
-        systemFontSize(key)
+        self.fontSizeNamed("{role}")
 
     # String-keyed lookups for callers that only have a prop (layout and painting read mounted props).
     pub req string colorNamed(string key):
+        var best = ""
+        var rank = 0
+        var appearance = "light"
+        if dark:
+            appearance = "dark"
         for e in colors:
-            if e.role == key:
-                return e.hex
+            if e.role != key:
+                continue
+            var r = 0
+            if e.scheme == "":
+                r = 1
+            elif e.scheme == appearance:
+                r = 2
+            elif contrast and e.scheme == "contrast":
+                r = 3
+            if r >= rank and r > 0:
+                best = e.hex
+                rank = r
+        if rank > 0:
+            return best
+        if contrast:
+            let hc = contrastColor(dark, key)
+            if hc != "":
+                return hc
         if dark:
             return darkColor(key)
         lightColor(key)
@@ -250,8 +311,8 @@ pub struct Theme as EnvValue:
     pub req float fontSizeNamed(string key):
         for e in fontSizes:
             if e.role == key:
-                return e.value
-        systemFontSize(key)
+                return e.value * textScale
+        systemFontSize(key) * textScale
 
     pub req string buttonStyleNamed(string roleKey):
         for e in buttonStyles:
@@ -269,13 +330,17 @@ pub struct Theme as EnvValue:
 
     # Builders: a new theme with one entry replaced (the receiver is untouched).
     pub req Theme withColor(ColorRole role, string hex):
+        self.withColorVariant(role, "", hex)
+
+    # An override for one appearance only: `scheme` is "light", "dark" or "contrast" ("" = every variant).
+    pub req Theme withColorVariant(ColorRole role, string scheme, string hex):
         let key = "{role}"
         mut [ColorEntry] next = []
         for e in colors:
-            if e.role != key:
+            if e.role != key or e.scheme != scheme:
                 next.push(e)
-        next.push(ColorEntry(role = key, hex = hex))
-        Theme(name = name, dark = dark, colors = next, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        next.push(ColorEntry(role = key, hex = hex, scheme = scheme))
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = next, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
 
     pub req Theme withMetric(MetricRole role, float value):
         let key = "{role}"
@@ -284,7 +349,7 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(MetricEntry(role = key, value = value))
-        Theme(name = name, dark = dark, colors = colors, metrics = next, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = next, fontSizes = fontSizes, buttonStyles = buttonStyles)
 
     pub req Theme withFontSize(FontRole role, float size):
         let key = "{role}"
@@ -293,7 +358,7 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(MetricEntry(role = key, value = size))
-        Theme(name = name, dark = dark, colors = colors, metrics = metrics, fontSizes = next, buttonStyles = buttonStyles)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = next, buttonStyles = buttonStyles)
 
     pub req Theme withButtonStyle(ButtonRole role, string style):
         let key = "{role}"
@@ -302,11 +367,19 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(StyleEntry(role = key, style = style))
-        Theme(name = name, dark = dark, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = next)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = next)
 
     # The built-in dark base with the same overrides.
     pub req Theme asDark():
-        Theme(name = "{name}.dark", dark = true, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        Theme(name = "{name}.dark", dark = true, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+
+    # Increased contrast on or off, keeping the overrides.
+    pub req Theme withContrast(bool on):
+        Theme(name = name, dark = dark, contrast = on, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+
+    # The accessibility text scale (1.0 = none): every font size, hence every text measurement, is multiplied.
+    pub req Theme withTextScale(float scale):
+        Theme(name = name, dark = dark, contrast = contrast, textScale = scale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
 
     # Validation (run once when a theme is installed): colors are `#RRGGBB` / `#RRGGBBAA`, metrics are
     # finite and non-negative, font sizes are positive, style names are built in. Empty = valid.
@@ -315,9 +388,13 @@ pub struct Theme as EnvValue:
         for e in colors:
             if !isHexColor(e.hex):
                 problems.push("color {e.role}: '{e.hex}' is not #RRGGBB or #RRGGBBAA")
+            if e.scheme != "" and e.scheme != "light" and e.scheme != "dark" and e.scheme != "contrast":
+                problems.push("color {e.role}: scheme '{e.scheme}' is not light, dark or contrast")
         for e in metrics:
             if !(e.value >= 0.0) or e.value > 1000000.0:
                 problems.push("metric {e.role}: {e.value} is not a finite non-negative length")
+        if !(textScale > 0.0) or textScale > 5.0:
+            problems.push("text scale {textScale} is not in (0, 5]")
         for e in fontSizes:
             if !(e.value > 0.0) or e.value > 1000000.0:
                 problems.push("font {e.role}: {e.value} is not a positive size")

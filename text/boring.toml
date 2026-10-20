@@ -1,0 +1,11 @@
+[project]
+name    = "boring-ui-text"
+version = "0.1.0"
+
+# The boring-ui text engine: shaping and glyph rasterization through `swash` (called directly from Boring source),
+# producing the glyph runs and the atlas images the renderer consumes. Host-side only: it needs a Rust crate, so
+# it cannot be interpreted (`boring run`) nor compiled for the kernel targets; the headless layout tests keep
+# using the fixture font. A plain `src/` consumed through a `[deps]` path entry named `text`.
+
+[deps]
+render = "../render"

@@ -30,6 +30,7 @@ kernel TileKernel:
     let [float32]'global f
     let [uint]'global u
     let [uint]'global atlas
+    let [uint]'global img
     mut [uint]'unified out
     let [uint]'global bstart
     let [uint]'global blist
@@ -41,10 +42,11 @@ kernel TileKernel:
     mut [uint, 256]'actor scanB
     mut [uint, 256]'actor sel
 
-    init([float32]'global fi, [uint]'global ui, [uint]'global ai, [uint]'global bsi, [uint]'global bli, int acr, int n, int w, int h):
+    init([float32]'global fi, [uint]'global ui, [uint]'global ai, [uint]'global ii, [uint]'global bsi, [uint]'global bli, int acr, int n, int w, int h):
         f = fi
         u = ui
         atlas = ai
+        img = ii
         bstart = bsi
         blist = bli
         across = acr
@@ -136,9 +138,9 @@ kernel TileKernel:
                         let db = sb - 4
                         let keep = 1.0 - sa / 255.0
                         lay[db] = mix(sa, lay[db], keep)
-                        lay[db + 1] = mix(lay[sb + 1] * o, lay[db + 1], keep)
-                        lay[db + 2] = mix(lay[sb + 2] * o, lay[db + 2], keep)
-                        lay[db + 3] = mix(lay[sb + 3] * o, lay[db + 3], keep)
+                        lay[db + 1] = mixLinear(lin8(lay[sb + 1]) * o, lay[db + 1], keep)
+                        lay[db + 2] = mixLinear(lin8(lay[sb + 2]) * o, lay[db + 2], keep)
+                        lay[db + 3] = mixLinear(lin8(lay[sb + 3]) * o, lay[db + 3], keep)
                     depth -= 1
                 else:
                     let col = u[ub + 1]
@@ -206,6 +208,58 @@ kernel TileKernel:
                                 let inside = overlap(fx, fx + 1.0, bx0, bx1) * overlap(fy, fy + 1.0, by0, by1)
                                 let clipped = overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
                                 cover = gauss(fx, sx0, sx1, sigma) * gauss(fy, sy0, sy1, sigma) * (1.0 - inside) * clipped
+                        elif op == 6:
+                            # image: bilinear sample (clamped to the edge) of the `iw` x `ih` texels at `img[off ..]`, blended here
+                            let iw = f[fb + 8]
+                            let ih = f[fb + 9]
+                            let off = u[ub + 3] as int
+                            let ex0 = maxf(bx0, kx0)
+                            let ey0 = maxf(by0, ky0)
+                            let ex1 = maxf(ex0, minf(bx1, kx1))
+                            let ey1 = maxf(ey0, minf(by1, ky1))
+                            let icover = overlap(fx, fx + 1.0, ex0, ex1) * overlap(fy, fy + 1.0, ey0, ey1)
+                            if icover > 0.0 and bx1 > bx0 and by1 > by0 and iw > 0.0 and ih > 0.0:
+                                let su = maxf(0.0, minf(((fx + 0.5 - bx0) / (bx1 - bx0)) * iw - 0.5, iw - 1.0))
+                                let sv = maxf(0.0, minf(((fy + 0.5 - by0) / (by1 - by0)) * ih - 0.5, ih - 1.0))
+                                let tx0 = floor(su) as int
+                                let ty0 = floor(sv) as int
+                                let wx = su - floor(su)
+                                let wy = sv - floor(sv)
+                                let iwi = iw as int
+                                let ihi = ih as int
+                                var tx1 = tx0 + 1
+                                if tx1 > iwi - 1:
+                                    tx1 = iwi - 1
+                                var ty1 = ty0 + 1
+                                if ty1 > ihi - 1:
+                                    ty1 = ihi - 1
+                                let t00 = img[off + ty0 * iwi + tx0]
+                                let t10 = img[off + ty0 * iwi + tx1]
+                                let t01 = img[off + ty1 * iwi + tx0]
+                                let t11 = img[off + ty1 * iwi + tx1]
+                                let w00 = (1.0 - wx) * (1.0 - wy)
+                                let w10 = wx * (1.0 - wy)
+                                let w01 = (1.0 - wx) * wy
+                                let w11 = wx * wy
+                                let isa = (texA(t00) * w00 + texA(t10) * w10 + texA(t01) * w01 + texA(t11) * w11) * 255.0 * icover
+                                if isa > 0.0:
+                                    let ir = (texR(t00) * w00 + texR(t10) * w10 + texR(t01) * w01 + texR(t11) * w11) * icover
+                                    let ig = (texG(t00) * w00 + texG(t10) * w10 + texG(t01) * w01 + texG(t11) * w11) * icover
+                                    let ib = (texB(t00) * w00 + texB(t10) * w10 + texB(t01) * w01 + texB(t11) * w11) * icover
+                                    let ikeep = 1.0 - isa / 255.0
+                                    lay[dbase] = mix(isa, lay[dbase], ikeep)
+                                    lay[dbase + 1] = mixLinear(ir, lay[dbase + 1], ikeep)
+                                    lay[dbase + 2] = mixLinear(ig, lay[dbase + 2], ikeep)
+                                    lay[dbase + 3] = mixLinear(ib, lay[dbase + 3], ikeep)
+                        elif op == 7:
+                            # glyph mask: one byte per pixel at `img[off ..]`, the box is exactly the mask's pixels
+                            let mw = f[fb + 8] as int
+                            let moff = u[ub + 3] as int
+                            if fx >= bx0 and fx < bx1 and fy >= by0 and fy < by1:
+                                let mcol = (fx - bx0) as int
+                                let mrow = (fy - by0) as int
+                                let m = img[moff + mrow * mw + mcol] as float32
+                                cover = overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1) * (m / 255.0)
                         else:
                             # glyph: the cell (bx0..bx1 by by0..by1) holds a 6 x 8 texel glyph; sum the lit texels' area
                             let g = u[ub + 2] as int
@@ -234,9 +288,9 @@ kernel TileKernel:
                             let k = a / 255.0
                             let keep = 1.0 - k
                             lay[dbase] = mix(a, lay[dbase], keep)
-                            lay[dbase + 1] = mix(cr * k, lay[dbase + 1], keep)
-                            lay[dbase + 2] = mix(cg * k, lay[dbase + 2], keep)
-                            lay[dbase + 3] = mix(cb * k, lay[dbase + 3], keep)
+                            lay[dbase + 1] = mixLinear(lin8(cr) * k, lay[dbase + 1], keep)
+                            lay[dbase + 2] = mixLinear(lin8(cg) * k, lay[dbase + 2], keep)
+                            lay[dbase + 3] = mixLinear(lin8(cb) * k, lay[dbase + 3], keep)
             sync
         if px < width and py < height:
             # packed 0xAARRGGBB (premultiplied, the channels are integral and <= 255): the layout `Screen` presents
@@ -322,14 +376,21 @@ pub def Bins bin(Encoded e, int width, int height):
         for row in r[2]..=r[3]:
             for col in r[0]..=r[1]:
                 let c = row * across + col
-                let pos = cursor[c]
-                list[pos] = i as uint
+                list[cursor[c]] = i as uint
                 cursor[c] += 1
     Bins(starts = starts, list = list, across = across)
 
 # The CPU reference's `Raster`, produced by the tiled kernel.
 pub def Raster rasterizeTiled([Command] list, int width, int height) throws:
-    let encoded = encode(list, width, height)
+    rasterizeTiledImages(list, [], width, height)
+
+# `rasterizeTiled` with the images `DrawImage` commands name (see `Bitmap`).
+pub def Raster rasterizeTiledImages([Command] list, [Bitmap] images, int width, int height) throws:
+    rasterizeTiledWith(list, images, GlyphAtlas(), width, height)
+
+# `rasterizeTiledImages` plus the glyph atlas `DrawGlyph` commands index.
+pub def Raster rasterizeTiledWith([Command] list, [Bitmap] images, GlyphAtlas glyphs, int width, int height) throws:
+    let encoded = encodeWith(list, images, glyphs, width, height)
     if encoded.count == 0 or width <= 0 or height <= 0:
         return rasterize([], width, height)
     let small = buildAtlas()
@@ -337,7 +398,7 @@ pub def Raster rasterizeTiled([Command] list, int width, int height) throws:
     for i in 0..<small.length:
         atlas.push(small[i] as uint)
     let bins = bin(encoded, width, height)
-    mut k = TileKernel(encoded.f, encoded.u, atlas, bins.starts, bins.list, bins.across, encoded.count, width, height)
+    mut k = TileKernel(encoded.f, encoded.u, atlas, encoded.pool, bins.starts, bins.list, bins.across, encoded.count, width, height)
     kernel:
         k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
     let [uint] pixels = k.out
