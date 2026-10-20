@@ -2,12 +2,17 @@
 #
 # The per-pixel kernel (raster_gpu.br) makes every pixel walk every command: O(pixels x commands). Here a
 # workgroup owns one 16 x 16 tile (one thread per pixel) and first finds, by itself, which commands can touch
-# its tile, so a pixel only walks those. Binning happens inside the same dispatch, in workgroup memory, in
-# rounds of 256 commands (one per thread):
+# its tile, so a pixel only walks those. Binning is two-level:
+#   - COARSE, on the host (`bin`): the commands that can touch each 128 x 128 super-tile (8 x 8 tiles), in paint
+#     order (opacity push/pop in every list). A first version had every tile scan the whole command list; the
+#     scan was where all the time went (see README: it measured 7.5 ms of 12.8 ms at 1920 x 1080), and a
+#     super-tile's list is typically one round instead of eight;
+#   - FINE, inside the dispatch, in workgroup memory, in rounds of 256 commands of the tile's super-tile list
+#     (one per thread):
 #   1. every thread tests its command's conservative bounding box against the tile (opacity push/pop always
 #      pass: an empty group composites to nothing);
-#   2. a Hillis-Steele inclusive scan over the 256 flags (workgroup memory, two barriers per step) gives each
-#      selected command its slot, so the compacted list keeps PAINT ORDER, with no atomics and no nondeterminism;
+#   2. a Hillis-Steele inclusive scan over the 256 flags (workgroup memory, ping-ponging between two arrays: one
+#      barrier per step) gives each selected command its slot, so the compacted list keeps PAINT ORDER, with no atomics and no nondeterminism;
 #   3. the selected commands are drawn by every pixel thread, in order, exactly as raster_gpu.br draws them;
 #   4. a barrier, then the next round reuses the buffers.
 # A command a tile skips would have had zero coverage on every pixel of it, so the result is bit-identical to
@@ -26,19 +31,24 @@ kernel TileKernel:
     let [uint]'global u
     let [uint]'global atlas
     mut [uint]'unified out
+    let [uint]'global bstart
+    let [uint]'global blist
+    let int across
     let int count
-    let int chunks
     let int width
     let int height
-    mut [uint, 256]'actor scan
+    mut [uint, 256]'actor scanA
+    mut [uint, 256]'actor scanB
     mut [uint, 256]'actor sel
 
-    init([float32]'global fi, [uint]'global ui, [uint]'global ai, int n, int w, int h):
+    init([float32]'global fi, [uint]'global ui, [uint]'global ai, [uint]'global bsi, [uint]'global bli, int acr, int n, int w, int h):
         f = fi
         u = ui
         atlas = ai
+        bstart = bsi
+        blist = bli
+        across = acr
         count = n
-        chunks = (n + 255) / 256
         width = w
         height = h
         out = [0 as uint for ..<w * h]
@@ -55,10 +65,18 @@ kernel TileKernel:
         var [float32, 20] lay = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         var [float32, 5] opac = [1.0, 1.0, 1.0, 1.0, 1.0]
         var int depth = 0
-        for chunk in 0..<chunks:
-            let i = chunk * 256 + tid
+        # this tile's super-tile (128 x 128 px = 8 x 8 tiles): its command list is blist[first ..< first + listLen]
+        let cell = (.block.y / 8) * across + (.block.x / 8)
+        let first = bstart[cell] as int
+        let listLen = (bstart[cell + 1] as int) - first
+        let rounds = (listLen + 255) / 256
+        for chunk in 0..<rounds:
+            let slot = chunk * 256 + tid
+            var int i = 0 - 1
+            if slot < listLen:
+                i = blist[first + slot] as int
             var int flag = 0
-            if i < count:
+            if i >= 0:
                 let gb = i * 12
                 let gop = u[i * 4]
                 if gop >= 4:
@@ -76,20 +94,27 @@ kernel TileKernel:
                         hi_y = minf(ceil(f[gb + 3] + f[gb + 10] + reach), ceil(f[gb + 7]))
                     if hi_x > tx0 and lo_x < tx0 + 16.0 and hi_y > ty0 and lo_y < ty0 + 16.0:
                         flag = 1
-            scan[tid] = flag as uint
+            scanA[tid] = flag as uint
             sync
             var off = 1
+            var parity = 0
             while off < 256:
-                var v = scan[tid]
-                if tid >= off:
-                    v += scan[tid - off]
-                sync
-                scan[tid] = v
+                if parity == 0:
+                    var v = scanA[tid]
+                    if tid >= off:
+                        v += scanA[tid - off]
+                    scanB[tid] = v
+                else:
+                    var v = scanB[tid]
+                    if tid >= off:
+                        v += scanB[tid - off]
+                    scanA[tid] = v
                 sync
                 off = off * 2
-            let total = scan[255] as int
+                parity = 1 - parity
+            let total = scanA[255] as int
             if flag == 1:
-                sel[(scan[tid] as int) - 1] = i as uint
+                sel[(scanA[tid] as int) - 1] = i as uint
             sync
             for k in 0..<total:
                 let ci = sel[k] as int
@@ -221,6 +246,87 @@ kernel TileKernel:
             let pb = lay[3] as uint
             out[py * width + px] = (pa << 24) | (pr << 16) | (pg << 8) | pb
 
+# ── coarse binning, on the host ──────────────────────────────────────────────────────────────────
+
+pub struct Bins:
+    # starts[c] .. starts[c + 1] delimit super-tile c's slice of `list` (c = row * across + column)
+    pub [uint] starts
+    # command indices in paint order, super-tile after super-tile (never empty: one spare entry when nothing is binned)
+    pub [uint] list
+    pub int across
+
+def float bigger(float a, float b):
+    if a > b:
+        return a
+    b
+
+def float smaller(float a, float b):
+    if a < b:
+        return a
+    b
+
+# The inclusive range of super-tiles command `i` can touch, as [first column, last column, first row, last row]
+# (empty when last < first). The box is the kernel's own conservative one (see its flag test), widened by one
+# pixel on every side so that f64 here against f32 there can never leave a tile out. Opacity push/pop go to all.
+def [int] cellRange(Encoded e, int i, int across, int down):
+    let fb = i * 12
+    let op = e.u[i * 4] as int
+    if op >= 4:
+        return [0, across - 1, 0, down - 1]
+    var lox = bigger(e.f[fb] as float, e.f[fb + 4] as float)
+    var loy = bigger(e.f[fb + 1] as float, e.f[fb + 5] as float)
+    var hix = smaller(e.f[fb + 2] as float, e.f[fb + 6] as float)
+    var hiy = smaller(e.f[fb + 3] as float, e.f[fb + 7] as float)
+    if op == 2:
+        let reach = 1.5 * bigger(e.f[fb + 8] as float, 0.0)
+        lox = bigger((e.f[fb] as float + e.f[fb + 9] as float - reach).floor(), (e.f[fb + 4] as float).floor())
+        loy = bigger((e.f[fb + 1] as float + e.f[fb + 10] as float - reach).floor(), (e.f[fb + 5] as float).floor())
+        hix = smaller((e.f[fb + 2] as float + e.f[fb + 9] as float + reach).ceil(), (e.f[fb + 6] as float).ceil())
+        hiy = smaller((e.f[fb + 3] as float + e.f[fb + 10] as float + reach).ceil(), (e.f[fb + 7] as float).ceil())
+    var c0 = ((lox - 1.0) / 128.0).floor() as int
+    var r0 = ((loy - 1.0) / 128.0).floor() as int
+    var c1 = ((hix + 1.0) / 128.0).floor() as int
+    var r1 = ((hiy + 1.0) / 128.0).floor() as int
+    if c0 < 0:
+        c0 = 0
+    if r0 < 0:
+        r0 = 0
+    if c1 > across - 1:
+        c1 = across - 1
+    if r1 > down - 1:
+        r1 = down - 1
+    [c0, c1, r0, r1]
+
+# Super-tiles are 128 x 128 pixels; two passes over the commands (count, then fill) keep each list in paint order.
+pub def Bins bin(Encoded e, int width, int height):
+    let across = (width + 127) / 128
+    let down = (height + 127) / 128
+    let cells = across * down
+    mut [int] counts = [0 for ..<cells]
+    for i in 0..<e.count:
+        let r = cellRange(e, i, across, down)
+        for row in r[2]..=r[3]:
+            for col in r[0]..=r[1]:
+                counts[row * across + col] += 1
+    mut [uint] starts = [0 as uint for ..<(cells + 1)]
+    mut [int] cursor = [0 for ..<cells]
+    var total = 0
+    for c in 0..<cells:
+        starts[c] = total as uint
+        cursor[c] = total
+        total += counts[c]
+    starts[cells] = total as uint
+    mut [uint] list = [0 as uint for ..<(total + 1)]
+    for i in 0..<e.count:
+        let r = cellRange(e, i, across, down)
+        for row in r[2]..=r[3]:
+            for col in r[0]..=r[1]:
+                let c = row * across + col
+                let pos = cursor[c]
+                list[pos] = i as uint
+                cursor[c] += 1
+    Bins(starts = starts, list = list, across = across)
+
 # The CPU reference's `Raster`, produced by the tiled kernel.
 pub def Raster rasterizeTiled([Command] list, int width, int height) throws:
     let encoded = encode(list, width, height)
@@ -230,7 +336,8 @@ pub def Raster rasterizeTiled([Command] list, int width, int height) throws:
     mut [uint] atlas = []
     for i in 0..<small.length:
         atlas.push(small[i] as uint)
-    mut k = TileKernel(encoded.f, encoded.u, atlas, encoded.count, width, height)
+    let bins = bin(encoded, width, height)
+    mut k = TileKernel(encoded.f, encoded.u, atlas, bins.starts, bins.list, bins.across, encoded.count, width, height)
     kernel:
         k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
     let [uint] pixels = k.out

@@ -13,3 +13,4 @@
 /tests/*_wgpu/
 /examples/*/*_simd/
 /examples/*/*_wgpu/
+/render/bench/stages_*/

@@ -1,0 +1,79 @@
+# Where the tiled kernel's time goes, stage by stage (the same steps as rasterizeTiled, timed apart).
+# Run with bench/run_stages.sh on `--target wgpu`.
+
+use std.time.Instant
+use render.display_list.*
+use render.raster.*
+use render.raster_font.*
+use render.raster_gpu.*
+use render.raster_tile.*
+
+def Command rect(float x, float y, float w, float h, string hex):
+    Command(kind = "FillRect", x = x, y = y, w = w, h = h, hex = hex)
+
+def Command stroke(float x, float y, float w, float h, float line, string hex):
+    Command(kind = "StrokeRect", x = x, y = y, w = w, h = h, hex = hex, value = line)
+
+def Command shadow(float x, float y, float w, float h, float radius, float dx, float dy, string hex):
+    Command(kind = "DrawShadow", x = x, y = y, w = w, h = h, hex = hex, value = radius, dx = dx, dy = dy)
+
+def Command text(float x, float y, float h, string content, string hex):
+    Command(kind = "DrawText", x = x, y = y, w = 400.0, h = h, text = content, hex = hex)
+
+def [Command] scene(int cards, int width, int height):
+    mut [Command] list = [rect(0.0, 0.0, width as float, height as float, "#F2F2F7")]
+    let columns = 4
+    let cardW = (width as float - 20.0 * (columns + 1) as float) / columns as float
+    let cardH = 150.0
+    for i in 0..<cards:
+        let x = 20.0 + (i % columns) as float * (cardW + 20.0)
+        let y = 20.0 + (i / columns) as float * (cardH + 20.0)
+        list.push(shadow(x, y, cardW, cardH, 12.0, 0.0, 4.0, "#00000040"))
+        list.push(rect(x, y, cardW, cardH, "#FFFFFF"))
+        list.push(stroke(x, y, cardW, cardH, 1.0, "#D1D1D6"))
+        list.push(text(x + 12.0, y + 12.0, 20.0, "Card number {i} title", "#000000"))
+        list.push(text(x + 12.0, y + 48.0, 16.0, "Second line of the card {i}", "#3C3C43"))
+        list.push(text(x + 12.0, y + 76.0, 16.0, "Third line, a little longer", "#8E8E93"))
+        list.push(rect(x + 12.0, y + 108.0, 80.0, 28.0, "#007AFF"))
+        list.push(text(x + 20.0, y + 114.0, 16.0, "Open", "#FFFFFF"))
+    list
+
+def int micros(Instant start):
+    start.elapsed().asMicros() as int
+
+def once(int cards, int width, int height) throws:
+    let list = scene(cards, width, height)
+    let t0 = Instant.now()
+    let encoded = encode(list, width, height)
+    let encodeUs = micros(t0)
+    let tb = Instant.now()
+    let bins = bin(encoded, width, height)
+    let binUs = micros(tb)
+    let t1 = Instant.now()
+    let small = buildAtlas()
+    mut [uint] atlas = []
+    for i in 0..<small.length:
+        atlas.push(small[i] as uint)
+    let atlasUs = micros(t1)
+    let t2 = Instant.now()
+    mut k = TileKernel(encoded.f, encoded.u, atlas, bins.starts, bins.list, bins.across, encoded.count, width, height)
+    let buildUs = micros(t2)
+    let t3 = Instant.now()
+    kernel:
+        k(block = (16, 16), grid = ((width + 15) / 16, (height + 15) / 16))
+    let dispatchUs = micros(t3)
+    let t4 = Instant.now()
+    let [uint] pixels = k.out
+    let readUs = micros(t4)
+    # the dispatch returns once submitted; the first read waits for the GPU and copies, a second one only copies
+    let t5 = Instant.now()
+    let [uint] again = k.out
+    let copyUs = micros(t5)
+    print "{width}x{height} cmds={encoded.count}: encode {encodeUs} us | bin {binUs} us | atlas {atlasUs} us | build+upload {buildUs} us | dispatch {dispatchUs} us | first read {readUs} us (GPU wait + copy) | second read {copyUs} us (copy only) | {pixels.length} px {again.length}"
+
+def run(int cards, int width, int height) throws:
+    for rep in 0..<10:
+        once(cards, width, height)
+
+run(24, 1280, 720)
+run(24, 1920, 1080)

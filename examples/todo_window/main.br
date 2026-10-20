@@ -57,8 +57,17 @@ def [uint] frameU():
 def int frameCount():
     todoFrame().count
 
+def [uint] frameStarts():
+    bin(todoFrame(), 640, 360).starts
+
+def [uint] frameList():
+    bin(todoFrame(), 640, 360).list
+
+def int frameAcross():
+    bin(todoFrame(), 640, 360).across
+
 let screen = Screen(Dimension(width, height), title = "boring-ui Todo")
-mut k = TileKernel(frameF(), frameU(), atlasWords(), frameCount(), width, height)
+mut k = TileKernel(frameF(), frameU(), atlasWords(), frameStarts(), frameList(), frameAcross(), frameCount(), width, height)
 
 kernel:
     loop:

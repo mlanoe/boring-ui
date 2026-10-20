@@ -173,19 +173,21 @@ order keeping its own layer stack. It is the CPU reference's twin: `render/tests
 (fills, strokes, shadows, text, clips, nested groups) both ways and requires every channel within one LSB
 (`maxDifference`). Verified under `boring run` (sequential simulation), `--target simd` and `--target wgpu`
 (`render/tests/run_kernel_tests.sh`, real Metal on macOS). Naive O(pixels × commands) by design; tiling is step 2.
-The kernel targets cannot yet build the view runtime, so the Todo-frame comparison
-(`tests/raster_gpu_todo_test.br`) runs under `boring run` only.
+The Todo-frame comparison (`tests/raster_gpu_todo_test.br`) needs the view runtime: it runs under `boring run`, and
+builds and passes with `boring build --target wgpu` too (the kernel targets build the view runtime since 2026-10-20).
 
 ### Tiled kernel rasterizer — [`render/src/raster_tile.br`](render/src/raster_tile.br)
 
-`rasterizeTiled(displayList, width, height) throws` → the same `Raster` again. A workgroup owns a 16 × 16 tile (one
-thread per pixel) and bins the commands itself, in the same dispatch, in rounds of 256: each thread tests one
-command's bounding box against the tile, a Hillis-Steele scan in workgroup memory (two barriers per step) gives the
-selected commands their slots so the compacted list keeps paint order — no atomics, nothing nondeterministic — and
-every pixel thread then draws only those, with the per-pixel kernel's own evaluator. A skipped command had zero
-coverage on the whole tile, so the output is **bit-identical** to the per-pixel kernel
-(`render/tests/raster_tile_test.br` asserts a difference of 0, including more than one round per tile and groups that
-span rounds; the benchmark checks it at 1280 × 720 and 1920 × 1080 too).
+`rasterizeTiled(displayList, width, height) throws` → the same `Raster` again. A workgroup owns a 16 × 16 tile (one thread per pixel). Binning is two-level: on the host, `bin` lists for every
+128 × 128 super-tile the commands that can touch it, in paint order (a first version had each tile scan the whole list:
+`render/bench/run_stages.sh` showed that scan was 7.5 ms of 12.8 ms of GPU time at 1920 × 1080); inside the dispatch each
+tile then takes its super-tile's list in rounds of 256: each thread tests one command's bounding box against the tile,
+a Hillis-Steele scan in workgroup memory (ping-ponging between two arrays, one barrier per step) gives the selected
+commands their slots so the compacted list keeps paint order — no atomics, nothing nondeterministic — and every pixel
+thread draws only those, with the per-pixel kernel's own evaluator. A skipped command had zero coverage on the whole
+tile, so the output is **bit-identical** to the per-pixel kernel (`render/tests/raster_tile_test.br` asserts a
+difference of 0, including more than one round per tile and groups that span rounds; the benchmark checks it at
+1280 × 720 and 1920 × 1080 too, where several super-tiles are involved).
 
 `render/bench/run_bench.sh` times the three on a UI-like scene (cards with shadow, face, border and three text lines).
 Apple Silicon, `--target wgpu` (Metal), release build, whole call including encoding, upload, readback and packing:
@@ -196,31 +198,20 @@ Apple Silicon, `--target wgpu` (Metal), release build, whole call including enco
 | 1280 × 720, 1925 commands | 26 ms | 222 ms | **13 ms** |
 | 1920 × 1080, 1925 commands | 69 ms | 562 ms | **43 ms** |
 
-On `--target simd` (the kernel emulated on CPU threads) the tiled kernel is about 1.8 × faster than the per-pixel one
-but two orders of magnitude slower than the CPU reference: that target is a portability fallback, not a renderer.
-Where the tiled kernel's time goes (dispatch, readback, the host-side packing loop) is not profiled yet.
+Where the tiled kernel's time goes (`render/bench/run_stages.sh`, warm, minimum of nine runs, 1925 commands):
 
-### Window — [`examples/todo_window`](examples/todo_window)
+| stage | 1280 × 720 | 1920 × 1080 |
+|---|---|---|
+| encode (host) | 2.1 ms | 2.0 ms |
+| bin (host) | 0.14 ms | 0.14 ms |
+| upload | 1.2 ms | 2.1 ms |
+| GPU compute (the wait for it) | **3.6 ms** | **4.9 ms** |
+| read back the picture (not needed for a window) | 2.5 ms | 3.0 ms |
 
-The Todo application in a native window, drawn by the tiled kernel straight into the buffer `screen.present` shows
-(`--target wgpu`: the pixels never go back to the host). `examples/todo_window/run.sh` builds and runs it; the Todo
-frame it shows is the one `tests/raster_gpu_todo_test.br` already proves bit-identical to the CPU reference on wgpu.
-The tiled kernel's output field is a packed `[uint]'unified`, which `screen.present` accepts as well as `'surface`
-(`rasterizeTiled` reads the same field back for tests). The Todo paints no window background of its own, so
-`main.br` puts the theme's `WindowBackground` under the display list (otherwise the transparent pixels showed
-black). No screen capture was possible where this was written: the kernel's output buffer was dumped and viewed
-instead (all 640 × 360 pixels opaque, the Todo drawn).
-
-What `Screen` lacks for a UI, found by building and probing this on `--target wgpu`:
-
-| Gap | What happens |
-|---|---|
-| Host code in a Screen program | Only a `Screen(...)`/kernel constructor or a literal may appear at top level, and a render loop takes only kernel calls, scalar assignments and `if`s: no `let`, no host function call. The headless part (layout, display list, encode) therefore lives in functions and the kernel constructor's arguments recompute it |
-| Kernel constructor | A Screen program builds its kernel with `TileKernel::new(device, queue)` and **never runs `init`**: the constructor arguments are ignored, every buffer stays empty and the window shows nothing (found the hard way: a blank window). `run.sh` adds the init (upload of the encoded list, atlas, sizes) to the generated crate |
-| Module-level constants | Dropped from the generated crate (emitted as locals of `main`): `run.sh` patches `charWidth`/`unbounded` and the renderer's constants back in |
-| New frame data | **Solved** (boring compiler): `k.f = enc.f` / `k.colors = palette(screen.frame)` in the loop re-uploads the array through the kernel's `copy_<field>_to_device` (the buffer is reallocated when the length changes), on every Screen target. `let enc = encodeFrame()` host locals and `screen.frame` are allowed in the loop, and `k.count = enc.count` (`int`) narrows to the kernel's 32-bit field. So `todo_window` can re-encode the display list into `TileKernel`'s `f`/`u` after input and redraw. Not yet re-run through `run.sh`: it still carries the init stopgap below |
-| Events | `screen.mouse.x` assigned to an `int` kernel field mismatches (`isize` vs `i32`); `screen.resized` does not compile in a loop condition on wgpu (and the surface is not reallocated on resize); there is no text input, IME, wheel or modifier state, only `key("k")` / `key_pressed("k")` with a literal key |
-| Redraw | **Solved**: `Screen(Dimension(w, h), redraw = "demand")` runs the loop body once, then only after a key/mouse/resize event or `screen.requestRedraw()`; a static UI no longer burns the GPU. Default (`loop:` every frame) is unchanged. See `boring/docs/gpu-display.md` |
+The GPU part was 12.8 ms at 1080p before the super-tile lists and the single-barrier scan (flag tests 3.8 ms, scan
+steps 7.5 ms, drawing only 1.5 ms: the scan, not the drawing, was the cost). On `--target simd` (the kernel emulated on
+CPU threads) the tiled kernel is about 1.8 × faster than the per-pixel one but two orders of magnitude slower than the
+CPU reference: that target is a portability fallback, not a renderer.
 
 ### CPU reference rasterizer — [`render/src/raster.br`](render/src/raster.br)
 

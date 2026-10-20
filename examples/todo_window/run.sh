@@ -27,10 +27,13 @@ cat > init.rs.snippet <<'SNIPPET'
         k.copy_f_to_device(&encoded.f.iter().map(|&x| x as f32).collect::<Vec<f32>>());
         k.copy_u_to_device(&encoded.u.iter().map(|&x| x as u32).collect::<Vec<u32>>());
         k.copy_atlas_to_device(&atlasWords().iter().map(|&x| x as u32).collect::<Vec<u32>>());
+        let bins = bin(&encoded, 640, 360);
+        k.copy_bstart_to_device(&bins.starts.iter().map(|&x| x as u32).collect::<Vec<u32>>());
+        k.copy_blist_to_device(&bins.list.iter().map(|&x| x as u32).collect::<Vec<u32>>());
+        k.across = bins.across as i32;
         k.count = (encoded.count) as i32;
         k.width = 640;
         k.height = 360;
-        k.chunks = ((encoded.count + 255) / 256) as i32;
         k.copy_out_to_device(&vec![0u32; 640 * 360]);
     }
 SNIPPET
