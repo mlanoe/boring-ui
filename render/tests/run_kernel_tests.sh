@@ -3,9 +3,6 @@
 # `--target simd` and `--target wgpu`, and fails on the first target that does not print "raster gpu ok".
 # (`boring run tests/raster_gpu_test.br` runs the same file as a sequential CPU simulation.)
 #
-# `--target simd|wgpu` do not add the crates the grapheme / display-width string methods lower to, nor read
-# boring.toml's [dependencies], so they are added to the generated crate here until the compiler does it.
-#
 # Usage: render/tests/run_kernel_tests.sh            # simd and wgpu
 #        TARGETS=simd render/tests/run_kernel_tests.sh
 #        BORING=/path/to/boring render/tests/run_kernel_tests.sh
@@ -22,7 +19,6 @@ for target in $TARGETS; do
     "$BORING" build --target "$target" raster_gpu_test.br >/dev/null
     (
         cd "raster_gpu_test_$target"
-        cargo add unicode-segmentation unicode-width --quiet
         if [ "$target" = simd ]; then
             RUSTFLAGS="-A warnings" cargo run --release -q
         else
