@@ -497,6 +497,26 @@ fixture font measures with `displayWidth` (wide CJK/emoji = 2 cells, combining m
 whole clusters, and a click maps to the nearest cluster boundary (`graphemeAtCells`). Same behaviour interpreted and
 transpiled — `tests/text_unicode_test.br`. A real font engine replaces the cell model with shaped advances.
 
+## Text engine — [`text/`](text)
+
+Real fonts, host-side only: [`swash`](https://crates.io/crates/swash) (shaping and glyph rasterization) is called directly
+from Boring source (`boring.toml` `[dependencies]` and `[external_fns]`; a project using it needs both, and builds with
+`boring build`, not `boring run`).
+
+| Piece | Role |
+|---|---|
+| `text/src/engine.br` | `shape` (glyph ids, proportional advances, kerning and ligatures), `shapeRuns` (per-grapheme font fallback), `rasterize` / `rasterizeAt` (8-bit mask, placement, optional subpixel offset), `lineMetrics` |
+| `text/src/measurer.br` | `EngineMeasurer`, a `TextMeasurer` (`src/theme.br`): `Theme(measurer = EngineMeasurer(font = bytes))` makes layout, wrapping, truncation, caret and click-to-caret use the shaped advances. The default `FixtureMeasurer` keeps the headless tests on the cell model |
+| `text/src/glyph_run.br` | `GlyphCache`: shapes a string and rasterizes each (font, glyph, size, quarter-pixel pen) once into the renderer's `GlyphAtlas`; `glyphify` rewrites every `DrawText` of a display list into `DrawGlyph` commands |
+
+The renderers take the atlas beside the list: `rasterizeWith` (CPU reference), `rasterizeGpuWith`, `rasterizeTiledWith`
+(a `DrawGlyph` is an 8-bit mask blended like a rectangle, pen on the pixel grid, the subpixel position baked into the mask).
+`TextField` text is clipped to the field and scrolls horizontally to keep the caret in view (`fieldScroll`, layout.br).
+
+Tests: `text/tests/run_tests.sh`. A picture of the Todo set in Arial: `text/demo/run.sh > todo.ppm`. The Todo window
+(`examples/todo_window`) runs on all of it. Not done: a measurement cache (every width reshapes the string), line breaking
+and bidi through the engine, weights/italics, colour emoji, a bundled font (the paths are macOS system fonts).
+
 ## Window — [`examples/todo_window`](examples/todo_window)
 
 The Todo application in a native window: the view runtime lays it out headlessly, its display list is encoded once
@@ -505,7 +525,7 @@ The Todo application in a native window: the view runtime lays it out headlessly
 
 ```bash
 examples/todo_window/run.sh     # boring build --target wgpu, then run (Escape quits)
-# the window shows `assets/logo.ppm` through an `Image` view: render/src/image_file.br decodes binary PPM (P6) into a
+# the window shows `assets/logo.ppm` through an `Image` view: render/src/image_file.br decodes binary PPM (P6), PNG (render/src/png.br: 8-bit, non-interlaced, inflate written in Boring) and JPEG (render/src/jpeg.br: baseline + progressive, gray/YCbCr) into a
 # `Bitmap`, `encodeImages` puts its texels in the kernel's `img` buffer (the generated crate runs from main_wgpu/,
 # hence the `../assets` path)
 ```

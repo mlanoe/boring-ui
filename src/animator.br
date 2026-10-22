@@ -89,6 +89,16 @@ pub def void commit(mut Animator a, Placed target, Animation? transaction, [Trig
             a.base = t
     mut [NodeAnim] scopes = []
     collectScopes(target, triggers, nil, scopes)
+    # A removed `Transition` is only in the previous layout: it takes the animation of the triggered scope around it.
+    mut [NodeAnim] before = []
+    collectScopes(current, triggers, nil, before)
+    for n in before:
+        var known = false
+        for s in scopes:
+            if s.id == n.id:
+                known = true
+        if !known:
+            scopes.push(n)
     a.scopes = scopes
     a.completionTaken = false
     findMatches(a, current, target)

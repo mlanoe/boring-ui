@@ -11,8 +11,16 @@ set -euo pipefail
 BORING="${BORING:-boring}"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# Interpreter-only tests: they pull in a kernel (`RasterKernel`) that the standard target does not transpile; the kernel
+# targets do not transpile the whole UI runtime yet (see render/tests/run_kernel_tests.sh for the kernel corpus).
+SKIP=" raster_gpu_todo_test.br "
+
 status=0
 for f in *_test.br; do
+    if [[ "$SKIP" == *" $f "* ]]; then
+        echo "=== skipped (interpreter only): $f ==="
+        continue
+    fi
     name="${f%.br}"
     echo "=== boring build $f ==="
     if ! "$BORING" build "$f" >/dev/null 2>"$name.build.log"; then

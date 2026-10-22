@@ -131,4 +131,23 @@ for c in displayList(presentation(an, 2000.0)):
         presented = true
 assert(presented)
 
+# ── a value longer than the field scrolls to keep the caret in view (layout.br fieldScroll) ──────────────────────
+# the "Other" field: 160 px wide, 152 visible; 30 typed cells are 240 px, so the text is shifted by 240 + 1 - 152 = 89
+let other = field(rt, "Other")
+assert(click(rt, host, lay(rt), other.x + 2.0, other.y + 2.0))
+assert(typeText(rt, host, "abcdefghijklmnopqrstuvwxyz0123"))
+let scrolled = field(rt, "Other")
+assert_eq(marks(rt, scrolled.id), ["caret@{scrolled.x + 4.0 + 240.0 - 89.0}+1"])
+var textX = 0.0
+for c in displayList(lay(rt)):
+    if c.kind == "DrawText" and c.node == scrolled.id:
+        textX = c.x
+assert_eq(textX, scrolled.x + 4.0 - 89.0)
+assert_eq(fieldScroll(0.0, 160.0), 0.0)
+assert_eq(fieldScroll(100.0, 160.0), 0.0)
+# a click 10 px into the visible field lands on the cell under it: (10 + 89) / 8 = 12.4 -> the caret before cell 12
+assert(click(rt, host, lay(rt), scrolled.x + 4.0 + 10.0, scrolled.y + 2.0))
+assert_eq(marks(rt, scrolled.id).length, 1)
+assert_eq(marks(rt, scrolled.id)[0], "caret@{scrolled.x + 4.0 + 96.0}+1")
+
 print "caret ok"

@@ -52,7 +52,7 @@ assert_eq(lowest(first), 1.0)
 _ = paceFrame(pace, rt, host, false, 0, 0, 640, 360, 1.0)
 assert(!pacePending(pace, 1.0))
 
-# click the toggle button: the logo fades and shrinks over 300 ms, and the rest of the layout slides up meanwhile
+# click the toggle button: the logo fades out over 300 ms, and the rest of the layout slides up meanwhile
 let before = placedOf(rt, 640, 360)
 let button = firstOf(before, "Button") else (before)
 let bx = (button.x + button.w / 2.0) as int
@@ -65,12 +65,16 @@ assert(near(imageHeightOf(atStart), todoBefore))      # starts where it was
 assert(pacePending(pace, 2.0))
 let midway = paceFrame(pace, rt, host, false, bx, by, 640, 360, 2.15)
 assert(imageHeightOf(midway) < todoBefore and imageHeightOf(midway) > imageHeightOf(placedOf(rt, 640, 360)))
+assert(firstOf(midway, "Image") != nil)               # the logo is still presented, as a fading ghost
+assert(lowest(midway) < 1.0)
 # pointer motion while it runs must not snap it
 let moved = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.2)
 assert(imageHeightOf(moved) > imageHeightOf(placedOf(rt, 640, 360)))
 # after 300 ms it has arrived, and the next frame finds nothing left to do
 let arrived = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.4)
 assert(near(imageHeightOf(arrived), imageHeightOf(placedOf(rt, 640, 360))))
-_ = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.5)
+let settled = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.5)
 assert(!pacePending(pace, 2.5))
+assert_eq(retiringIds(rt).length, 0)                  # the removal was released when it finished
+assert(firstOf(settled, "Image") == nil)                # and the ghost is gone
 print "pace ok"

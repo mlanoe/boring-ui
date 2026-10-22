@@ -1,0 +1,603 @@
+# JPEG decoding in Boring: baseline (SOF0), extended-sequential (SOF1, 8-bit) and progressive (SOF2) Huffman-coded
+# images into a `Bitmap` (display_list.br, opaque `0xFFRRGGBB`).
+#
+# Pipeline: the marker segments set up the tables and the frame; each scan's entropy-coded data is decoded into one
+# coefficient array per component (a progressive file fills them over several scans: spectral selection and successive
+# approximation, as in ITU T.81 annex G); at the end every block is dequantized, inverse-transformed, the chroma planes
+# are resampled to full size and the YCbCr colour is converted to RGB.
+#
+# Supported: 8-bit precision; 1 component (gray) or 3 (YCbCr, or RGB when an Adobe marker says transform 0); any
+# sampling factors up to 4 x 4; restart intervals; 16-bit quantization tables. Not supported, and `decodeJpeg`
+# returns nil for: arithmetic coding, lossless and hierarchical modes, 12-bit samples, 4-component (CMYK/YCCK)
+# images, and corrupt or truncated entropy data in a scan header. The result differs from libjpeg's by rounding only:
+# the inverse transform is floating point (libjpeg uses an integer one) and chroma is upsampled with the same triangle
+# ("fancy") filter for 2x factors and bilinear sampling otherwise, so a test against libjpeg allows a few LSBs.
+
+use render.display_list.*
+
+# ── tables ────────────────────────────────────────────────────────────────────────────────────────
+
+def [int] zigzag():
+    [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
+
+# ── entropy-coded bit reader ──────────────────────────────────────────────────────────────────────
+
+struct JBits:
+    var int pos
+    var int buf = 0
+    var int count = 0
+    # a marker (or the end of the data) was reached: the reader supplies zero bits from then on, as libjpeg does
+    var bool ended = false
+
+# The next byte of entropy-coded data: `FF 00` is a literal FF, `FF FF` is fill, any other `FF xx` is a marker.
+def int nextByte(mut JBits b, [uint8] d):
+    while true:
+        if b.ended or b.pos >= d.length:
+            b.ended = true
+            return 0
+        let v = d[b.pos] as int
+        if v != 255:
+            b.pos += 1
+            return v
+        if b.pos + 1 >= d.length:
+            b.ended = true
+            return 0
+        let after = d[b.pos + 1] as int
+        if after == 0:
+            b.pos += 2
+            return 255
+        if after == 255:
+            b.pos += 1
+        else:
+            b.ended = true
+            return 0
+    0
+
+def int getBits(mut JBits b, [uint8] d, int n):
+    if n == 0:
+        return 0
+    while b.count < n:
+        b.buf = (b.buf << 8) | nextByte(b, d)
+        b.count += 8
+    let value = (b.buf >> (b.count - n)) & ((1 << n) - 1)
+    b.count -= n
+    b.buf = b.buf & ((1 << b.count) - 1)
+    value
+
+# The `n`-bit value `v` as a signed number (T.81 F.2.2.1: values below half the range are negative).
+def int extend(int v, int n):
+    if n == 0:
+        return 0
+    if v < (1 << (n - 1)):
+        return v - (1 << n) + 1
+    v
+
+# ── Huffman tables ────────────────────────────────────────────────────────────────────────────────
+
+struct JHuff:
+    var [int] count = [0 for ..<17]
+    var [int] symbol = []
+
+# The next symbol, or -1 when the code is not in the table.
+def int decodeHuff(mut JBits b, [uint8] d, JHuff h):
+    var code = 0
+    var first = 0
+    var index = 0
+    for len in 1..=16:
+        code = code | getBits(b, d, 1)
+        let n = h.count[len]
+        if code - n < first:
+            let at = index + (code - first)
+            if at >= h.symbol.length:
+                return 0 - 1
+            return h.symbol[at]
+        index += n
+        first += n
+        first = first << 1
+        code = code << 1
+    0 - 1
+
+# ── frame state ───────────────────────────────────────────────────────────────────────────────────
+
+struct JpegFrame:
+    var int width = 0
+    var int height = 0
+    var bool progressive = false
+    var int ncomp = 0
+    var [int] cid = []
+    var [int] ch = []
+    var [int] cv = []
+    var [int] cq = []
+    # blocks per row / column of each component's coefficient storage (padded to whole MCUs), its offset in the one
+    # shared coefficient array, and its real block width / height (what a single-component scan covers)
+    var [int] cbw = []
+    var [int] cbh = []
+    var [int] coff = []
+    var [int] cpw = []
+    var [int] cph = []
+    var int hmax = 1
+    var int vmax = 1
+    var int mcusX = 0
+    var int mcusY = 0
+    var int restart = 0
+    # 4 DC then 4 AC tables, and 4 quantization tables in natural (not zigzag) order
+    var [JHuff] huff = []
+    var [[int]] quant = []
+    # an Adobe APP14 marker's transform flag, -1 when there is none
+    var int adobe = 0 - 1
+
+def int ceilDiv(int a, int b):
+    (a + b - 1) / b
+
+def int be16([uint8] d, int at):
+    ((d[at] as int) << 8) | (d[at + 1] as int)
+
+# ── block decoding ────────────────────────────────────────────────────────────────────────────────
+
+# A sequential block: the DC difference, then run-length coded AC coefficients (T.81 F.2.2). false when corrupt.
+def bool blockSequential(mut JBits b, [uint8] d, JHuff dc, JHuff ac, mut [int] coef, int off, mut [int] pred, int c, [int] zz):
+    let t = decodeHuff(b, d, dc)
+    if t < 0 or t > 16:
+        return false
+    pred[c] = pred[c] + extend(getBits(b, d, t), t)
+    coef[off] = pred[c]
+    var k = 1
+    while k < 64:
+        let rs = decodeHuff(b, d, ac)
+        if rs < 0:
+            return false
+        let s = rs & 15
+        let r = rs >> 4
+        if s == 0:
+            if r != 15:
+                return true
+            k += 16
+        else:
+            k += r
+            if k > 63:
+                return false
+            coef[off + zz[k]] = extend(getBits(b, d, s), s)
+            k += 1
+    true
+
+# Progressive DC scan: the first pass codes the difference shifted left by `al`, later ones refine one bit.
+def bool blockDcProgressive(mut JBits b, [uint8] d, JHuff dc, mut [int] coef, int off, mut [int] pred, int c, int ah, int al):
+    if ah == 0:
+        let t = decodeHuff(b, d, dc)
+        if t < 0 or t > 16:
+            return false
+        pred[c] = pred[c] + extend(getBits(b, d, t), t)
+        coef[off] = pred[c] * (1 << al)
+    elif getBits(b, d, 1) == 1:
+        coef[off] = coef[off] | (1 << al)
+    true
+
+# Progressive AC scan over the band `ss ..= se`; `eob` is the end-of-band run still pending across blocks.
+def bool blockAcProgressive(mut JBits b, [uint8] d, JHuff ac, mut [int] coef, int off, int ss, int se, int ah, int al, mut [int] eob, [int] zz):
+    if ah == 0:
+        if eob[0] > 0:
+            eob[0] = eob[0] - 1
+            return true
+        var k = ss
+        while k <= se:
+            let rs = decodeHuff(b, d, ac)
+            if rs < 0:
+                return false
+            let s = rs & 15
+            let r = rs >> 4
+            if s == 0:
+                if r < 15:
+                    eob[0] = (1 << r) - 1
+                    if r > 0:
+                        eob[0] = eob[0] + getBits(b, d, r)
+                    return true
+                k += 16
+            else:
+                k += r
+                if k > 63:
+                    return false
+                coef[off + zz[k]] = extend(getBits(b, d, s), s) * (1 << al)
+                k += 1
+        return true
+    # refinement: nonzero coefficients get one more bit, zero runs place new +-1 coefficients
+    let bit = 1 << al
+    if eob[0] > 0:
+        eob[0] = eob[0] - 1
+        var k = ss
+        while k <= se:
+            let at = off + zz[k]
+            if coef[at] != 0:
+                if getBits(b, d, 1) == 1 and (coef[at] & bit) == 0:
+                    if coef[at] > 0:
+                        coef[at] = coef[at] + bit
+                    else:
+                        coef[at] = coef[at] - bit
+            k += 1
+        return true
+    var k = ss
+    while k <= se:
+        let rs = decodeHuff(b, d, ac)
+        if rs < 0:
+            return false
+        var s = rs & 15
+        var r = rs >> 4
+        if s == 0:
+            if r < 15:
+                eob[0] = (1 << r) - 1
+                if r > 0:
+                    eob[0] = eob[0] + getBits(b, d, r)
+                r = 64
+        else:
+            if getBits(b, d, 1) == 1:
+                s = bit
+            else:
+                s = 0 - bit
+        while k <= se:
+            let at = off + zz[k]
+            k += 1
+            if coef[at] != 0:
+                if getBits(b, d, 1) == 1 and (coef[at] & bit) == 0:
+                    if coef[at] > 0:
+                        coef[at] = coef[at] + bit
+                    else:
+                        coef[at] = coef[at] - bit
+            else:
+                if r == 0:
+                    coef[at] = s
+                    break
+                r -= 1
+    true
+
+# ── scans ─────────────────────────────────────────────────────────────────────────────────────────
+
+# Skips to and over the next restart marker, and resets what a restart resets.
+def void restartScan(mut JBits b, [uint8] d, mut [int] pred, mut [int] eob):
+    b.buf = 0
+    b.count = 0
+    while b.pos + 1 < d.length:
+        let m = d[b.pos + 1] as int
+        if (d[b.pos] as int) == 255 and m >= 208 and m <= 215:
+            b.pos += 2
+            break
+        b.pos += 1
+    b.ended = false
+    for i in 0..<pred.length:
+        pred[i] = 0
+    eob[0] = 0
+
+# Decodes the entropy-coded data of one scan starting at `start` into `coef`; the position after the data, or -1 when
+# it is corrupt. `sc` are the scan's component indices, `td`/`ta` their DC / AC table numbers.
+def int decodeScan(JpegFrame f, [uint8] d, int start, [int] sc, [int] td, [int] ta, int ss, int se, int ah, int al, mut [int] coef):
+    let zz = zigzag()
+    mut b = JBits(pos = start)
+    mut [int] pred = [0 for ..<f.ncomp]
+    mut [int] eob = [0]
+    var unit = 0
+    var ok = true
+    if sc.length == 1:
+        let c = sc[0]
+        let dc = f.huff[td[0]]
+        let ac = f.huff[4 + ta[0]]
+        for by in 0..<f.cph[c]:
+            for bx in 0..<f.cpw[c]:
+                if ok:
+                    if f.restart > 0 and unit > 0 and unit % f.restart == 0:
+                        restartScan(b, d, pred, eob)
+                    let off = f.coff[c] + (by * f.cbw[c] + bx) * 64
+                    if !f.progressive:
+                        ok = blockSequential(b, d, dc, ac, coef, off, pred, c, zz)
+                    elif ss == 0:
+                        ok = blockDcProgressive(b, d, dc, coef, off, pred, c, ah, al)
+                    else:
+                        ok = blockAcProgressive(b, d, ac, coef, off, ss, se, ah, al, eob, zz)
+                    unit += 1
+    else:
+        for my in 0..<f.mcusY:
+            for mx in 0..<f.mcusX:
+                if f.restart > 0 and unit > 0 and unit % f.restart == 0:
+                    restartScan(b, d, pred, eob)
+                for j in 0..<sc.length:
+                    let c = sc[j]
+                    let dc = f.huff[td[j]]
+                    let ac = f.huff[4 + ta[j]]
+                    for v in 0..<f.cv[c]:
+                        for h in 0..<f.ch[c]:
+                            if ok:
+                                let off = f.coff[c] + ((my * f.cv[c] + v) * f.cbw[c] + (mx * f.ch[c] + h)) * 64
+                                if !f.progressive:
+                                    ok = blockSequential(b, d, dc, ac, coef, off, pred, c, zz)
+                                elif ss == 0:
+                                    ok = blockDcProgressive(b, d, dc, coef, off, pred, c, ah, al)
+                                else:
+                                    ok = blockAcProgressive(b, d, ac, coef, off, ss, se, ah, al, eob, zz)
+                unit += 1
+    if !ok:
+        return 0 - 1
+    # leave the bit reader's lookahead: the data ends at the next marker
+    var p = b.pos
+    while p + 1 < d.length:
+        let m = d[p + 1] as int
+        if (d[p] as int) == 255 and m != 0 and m != 255 and !(m >= 208 and m <= 215):
+            break
+        p += 1
+    p
+
+# ── inverse transform and colour ──────────────────────────────────────────────────────────────────
+
+# T[x * 8 + u] = C(u) / 2 * cos((2x + 1) u pi / 16): one dimension of the 8 x 8 inverse DCT.
+def [float] idctTable():
+    mut [float] t = []
+    for x in 0..<8:
+        for u in 0..<8:
+            var cu = 1.0
+            if u == 0:
+                cu = 0.7071067811865476
+            t.push(0.5 * cu * cos((2 * x + 1) as float * u as float * 3.141592653589793 / 16.0))
+    t
+
+# Dequantizes the block at `off`, transforms it and stores the 8 x 8 samples (level-shifted, clamped to 0 ... 255) into
+# `plane` (row stride `stride`) at (`px`, `py`).
+def void idctBlock([int] coef, int off, [int] q, [float] t, mut [float] tmp, mut [int] plane, int stride, int px, int py):
+    # rows: for each frequency row v, transform along u into x
+    for v in 0..<8:
+        for x in 0..<8:
+            var s = 0.0
+            for u in 0..<8:
+                s += t[x * 8 + u] * (coef[off + v * 8 + u] * q[v * 8 + u]) as float
+            tmp[v * 8 + x] = s
+    for x in 0..<8:
+        for y in 0..<8:
+            var s = 0.0
+            for v in 0..<8:
+                s += t[y * 8 + v] * tmp[v * 8 + x]
+            var value = (s + 128.5).floor() as int
+            if value < 0:
+                value = 0
+            if value > 255:
+                value = 255
+            plane[(py + y) * stride + px + x] = value
+
+def int clamp255(float v):
+    let r = (v + 0.5).floor() as int
+    if r < 0:
+        return 0
+    if r > 255:
+        return 255
+    r
+
+# The sample of component `c` at full-resolution pixel (x, y): the plane itself when it is not subsampled, otherwise
+# sampled bilinearly at the pixel centre (for 2x, exactly libjpeg's triangle filter), clamped to the plane's real size.
+def float sampleAt(JpegFrame f, int c, [int] plane, int stride, int x, int y):
+    let w = ceilDiv(f.width * f.ch[c], f.hmax)
+    let h = ceilDiv(f.height * f.cv[c], f.vmax)
+    if f.ch[c] == f.hmax and f.cv[c] == f.vmax:
+        return plane[y * stride + x] as float
+    let sx = ((x as float) + 0.5) * (f.ch[c] as float) / (f.hmax as float) - 0.5
+    let sy = ((y as float) + 0.5) * (f.cv[c] as float) / (f.vmax as float) - 0.5
+    var fx = sx
+    if fx < 0.0:
+        fx = 0.0
+    var fy = sy
+    if fy < 0.0:
+        fy = 0.0
+    var x0 = fx.floor() as int
+    var y0 = fy.floor() as int
+    if x0 > w - 1:
+        x0 = w - 1
+    if y0 > h - 1:
+        y0 = h - 1
+    var x1 = x0 + 1
+    if x1 > w - 1:
+        x1 = w - 1
+    var y1 = y0 + 1
+    if y1 > h - 1:
+        y1 = h - 1
+    var wx = fx - x0 as float
+    if wx > 1.0:
+        wx = 1.0
+    var wy = fy - y0 as float
+    if wy > 1.0:
+        wy = 1.0
+    let top = plane[y0 * stride + x0] as float * (1.0 - wx) + plane[y0 * stride + x1] as float * wx
+    let bottom = plane[y1 * stride + x0] as float * (1.0 - wx) + plane[y1 * stride + x1] as float * wx
+    top * (1.0 - wy) + bottom * wy
+
+# ── the decoder ───────────────────────────────────────────────────────────────────────────────────
+
+# Decodes a JPEG file; nil when it is not one or uses a feature listed in the header comment.
+pub def Bitmap? decodeJpeg(string name, [uint8] d):
+    if d.length < 4 or (d[0] as int) != 255 or (d[1] as int) != 216:
+        return nil
+    var mut f = JpegFrame()
+    for _ in 0..<8:
+        f.huff.push(JHuff())
+    for _ in 0..<4:
+        f.quant.push([1 for ..<64])
+    mut [int] coef = []
+    let zz = zigzag()
+    var sawFrame = false
+    var scans = 0
+    var pos = 2
+    var done = false
+    while !done:
+        # find the next marker: FF, any number of fill FFs, then the code
+        while pos < d.length and (d[pos] as int) != 255:
+            pos += 1
+        while pos < d.length and (d[pos] as int) == 255:
+            pos += 1
+        if pos >= d.length:
+            break
+        let m = d[pos] as int
+        pos += 1
+        if m == 217:
+            done = true
+        elif m == 216 or m == 1 or (m >= 208 and m <= 215) or m == 0:
+            pass
+        else:
+            if pos + 2 > d.length:
+                return nil
+            let len = be16(d, pos)
+            let body = pos + 2
+            let end = pos + len
+            if len < 2 or end > d.length:
+                return nil
+            if m == 192 or m == 193 or m == 194:
+                if sawFrame or len < 8 or (d[body] as int) != 8:
+                    return nil
+                f.progressive = m == 194
+                f.height = be16(d, body + 1)
+                f.width = be16(d, body + 3)
+                f.ncomp = d[body + 5] as int
+                if f.width <= 0 or f.height <= 0 or (f.ncomp != 1 and f.ncomp != 3) or len < 8 + 3 * f.ncomp:
+                    return nil
+                for i in 0..<f.ncomp:
+                    let at = body + 6 + 3 * i
+                    f.cid.push(d[at] as int)
+                    let hv = d[at + 1] as int
+                    f.ch.push(hv >> 4)
+                    f.cv.push(hv & 15)
+                    f.cq.push((d[at + 2] as int) & 3)
+                    if (hv >> 4) < 1 or (hv >> 4) > 4 or (hv & 15) < 1 or (hv & 15) > 4:
+                        return nil
+                    if (hv >> 4) > f.hmax:
+                        f.hmax = hv >> 4
+                    if (hv & 15) > f.vmax:
+                        f.vmax = hv & 15
+                f.mcusX = ceilDiv(f.width, 8 * f.hmax)
+                f.mcusY = ceilDiv(f.height, 8 * f.vmax)
+                var total = 0
+                for i in 0..<f.ncomp:
+                    f.cbw.push(f.mcusX * f.ch[i])
+                    f.cbh.push(f.mcusY * f.cv[i])
+                    f.coff.push(total)
+                    total += f.mcusX * f.ch[i] * f.mcusY * f.cv[i] * 64
+                    f.cpw.push(ceilDiv(ceilDiv(f.width * f.ch[i], f.hmax), 8))
+                    f.cph.push(ceilDiv(ceilDiv(f.height * f.cv[i], f.vmax), 8))
+                coef = [0 for ..<total]
+                sawFrame = true
+            elif m == 195 or (m >= 197 and m <= 207 and m != 200 and m != 204):
+                return nil
+            elif m == 200 or m == 204:
+                return nil
+            elif m == 196:
+                var at = body
+                while at + 17 <= end:
+                    let tcth = d[at] as int
+                    let slot = (tcth >> 4) * 4 + (tcth & 3)
+                    if (tcth >> 4) > 1 or slot >= 8:
+                        return nil
+                    var mut table = JHuff()
+                    var n = 0
+                    for l in 1..=16:
+                        table.count[l] = d[at + l] as int
+                        n += table.count[l]
+                    if at + 17 + n > end:
+                        return nil
+                    for i in 0..<n:
+                        table.symbol.push(d[at + 17 + i] as int)
+                    f.huff[slot] = table
+                    at += 17 + n
+            elif m == 219:
+                var at = body
+                while at < end:
+                    let pq = (d[at] as int) >> 4
+                    let tq = (d[at] as int) & 3
+                    at += 1
+                    var mut table = [1 for ..<64]
+                    for i in 0..<64:
+                        if pq == 0:
+                            if at >= end:
+                                return nil
+                            table[zz[i]] = d[at] as int
+                            at += 1
+                        else:
+                            if at + 1 >= end:
+                                return nil
+                            table[zz[i]] = be16(d, at)
+                            at += 2
+                    f.quant[tq] = table
+            elif m == 221:
+                if len < 4:
+                    return nil
+                f.restart = be16(d, body)
+            elif m == 238:
+                # "Adobe" then version (2), flags0 (2), flags1 (2), transform (1)
+                if len >= 14 and (d[body] as int) == 65 and (d[body + 1] as int) == 100 and (d[body + 2] as int) == 111:
+                    f.adobe = d[body + 11] as int
+            elif m == 218:
+                if !sawFrame:
+                    return nil
+                let ns = d[body] as int
+                if ns < 1 or ns > f.ncomp or len < 6 + 2 * ns:
+                    return nil
+                mut [int] sc = []
+                mut [int] td = []
+                mut [int] ta = []
+                for i in 0..<ns:
+                    let id = d[body + 1 + 2 * i] as int
+                    var found = 0 - 1
+                    for c in 0..<f.ncomp:
+                        if f.cid[c] == id:
+                            found = c
+                    if found < 0:
+                        return nil
+                    sc.push(found)
+                    let tt = d[body + 2 + 2 * i] as int
+                    td.push((tt >> 4) & 3)
+                    ta.push(tt & 3)
+                var ss = d[body + 1 + 2 * ns] as int
+                var se = d[body + 2 + 2 * ns] as int
+                let ahal = d[body + 3 + 2 * ns] as int
+                if !f.progressive:
+                    ss = 0
+                    se = 63
+                if ss > se or se > 63:
+                    return nil
+                let next = decodeScan(f, d, end, sc, td, ta, ss, se, ahal >> 4, ahal & 15, coef)
+                if next < 0:
+                    return nil
+                scans += 1
+                pos = next
+            if m != 218:
+                pos = end
+    if !sawFrame or scans == 0:
+        return nil
+    # dequantize + inverse transform every block of every component into its plane
+    let table = idctTable()
+    mut [float] tmp = [0.0 for ..<64]
+    mut [[int]] planes = []
+    mut [int] strides = []
+    for c in 0..<f.ncomp:
+        let stride = f.cbw[c] * 8
+        mut [int] plane = [0 for ..<(stride * f.cbh[c] * 8)]
+        for by in 0..<f.cbh[c]:
+            for bx in 0..<f.cbw[c]:
+                idctBlock(coef, f.coff[c] + (by * f.cbw[c] + bx) * 64, f.quant[f.cq[c]], table, tmp, plane, stride, bx * 8, by * 8)
+        planes.push(plane)
+        strides.push(stride)
+    mut [uint] pixels = []
+    let rgb = f.ncomp == 3 and f.adobe == 0
+    for y in 0..<f.height:
+        for x in 0..<f.width:
+            let luma = sampleAt(f, 0, planes[0], strides[0], x, y)
+            var r = 0
+            var g = 0
+            var b = 0
+            if f.ncomp == 1:
+                r = clamp255(luma)
+                g = r
+                b = r
+            else:
+                let cb = sampleAt(f, 1, planes[1], strides[1], x, y)
+                let cr = sampleAt(f, 2, planes[2], strides[2], x, y)
+                if rgb:
+                    r = clamp255(luma)
+                    g = clamp255(cb)
+                    b = clamp255(cr)
+                else:
+                    r = clamp255(luma + 1.402 * (cr - 128.0))
+                    g = clamp255(luma - 0.344136 * (cb - 128.0) - 0.714136 * (cr - 128.0))
+                    b = clamp255(luma + 1.772 * (cb - 128.0))
+            let alpha = 255 as uint
+            pixels.push((alpha << 24) | ((r as uint) << 16) | ((g as uint) << 8) | (b as uint))
+    Bitmap(name = name, width = f.width, height = f.height, pixels = pixels)

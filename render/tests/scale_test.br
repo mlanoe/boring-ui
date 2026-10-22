@@ -1,0 +1,36 @@
+# Display-list scaling (src/scale.br). Run: boring run tests/scale_test.br
+
+use render.display_list.*
+use render.scale.*
+
+let list = [
+    Command(kind = "FillRect", x = 1.0, y = 2.0, w = 3.0, h = 4.0, hex = "#FF0000"),
+    Command(kind = "StrokeRect", x = 1.0, y = 1.0, w = 10.0, h = 6.0, value = 2.0, hex = "#00FF00"),
+    Command(kind = "DrawShadow", x = 0.0, y = 0.0, w = 8.0, h = 8.0, value = 4.0, dx = 1.0, dy = 2.0, hex = "#000000"),
+    Command(kind = "DrawText", x = 5.0, y = 6.0, w = 40.0, h = 16.0, text = "Hi", hex = "#000000"),
+    Command(kind = "PushOpacity", x = 0.0, y = 0.0, w = 0.0, h = 0.0, value = 0.5),
+]
+
+assert_eq(scaled(list, 1.0).length, 5)
+assert_eq(scaled(list, 1.0)[0].x, 1.0)
+
+let two = scaled(list, 2.0)
+assert_eq(two.length, 5)
+assert_eq(two[0].x, 2.0)
+assert_eq(two[0].y, 4.0)
+assert_eq(two[0].w, 6.0)
+assert_eq(two[0].h, 8.0)
+assert_eq(two[0].hex, "#FF0000")
+# border width, shadow radius and offset scale; the text's height is its font size
+assert_eq(two[1].value, 4.0)
+assert_eq(two[2].value, 8.0)
+assert_eq(two[2].dx, 2.0)
+assert_eq(two[2].dy, 4.0)
+assert_eq(two[3].h, 32.0)
+assert_eq(two[3].text, "Hi")
+# an opacity is a ratio, not a length
+assert_eq(two[4].value, 0.5)
+# the input list is untouched
+assert_eq(list[0].x, 1.0)
+assert_eq(scaled(list, 1.5)[3].h, 24.0)
+print "scale ok"

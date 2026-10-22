@@ -1,0 +1,44 @@
+# PNG decoding (src/png.br): every supported colour type, the five scanline filters, and stored / fixed / dynamic
+# deflate blocks, against pixel checksums computed by an independent encoder (fixtures/, see CHECKSUMS.txt: name,
+# checksum, width, height, first pixel, last pixel). Run from this directory: boring run png_test.br
+
+use render.display_list.*
+use render.png.*
+
+# sum over i of pixel[i] * (i % 251 + 1), mod 1000003: order- and value-sensitive, cheap to recompute
+def int checksum(Bitmap img):
+    var s = 0
+    for i in 0..<img.pixels.length:
+        s = (s + (img.pixels[i] as int) * (i % 251 + 1)) % 1000003
+    s
+
+def void check(string name, int sum, int first, int last):
+    let bytes = fs.readBytes("fixtures/{name}.png")
+    if let img = decodePng(name, bytes):
+        assert_eq(img.width, 24)
+        assert_eq(img.height, 17)
+        assert_eq(img.pixels.length, 24 * 17)
+        assert_eq(img.pixels[0] as int, first)
+        assert_eq(img.pixels[img.pixels.length - 1] as int, last)
+        assert_eq(checksum(img), sum)
+    else:
+        print "{name} did not decode"
+        assert(false)
+
+check("rgba_dynamic", 186461, 2516726372, 832097791)
+check("rgb_fixed", 404103, 4278334052, 4288269823)
+check("gray_stored", 553122, 4278321666, 4288190616)
+check("graya", 291159, 1509949440, 4279769112)
+check("palette", 305409, 4294901760, 4278850590)
+
+# interlaced files, and anything that is not a PNG, are refused
+assert(decodePng("i", fs.readBytes("fixtures/interlaced.png")) == nil)
+assert(decodePng("p", [80 as uint8, 54 as uint8, 10 as uint8]) == nil)
+# a truncated stream is refused, not misread
+let whole = fs.readBytes("fixtures/rgba_dynamic.png")
+mut [uint8] cut = []
+for i in 0..<(whole.length / 2):
+    cut.push(whole[i])
+assert(decodePng("t", cut) == nil)
+
+print "png ok"

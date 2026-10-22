@@ -18,6 +18,11 @@ struct Motion:
     var bool dirty = false
     var int lastX = 0 - 1
     var int lastY = 0 - 1
+    # the previous primary press (time in seconds, position) and how many quick presses in a row it ended
+    var float32 pressAt = 0.0 - 10.0
+    var int pressX = 0 - 100
+    var int pressY = 0 - 100
+    var int clicks = 0
 
 def void begin(mut Motion m, Placed first):
     commit(m.an, first, nil, [], 0.0)
@@ -52,3 +57,19 @@ def bool pacePending(Motion m, float32 seconds):
 
 def void touch(mut Motion m):
     m.dirty = true
+
+# A primary press at (x, y) at `seconds`: a second or third press close in time and place is a double or triple click
+# (word / whole text); Shift extends the selection of a text field from where it was anchored.
+def void pressWith(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds, bool shift):
+    var near = x - m.pressX < 5 and m.pressX - x < 5 and y - m.pressY < 5 and m.pressY - y < 5
+    if near and seconds - m.pressAt < 0.4:
+        m.clicks = m.clicks + 1
+    else:
+        m.clicks = 1
+    m.pressAt = seconds
+    m.pressX = x
+    m.pressY = y
+    var mods = ""
+    if shift:
+        mods = "Range"
+    _ = pointerDownClicks(rt, host, placedOf(rt, w, h), x as float, y as float, mods, m.clicks)

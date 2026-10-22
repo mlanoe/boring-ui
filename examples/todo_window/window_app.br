@@ -1,5 +1,5 @@
-# The window's application: the Todo under a logo that a button shrinks and fades out and back (an `AnimationScope`
-# triggered by the toggled value around an `Opacity` and the image's height). Apart from main.br so pace_test.br can run it headlessly.
+# The window's application: the Todo under a logo (PNG) and a photo (progressive JPEG) that a button fades out and back (a `Transition` under an `AnimationScope`
+# triggered by the toggled value; the Todo below slides into the freed space). Apart from main.br so pace_test.br can run it headlessly.
 
 use boring.ui.*
 use ui.core.*
@@ -13,18 +13,16 @@ view WindowApp:
         showLogo = v
 
     body():
-        var logoHeight = 64.0
-        var logoOpacity = 1.0
-        if !showLogo:
-            logoHeight = 2.0
-            logoOpacity = 0.0
         Column(alignment = .Leading, spacing = 8.0):
             Button(label = "Toggle logo", onActivate = ():
                 showLogo = !showLogo)
             AnimationScope(curve = "EaseInOut", duration = 300.0, value = "{showLogo}"):
                 Column(alignment = .Leading, spacing = 8.0):
-                    Opacity(value = logoOpacity):
-                        Image(source = "logo.ppm", width = 96.0, height = logoHeight, label = "Logo")
+                    if showLogo:
+                        Transition(insertion = .Fade, removal = .Fade):
+                            Row(alignment = .Center, spacing = 8.0):
+                                Image(source = "logo.png", width = 96.0, height = 64.0, label = "Logo")
+                                Image(source = "photo.jpg", width = 96.0, height = 64.0, label = "Landscape")
                     TodoApp()
 
 struct AppRoot as ViewBuilder:

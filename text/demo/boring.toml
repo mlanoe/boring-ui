@@ -1,0 +1,23 @@
+[project]
+name    = "boring-ui-text-demo"
+version = "0.1.0"
+main    = "todo_demo.br"
+
+# Not a test: the Todo application laid out with the text engine's metrics and painted with real glyphs.
+# Run: demo/run.sh > todo.ppm
+[deps]
+text = ".."
+ui = "../.."
+render = "../../render"
+todo = "../../examples/todo"
+
+[dependencies]
+swash = "0.2.10"
+
+[external_fns]
+"FontRef::fromIndex" = ["&", ""]
+"Charmap::map" = ["&", ""]
+"Render::new" = ["&"]
+"Render::render" = ["&", "&mut", ""]
+"Render::format" = ["&mut", ""]
+"Render::offset" = ["&mut", ""]

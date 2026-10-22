@@ -1,4 +1,4 @@
-# PPM decoding (src/image_file.br). Run: boring run tests/image_file_test.br
+# PPM, PNG and JPEG loading by signature (src/image_file.br). Run from render/tests: boring run image_file_test.br
 
 use render.display_list.*
 use render.image_file.*
@@ -23,5 +23,16 @@ else:
 # not a P6, truncated, and a maxval other than 255 are refused
 assert(decodePpm("x", [80 as uint8, 51 as uint8, 32 as uint8, 49 as uint8, 32 as uint8, 49 as uint8, 32 as uint8, 50 as uint8, 53 as uint8, 53 as uint8, 10 as uint8]) == nil)
 assert(decodePpm("x", [bytes[0], bytes[1], bytes[2], bytes[3]]) == nil)
+
+# PNG, JPEG or PPM by signature
+if let png = decodeImage("p", fs.readBytes("fixtures/palette.png")):
+    assert_eq(png.width, 24)
+else:
+    assert(false)
+if let jpg = decodeImage("j", fs.readBytes("fixtures/tiny.jpg")):
+    assert_eq(jpg.width, 1)
+else:
+    assert(false)
+assert(decodeImage("junk", [1 as uint8, 2 as uint8, 3 as uint8]) == nil)
 
 print "image file ok"

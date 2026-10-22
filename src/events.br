@@ -413,6 +413,14 @@ def Handle? focusedField(Runtime rt):
 
 # ── pointer ───────────────────────────────────────────────────────────────────────────────────
 
+# The grapheme index of the text field `node` (laid out as `at`) under pointer x. The field is scrolled by what keeps its
+# current caret in view (painting uses the same rule).
+def int caretAtPointer(Runtime rt, Handle h, Placed at, Mounted node, float x):
+    let body = at.theme.fontSizeNamed("Body")
+    let current = propOf(node, "value")
+    let scroll = fieldScroll(at.theme.measurer.width(current.graphemeSlice(0, selectionOf(rt, h)[0]), body), at.w)
+    graphemeAtX(at.theme.measurer, current, x - at.x - 4.0 + scroll, body)
+
 # A pointer press at (x, y) of the laid-out window `placed`: the deepest enabled control on the hit path
 # takes focus and captures the pointer (a TextField also places its caret). Nothing activates yet — that
 # happens on release over the same control. Returns whether a control was hit.
@@ -437,9 +445,12 @@ pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float 
                         _ = setSliderFromPointer(rt, host, h, at, x)
                 if node.kind == "TextField":
                     if let at = findPlaced(placed, id):
-                        let cells = (x - at.x - 4.0) / (at.theme.fontSizeNamed("Body") / 2.0)
-                        let caret = graphemeAtCells(propOf(node, "value"), cells)
-                        moveCaret(rt, h, caret, caret)
+                        let caret = caretAtPointer(rt, h, at, node, x)
+                        # Shift (mods "Range") extends the selection from where it was anchored; a plain press places the caret
+                        if mods == "Range":
+                            moveCaret(rt, h, caret, anchorOf(rt, h, propOf(node, "value").graphemeCount, caretOf(rt, h, propOf(node, "value").graphemeCount)))
+                        else:
+                            moveCaret(rt, h, caret, caret)
                         rt.invalidateRoot()
                 return true
         i -= 1
@@ -553,6 +564,15 @@ pub def bool pointerMove(mut Runtime rt, Builder host, Placed placed, float x, f
                     if let at = findPlaced(placed, cap.id):
                         if setSliderFromPointer(rt, host, cap, at, x):
                             changed = true
+                if node.kind == "TextField":
+                    # a drag from the press selects: the anchor stays, the caret follows the pointer
+                    if let at = findPlaced(placed, cap.id):
+                        let sel = selectionOf(rt, cap)
+                        let caret = caretAtPointer(rt, cap, at, node, x)
+                        if caret != sel[0]:
+                            moveCaret(rt, cap, caret, sel[1])
+                            rt.invalidateRoot()
+                            changed = true
     changed
 
 # The pointer left the window: nothing is hovered.
@@ -593,6 +613,80 @@ pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, flo
 # The platform cancelled the pointer (window lost, modal opened): the capture ends, nothing happens.
 pub def void pointerCancel(mut Runtime rt):
     rt.capture = nil
+
+# Characters that end a word for double-click selection; everything else (letters, digits, CJK...) belongs to one.
+def bool isSeparator(string g):
+    " \t\n.,;:!?()[]{}<>\"'/\\|-+=*&^%$#@~`".contains(g)
+
+# A press that is the `clicks`-th of a quick series: the second selects the word under the pointer, the third the whole text.
+pub def bool pointerDownClicks(mut Runtime rt, Builder host, Placed placed, float x, float y, string mods, int clicks):
+    let handled = pointerDownWith(rt, host, placed, x, y, mods)
+    if handled and clicks >= 2:
+        if let f = focusedField(rt):
+            let node = rt.find(f.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+            let text = propOf(node, "value")
+            let len = text.graphemeCount
+            let caret = caretOf(rt, f, len)
+            if clicks >= 3:
+                moveCaret(rt, f, len, 0)
+            else:
+                # the run of same-kind graphemes (word or separators) around the caret
+                var lo = caret
+                var hi = caret
+                var probe = caret
+                if probe >= len and len > 0:
+                    probe = len - 1
+                if len > 0:
+                    let kind = isSeparator(text.graphemeSlice(probe, probe + 1))
+                    lo = probe
+                    while lo > 0 and isSeparator(text.graphemeSlice(lo - 1, lo)) == kind:
+                        lo -= 1
+                    hi = probe + 1
+                    while hi < len and isSeparator(text.graphemeSlice(hi, hi + 1)) == kind:
+                        hi += 1
+                moveCaret(rt, f, hi, lo)
+            rt.invalidateRoot()
+    handled
+
+# ── clipboard ─────────────────────────────────────────────────────────────────────────────────────
+# The runtime keeps one internal clipboard (`Runtime.clipboard`): copy and cut fill it from the focused text field's
+# selection, paste inserts it at the caret (replacing a selection, as one undoable edit). A host with a system clipboard
+# mirrors it (reads `rt.clipboard` after a copy, sets it before a paste).
+
+# The focused text field's selected text, "" when nothing is selected.
+pub def string selectedText(Runtime rt):
+    if let f = focusedField(rt):
+        let node = rt.find(f.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
+        let sel = selectionOf(rt, f)
+        var lo = sel[0]
+        var hi = sel[1]
+        if sel[1] < sel[0]:
+            lo = sel[1]
+            hi = sel[0]
+        return propOf(node, "value").graphemeSlice(lo, hi)
+    ""
+
+# Copies the selection to the clipboard; whether there was one.
+pub def bool copySelection(mut Runtime rt):
+    let text = selectedText(rt)
+    if text == "":
+        return false
+    rt.clipboard = text
+    true
+
+# Copies the selection and deletes it as one edit; whether there was one.
+pub def bool cutSelection(mut Runtime rt, Builder host):
+    let text = selectedText(rt)
+    if text == "":
+        return false
+    rt.clipboard = text
+    typeText(rt, host, "")
+
+# Inserts the clipboard at the caret (replacing the selection); whether it did.
+pub def bool pasteClipboard(mut Runtime rt, Builder host):
+    if rt.clipboard == "":
+        return false
+    typeText(rt, host, rt.clipboard)
 
 # A press and release at the same point.
 pub def bool click(mut Runtime rt, Builder host, Placed placed, float x, float y):

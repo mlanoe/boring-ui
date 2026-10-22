@@ -359,6 +359,8 @@ pub struct Runtime:
     # The composition in progress, if any (see `Composition`); pruned after every update pass.
     pub var Composition? composition = nil
     pub var Momentum? momentum = nil
+    # The internal clipboard (see events.br, `copySelection` / `pasteClipboard`).
+    pub var string clipboard = ""
     # Per-TextField undo/redo history, keyed by mounted id (generation-checked; dropped when the node unmounts).
     pub var mut {int=EditHistory} histories = {=}
     pub var mut [KeyObserver] keyObservers = []
@@ -375,6 +377,8 @@ pub struct Runtime:
     # the `Animator`; nothing animates by default.
     pub var Animation? lastAnimation = nil
     pub var [Trigger] triggers = []
+    # How many `AnimationScope`s whose trigger fired are being reconciled (a removal below one is animated).
+    pub var int animatingScopes = 0
     pub var int passesRun = 0     # update passes executed by `flush`, over the runtime's lifetime
     pub var int expansions = 0    # composite bodies expanded (a whole-window pass expands every composite)
     pub var int partialPasses = 0 # update passes that re-expanded only the invalidated subtrees
@@ -598,10 +602,11 @@ pub struct Runtime:
             self.reportAtPath("identity", p, path)
         problems.length == 0
 
-    # A removed child: torn down at once, unless an animated transaction removes it under a `Transition` with a real
-    # removal — then it is retired (kept mounted but frozen) until the host reports the removal finished.
+    # A removed child: torn down at once, unless an animated transaction — or an `AnimationScope` whose trigger fired in
+    # this very pass, around the removed child — removes it under a `Transition` with a real removal: then it is retired
+    # (kept mounted but frozen) until the host reports the removal finished.
     def void retire(Mounted old, int parent, mut Pass ctx):
-        var animated = false
+        var animated = animatingScopes > 0
         if let a = lastAnimation:
             animated = a.curve != "None"
         if animated and old.kind == "Transition" and propText(old, "removal") != "Identity":
@@ -630,6 +635,10 @@ pub struct Runtime:
                 let response = (d.props["response"] else ("300")).parseFloat() else (300.0)
                 let damping = (d.props["damping"] else ("0.8")).parseFloat() else (0.8)
                 triggers.push(Trigger(node = node.id, animation = animationNamed(d.props["curve"] else ("EaseInOut"), duration, response, damping)))
+        # (what is removed below a scope that just fired is removed with its animation: see `retire`)
+        var fired = false
+        if node.kind == "AnimationScope":
+            fired = (node.props["value"] else ("")) != (d.props["value"] else (""))
         node.props = d.props
         node.control = d.control
         node.theme = themeIn(scope)
@@ -639,6 +648,8 @@ pub struct Runtime:
         let below = self.scopeBelow(d, scope)
         if !self.checked(kids, d.kind):
             return
+        if fired:
+            animatingScopes += 1
         mut {string=Mounted} byIdentity = {=}
         for old in node.children:
             byIdentity["{old.site}|{old.key}"] = old
@@ -669,6 +680,8 @@ pub struct Runtime:
             if !used.contains("{old.site}|{old.key}"):
                 self.retire(old, node.id, ctx)
         node.children = next
+        if fired:
+            animatingScopes -= 1
 
     # Unmount hooks first (descendants before parents, siblings in reverse), then mount hooks in
     # structural preorder — one transaction's worth of hooks, emitted only after the commit.

@@ -103,10 +103,12 @@ def paintNode(Placed p, mut [Command] out):
         mut field = cmd("FillRect", p, "", "field")
         field.hex = p.theme.color(ColorRole.Surface)
         out.push(field)
+        # the text, selection, caret and composition stay inside the field: a value longer than the field is cut at its edge
+        # (there is no horizontal scrolling yet; the caret of a value that long is cut with it)
+        out.push(Command(kind = "PushClip", x = p.x + 2.0, y = p.y, w = p.w - 4.0, h = p.h, text = "", color = "", node = p.id))
         # While an input method composes, its marked text is shown at the caret (the bound value is untouched).
         var shownText = "{value}"   # a copy: `var x = value` moves the shared string in transpiled code
         let marked = propOrLive(p, "marked", "")
-        let cell = p.theme.fontSizeNamed("Body") / 2.0
         let valueCount = value.graphemeCount
         var markedAt = 0
         if marked != "":
@@ -119,6 +121,16 @@ def paintNode(Placed p, mut [Command] out):
         let focusedField = propOrLive(p, "focused", "false") == "true"
         var caret = (propOrLive(p, "caret", "0")).parseInt() else (0)
         var anchor = (propOrLive(p, "anchor", "0")).parseInt() else (0)
+        # the horizontal scroll that keeps the caret inside the field (fieldScroll): everything below is shifted by it
+        var caretOffset = p.theme.measurer.width(value.graphemeSlice(0, caret), bodyHeight)
+        if marked != "":
+            let cursorText = propOrLive(p, "markedCursor", "0")
+            let cursor = cursorText.parseInt() else (0)
+            caretOffset = p.theme.measurer.width(value.graphemeSlice(0, markedAt), bodyHeight) + p.theme.measurer.width(marked.graphemeSlice(0, cursor), bodyHeight)
+        var scroll = 0.0
+        if focusedField:
+            scroll = fieldScroll(caretOffset, p.w)
+        let originX = p.x + 4.0 - scroll
         # the selection sits under the text (not while composing: the marked text replaces it)
         if focusedField and marked == "" and caret != anchor:
             var lo = caret
@@ -126,28 +138,24 @@ def paintNode(Placed p, mut [Command] out):
             if anchor < caret:
                 lo = anchor
                 hi = caret
-            let startX = p.x + 4.0 + (value.graphemeSlice(0, lo).displayWidth as float) * cell
-            let endX = p.x + 4.0 + (value.graphemeSlice(0, hi).displayWidth as float) * cell
+            let startX = originX + p.theme.measurer.width(value.graphemeSlice(0, lo), bodyHeight)
+            let endX = originX + p.theme.measurer.width(value.graphemeSlice(0, hi), bodyHeight)
             mut band = Command(kind = "FillRect", x = startX, y = p.y + 4.0, w = endX - startX, h = bodyHeight, text = "", color = "selection", node = p.id)
             band.hex = p.theme.color(ColorRole.Selection)
             out.push(band)
-        mut text = Command(kind = "DrawText", x = p.x + 4.0, y = p.y + 4.0, w = p.w - 8.0, h = p.theme.fontSizeNamed("Body"), text = shownText, color = "", node = p.id)
+        mut text = Command(kind = "DrawText", x = originX, y = p.y + 4.0, w = p.w - 8.0, h = p.theme.fontSizeNamed("Body"), text = shownText, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
         if focusedField:
             # a one-pixel bar before the grapheme at `caret`; while composing, at the cursor inside the marked text
-            var cells = value.graphemeSlice(0, caret).displayWidth
-            if marked != "":
-                let cursorText = propOrLive(p, "markedCursor", "0")
-                let cursor = cursorText.parseInt() else (0)
-                cells = value.graphemeSlice(0, markedAt).displayWidth + marked.graphemeSlice(0, cursor).displayWidth
-            mut bar = Command(kind = "FillRect", x = p.x + 4.0 + (cells as float) * cell, y = p.y + 4.0, w = 1.0, h = bodyHeight, text = "", color = "caret", node = p.id)
+            mut bar = Command(kind = "FillRect", x = originX + caretOffset, y = p.y + 4.0, w = 1.0, h = bodyHeight, text = "", color = "caret", node = p.id)
             bar.hex = p.theme.color(ColorRole.PrimaryText)
             out.push(bar)
         if marked != "":
-            mut underline = Command(kind = "MarkedText", x = p.x + 4.0 + (value.graphemeSlice(0, markedAt).displayWidth as float) * cell, y = p.y + 4.0, w = (marked.displayWidth as float) * cell, h = p.theme.fontSizeNamed("Body"), text = marked, color = "", node = p.id)
+            mut underline = Command(kind = "MarkedText", x = originX + p.theme.measurer.width(value.graphemeSlice(0, markedAt), bodyHeight), y = p.y + 4.0, w = p.theme.measurer.width(marked, bodyHeight), h = p.theme.fontSizeNamed("Body"), text = marked, color = "", node = p.id)
             underline.hex = p.theme.color(ColorRole.PrimaryText)
             out.push(underline)
+        out.push(Command(kind = "PopClip", x = p.x + 2.0, y = p.y, w = p.w - 4.0, h = p.h, text = "", color = "", node = p.id))
     if p.kind == "Separator":
         mut line = cmd("FillRect", p, "", "separator")
         line.hex = p.theme.color(ColorRole.Separator)
@@ -192,7 +200,9 @@ def paintNode(Placed p, mut [Command] out):
             mut shade = Command(kind = "FillRect", x = p.x, y = p.y, w = box, h = box, text = "", color = "hover", node = p.id)
             shade.hex = p.theme.color(ColorRole.ShadowColor)
             out.push(shade)
-        mut text = Command(kind = "DrawText", x = p.x + box + gap, y = p.y, w = p.w - box - gap, h = p.h, text = label, color = "", node = p.id)
+        # the label is set at the body size it was measured at (layout), centred on the row; not at the row's height
+        let labelSize = p.theme.fontSizeNamed("Body")
+        mut text = Command(kind = "DrawText", x = p.x + box + gap, y = p.y + (p.h - labelSize) / 2.0, w = p.w - box - gap, h = labelSize, text = label, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
     if p.kind == "Clip" or p.kind == "Scroll" or (p.kind == "List" or p.kind == "MultiList"):

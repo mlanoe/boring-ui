@@ -1,0 +1,59 @@
+# Click counting and Shift-press in the window's pointer path (pace.br `pressWith`): quick presses at one place select
+# the word, then the text; a slow or distant one starts over. Run from this directory: boring run press_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use pace
+
+view Form:
+    state string text = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            TextField(value = text, label = "Name")
+
+struct FormBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Form()
+
+def Placed? firstField(Placed p):
+    if p.kind == "TextField":
+        return p
+    for c in p.children:
+        if let found = firstField(c):
+            return found
+    nil
+
+let host = ViewRoot(inner = FormBuilder())
+mut rt = Runtime()
+rt.start(host)
+mut pace = Motion()
+let field = firstField(placedOf(rt, 300, 300)) else (placedOf(rt, 300, 300))
+let y = (field.y + 8.0) as int
+let x0 = (field.x + 4.0) as int
+pressWith(pace, rt, host, 300, 300, x0 + 2, y, 1.0, false)
+assert(typeText(rt, host, "hello world"))
+
+def string picked(Runtime rt):
+    selectedText(rt)
+
+# one press places the caret; a second within 0.4 s and a few pixels selects the word; a third, the whole text
+pressWith(pace, rt, host, 300, 300, x0 + 76, y, 5.0, false)
+assert_eq(pace.clicks, 1)
+assert_eq(picked(rt), "")
+pressWith(pace, rt, host, 300, 300, x0 + 76, y, 5.2, false)
+assert_eq(pace.clicks, 2)
+assert_eq(picked(rt), "world")
+pressWith(pace, rt, host, 300, 300, x0 + 77, y + 1, 5.4, false)
+assert_eq(pace.clicks, 3)
+assert_eq(picked(rt), "hello world")
+# too slow, or too far away: back to one
+pressWith(pace, rt, host, 300, 300, x0 + 77, y + 1, 6.5, false)
+assert_eq(pace.clicks, 1)
+pressWith(pace, rt, host, 300, 300, x0 + 8, y, 6.6, false)
+assert_eq(pace.clicks, 1)
+# Shift extends from the anchor (the caret was placed at cell 1)
+pressWith(pace, rt, host, 300, 300, x0 + 56, y, 9.0, true)
+assert_eq(picked(rt), "ello w")
+print "press ok"

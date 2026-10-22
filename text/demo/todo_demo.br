@@ -1,0 +1,27 @@
+# The Todo application's first frame, measured by the text engine and drawn from the glyph atlas, as a P3 PPM on
+# stdout. Compare with `tests/render_todo_ppm.br` (fixture font).
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use render.raster.*
+use text.glyph_run.*
+use text.measurer.*
+use todo.todo.*
+
+let fontPath = "/System/Library/Fonts/Supplemental/Arial.ttf"
+let theme = Theme(measurer = EngineMeasurer(font = fs.readBytes(fontPath)))
+
+struct AppRoot as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [TodoApp()])
+
+mut rt = Runtime()
+rt.start(ViewRoot(inner = AppRoot(theme = theme)))
+let placed = layout(rt, 600.0, 400.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+mut cache = GlyphCache(font = fs.readBytes(fontPath))
+let commands = glyphify(displayList(placed), cache)
+print toPpm(rasterizeWith(commands, [], cache.atlas, 600, 400))

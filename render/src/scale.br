@@ -1,0 +1,26 @@
+# Display-list scaling for HiDPI windows: boring-ui lays out and paints in logical points; a window whose pixels are
+# `scale` times denser (a Retina display: 2) draws the same list with every geometric quantity multiplied by it, so a
+# 16 pt text is set (and rasterized by the text engine) at 32 px instead of being stretched or drawn half-size.
+#
+# Scaled: every box (`x`, `y`, `w`, `h`: for a `DrawText` the height is the font size), a border width and a shadow's
+# radius and offset (`StrokeRect`, `DrawShadow`). Not scaled: an opacity (`PushOpacity`), a glyph's pen (`DrawGlyph`, which
+# only exists after the text engine ran on the already scaled list), colours and names.
+
+use render.display_list.*
+
+pub def [Command] scaled([Command] list, float scale):
+    if scale == 1.0:
+        return list
+    mut [Command] out = []
+    for c in list:
+        mut copy = Command(kind = c.kind, x = c.x * scale, y = c.y * scale, w = c.w * scale, h = c.h * scale, text = c.text, color = c.color, node = c.node, glyph = c.glyph)
+        copy.hex = c.hex
+        copy.value = c.value
+        copy.dx = c.dx
+        copy.dy = c.dy
+        if c.kind == "StrokeRect" or c.kind == "DrawShadow":
+            copy.value = c.value * scale
+            copy.dx = c.dx * scale
+            copy.dy = c.dy * scale
+        out.push(copy)
+    out

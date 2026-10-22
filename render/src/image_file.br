@@ -1,9 +1,11 @@
-# Bitmap files for the renderers: binary PPM (`P6`, 8 bits per channel, no alpha) decoded into an `Bitmap`
-# (display_list.br). PPM is the one raster format simple enough to decode in a few lines of Boring; PNG/JPEG need an
-# inflate/DCT decoder and stay outside (convert with any tool: `magick logo.png logo.ppm`). The image's `name` is
-# the string a `DrawImage` command carries (the `Bitmap` view's `source`), so a window keeps one list of loaded files.
+# Image files for the renderers: binary PPM (`P6`, 8 bits per channel, no alpha), PNG (render/src/png.br: 8-bit,
+# non-interlaced) and JPEG (render/src/jpeg.br: baseline and progressive, gray or YCbCr) decoded into a `Bitmap`
+# (display_list.br). The bitmap's `name` is the string a `DrawImage` command carries (the `Image` view's `source`), so a
+# window keeps one list of loaded files.
 
 use render.display_list.*
+use render.png.*
+use render.jpeg.*
 
 def bool isSpace(int b):
     b == 32 or b == 10 or b == 13 or b == 9
@@ -49,8 +51,7 @@ pub def Bitmap? decodePpm(string name, [uint8] bytes):
         let r = bytes[i] as uint
         let g = bytes[i + 1] as uint
         let b = bytes[i + 2] as uint
-        let alpha = 255 as uint
-        pixels.push((alpha << 24) | (r << 16) | (g << 8) | b)
+        pixels.push((255 as uint << 24) | (r << 16) | (g << 8) | b)
         i += 3
     Bitmap(name = name, width = w[0], height = h[0], pixels = pixels)
 
@@ -58,3 +59,16 @@ pub def Bitmap? decodePpm(string name, [uint8] bytes):
 pub def Bitmap? loadPpm(string name, string path) throws:
     let bytes = fs.readBytes(path)
     decodePpm(name, bytes)
+
+# Decodes a PNG, a JPEG or a binary PPM, told apart by their first bytes; nil for anything else.
+pub def Bitmap? decodeImage(string name, [uint8] bytes):
+    if bytes.length > 1 and (bytes[0] as int) == 137:
+        return decodePng(name, bytes)
+    if bytes.length > 1 and (bytes[0] as int) == 255 and (bytes[1] as int) == 216:
+        return decodeJpeg(name, bytes)
+    decodePpm(name, bytes)
+
+# Reads the file at `path` (PNG, JPEG or PPM) under the name `name`; nil when it is neither (an unreadable file throws).
+pub def Bitmap? loadImage(string name, string path) throws:
+    let bytes = fs.readBytes(path)
+    decodeImage(name, bytes)

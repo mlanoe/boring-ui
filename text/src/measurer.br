@@ -1,0 +1,17 @@
+# The text engine as boring-ui's `TextMeasurer` (src/theme.br): a theme carrying one measures, wraps, truncates and
+# places carets with the real font's shaped advances instead of the fixture cells.
+#
+#     Theme(measurer = EngineMeasurer(font = fs.readBytes("...ttf")))
+#
+# Every call shapes the string again: no cache yet (a cache needs interior mutability behind a `req` method).
+
+use ui.theme.*
+use text.engine.*
+
+pub struct EngineMeasurer as TextMeasurer:
+    pub let [uint8] font
+    # fonts tried, in order, for the characters `font` lacks (see `GlyphCache.fallbacks`)
+    pub let [[uint8]] fallbacks = []
+
+    pub req float width(string s, float size):
+        runWidth(shapeWithFallbacks(self.font, self.fallbacks, s, size))

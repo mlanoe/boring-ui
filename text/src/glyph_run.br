@@ -8,18 +8,24 @@ use text.engine.*
 pub struct GlyphCache:
     # the font file; owned here so the methods below never have to move it around
     pub let [uint8] font
+    # fonts tried, in order, for the characters `font` lacks (CJK, symbols...)
+    pub let [[uint8]] fallbacks = []
     pub var mut GlyphAtlas atlas = GlyphAtlas()
-    # "<glyph id>@<size>" -> index in `atlas`, or -1 for a glyph with no image (a space)
+    # "<font>:<glyph id>@<size>+<subpixel bin>" -> index in `atlas`, or -1 for a glyph with no image (a space)
     var mut {string=int} index = {=}
 
     # The atlas index of `glyph` at `size`, rasterizing it on first use; -1 when it has no image.
-    def int glyphFor(uint glyph, float size):
-        let key = "{glyph}@{size}"
+    # `bin` (0..<SUBPIXEL_BINS) is the pen's quarter-pixel position: the mask is rendered shifted by it.
+    def int glyphFor(int fontIndex, uint glyph, float size, int bin):
+        let key = "{fontIndex}:{glyph}@{size}+{bin}"
         let known = index[key] else (0 - 2)
         if known != 0 - 2:
             return known
         var found = 0 - 1
-        let imgOpt = rasterize(self.font, glyph, size)
+        var bytes = self.font
+        if fontIndex > 0:
+            bytes = self.fallbacks[fontIndex - 1]
+        let imgOpt = rasterizeAt(bytes, glyph, size, bin as float / 4.0)
         if let img = imgOpt:
             if img.width > 0 and img.height > 0:
                 found = atlas.addGlyph(img.width, img.height, img.left, img.top, img.alpha)
@@ -29,8 +35,33 @@ pub struct GlyphCache:
     # `DrawGlyph` commands for `text` at `size` px per em, pen starting at (`x`, `baseline`), colour `hex`.
     def [Command] draw(string text, float size, float x, float baseline, string hex):
         var mut out = [] as [Command]
-        for g in shape(self.font, text, size):
-            let at = self.glyphFor(g.id, size)
+        for g in shapeWithFallbacks(self.font, self.fallbacks, text, size):
+            # the pen's fraction of a pixel is quantized to quarters and baked into the mask; the command's pen is whole
+            let pen = x + g.x + g.dx
+            var whole = pen.floor()
+            var bin = ((pen - whole) * 4.0 + 0.5).floor() as int
+            if bin >= 4:
+                bin = 0
+                whole += 1.0
+            let at = self.glyphFor(g.font, g.id, size, bin)
             if at >= 0:
-                out.push(Command(kind = "DrawGlyph", x = x + g.x + g.dx, y = baseline + g.dy, w = 0.0, h = 0.0, glyph = at, hex = hex))
+                out.push(Command(kind = "DrawGlyph", x = whole, y = baseline + g.dy, w = 0.0, h = 0.0, glyph = at, hex = hex))
         out
+
+# `list` with every `DrawText` replaced by the `DrawGlyph` commands of its text set in the cache's font: each line
+# (split on newlines) takes a line box of the command's height `h` (the font size) and sits with the font's
+# ascent-plus-descent centred in it. Everything else is kept in order.
+pub def [Command] glyphify([Command] list, mut GlyphCache cache):
+    var mut out = [] as [Command]
+    for c in list:
+        if c.kind == "DrawText":
+            let m = lineMetrics(cache.font, c.h)
+            let baseline = (c.h - (m.ascent + m.descent)) / 2.0 + m.ascent
+            var row = 0
+            for line in c.text.split("\n"):
+                for g in cache.draw(line, c.h, c.x, c.y + baseline + row as float * c.h, c.hex):
+                    out.push(g)
+                row += 1
+        else:
+            out.push(c)
+    out

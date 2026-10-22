@@ -4,6 +4,9 @@ use text.engine.*
 use render.display_list.*
 use render.raster.*
 use text.glyph_run.*
+use text.measurer.*
+use ui.theme.*
+use ui.layout.*
 
 let font = fs.readBytes("/System/Library/Fonts/Supplemental/Arial.ttf")
 
@@ -30,15 +33,15 @@ for b in a.alpha:
         ink += 1
 assert(ink > 20)
 
-mut cache = GlyphCache(font = font)
+mut cache = GlyphCache(font = fs.readBytes("/System/Library/Fonts/Supplemental/Arial.ttf"))
 let run = cache.draw("Hello", 20.0, 2.0, 18.0, "#000000")
-# 'l' twice: 5 letters, 4 distinct glyphs in the atlas
+# 5 letters; each (glyph, quarter-pixel pen) has its own mask, so the two 'l's may share one or not
 assert_eq(run.length, 5)
-assert_eq(cache.atlas.width.length, 4)
-assert_eq(run[2].glyph, run[3].glyph)
+let masks = cache.atlas.width.length
+assert(masks >= 4 and masks <= 5)
 # drawing again reuses the cache
 let again = cache.draw("Hello", 20.0, 2.0, 18.0, "#000000")
-assert_eq(cache.atlas.width.length, 4)
+assert_eq(cache.atlas.width.length, masks)
 # a space has no image: no command
 assert_eq(cache.draw("a b", 20.0, 0.0, 18.0, "#000000").length, 2)
 
@@ -50,3 +53,66 @@ for p in picture.pixels:
 assert(inked > 40)
 assert_eq(picture.unsupported.length, 0)
 print "glyph run ok"
+
+# The engine as a theme's measurer: proportional widths, and the fixture's by default.
+let engineTheme = Theme(measurer = EngineMeasurer(font = font.clone()))
+let fixtureTheme = Theme()
+assert_eq(fixtureTheme.measurer.width("iii", 16.0), 24.0)
+let narrow = engineTheme.measurer.width("iii", 16.0)
+let wide = engineTheme.measurer.width("WWW", 16.0)
+assert(narrow < 16.0 and wide > 30.0)
+assert_eq(engineTheme.measurer.width("", 16.0), 0.0)
+# a click halfway into the first 'W' of "WWW" lands before it, past its middle after it
+assert_eq(graphemeAtX(engineTheme.measurer, "WWW", 1.0, 16.0), 0)
+assert_eq(graphemeAtX(engineTheme.measurer, "WWW", 13.0, 16.0), 1)
+assert_eq(graphemeAtX(engineTheme.measurer, "WWW", 500.0, 16.0), 3)
+print "measurer ok"
+
+# ── font fallback: Arial has no CJK, a second font takes those graphemes ─────────────────────────
+
+let cjk = fs.readBytes("/System/Library/Fonts/Hiragino Sans GB.ttc")
+assert(covers(font, "Hi"))
+assert(!covers(font, "你"))
+assert(covers(cjk, "你好"))
+let both = [fs.readBytes("/System/Library/Fonts/Supplemental/Arial.ttf"), fs.readBytes("/System/Library/Fonts/Hiragino Sans GB.ttc")]
+let mixed = shapeRuns(both, "Hi你好!", 20.0)
+assert_eq(mixed.length, 5)
+assert_eq(mixed[0].font, 0)
+assert_eq(mixed[2].font, 1)
+assert_eq(mixed[3].font, 1)
+assert_eq(mixed[4].font, 0)                      # back to the primary after the run
+# runs are laid out one after the other: positions only grow, and the width is the sum of the parts
+assert(mixed[2].x > mixed[1].x and mixed[3].x > mixed[2].x and mixed[4].x > mixed[3].x)
+assert(runWidth(mixed) > runWidth(shape(both[0], "Hi", 20.0)) + 30.0)
+# without a second font nothing changes
+assert_eq(shapeRuns([both[0]], "Hello", 16.0).length, 5)
+
+# the cache rasterizes each glyph with the font that shaped it
+mut wide = GlyphCache(font = fs.readBytes("/System/Library/Fonts/Supplemental/Arial.ttf"), fallbacks = [fs.readBytes("/System/Library/Fonts/Hiragino Sans GB.ttc")])
+let drawn = wide.draw("Hi你", 20.0, 0.0, 18.0, "#000000")
+assert_eq(drawn.length, 3)
+let sheet = rasterizeWith(drawn, [], wide.atlas, 60, 24)
+var cjkInk = 0
+for y in 0..<24:
+    for x in 28..<60:
+        if sheet.pixels[y * 60 + x] != 0:
+            cjkInk += 1
+assert(cjkInk > 20)
+
+# and the measurer widens with it
+let fallbackTheme = Theme(measurer = EngineMeasurer(font = fs.readBytes("/System/Library/Fonts/Supplemental/Arial.ttf"), fallbacks = [fs.readBytes("/System/Library/Fonts/Hiragino Sans GB.ttc")]))
+assert(fallbackTheme.measurer.width("你好", 16.0) > 20.0)
+print "fallback ok"
+
+# subpixel positions: the same glyph at a pen shifted by half a pixel gets its own mask, and a pen within an eighth of a pixel
+# of a whole one shares it
+mut subCache = GlyphCache(font = fs.readBytes("/System/Library/Fonts/Supplemental/Arial.ttf"))
+let atWhole = subCache.draw("l", 20.0, 3.0, 18.0, "#000000")
+let atHalf = subCache.draw("l", 20.0, 3.5, 18.0, "#000000")
+let nearWhole = subCache.draw("l", 20.0, 3.05, 18.0, "#000000")
+assert(atWhole[0].glyph != atHalf[0].glyph)
+assert_eq(atWhole[0].glyph, nearWhole[0].glyph)
+assert_eq(atWhole[0].x, 3.0)
+assert_eq(atHalf[0].x, 3.0)
+assert(atHalf[0].x == atWhole[0].x)
+print "subpixel ok"

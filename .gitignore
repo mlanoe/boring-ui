@@ -15,3 +15,4 @@
 /examples/*/*_wgpu/
 /render/bench/stages_*/
 /text/tests/*_rust/
+/text/demo/*_rust/

@@ -9,3 +9,16 @@ main    = "main.br"
 ui     = "../.."
 render = "../../render"
 todo   = "../todo"
+text   = "../../text"
+
+# The real font: swash is called from Boring source (text/), so the window needs the crate and its borrow forms.
+[dependencies]
+swash = "0.2.10"
+
+[external_fns]
+"FontRef::fromIndex" = ["&", ""]
+"Charmap::map" = ["&", ""]
+"Render::new" = ["&"]
+"Render::render" = ["&", "&mut", ""]
+"Render::format" = ["&mut", ""]
+"Render::offset" = ["&mut", ""]

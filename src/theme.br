@@ -251,6 +251,17 @@ pub def ButtonSpec buttonSpec(string style):
 
 # ── the theme value ──────────────────────────────────────────────────────────────────────────────
 
+# How wide a text is. Layout (wrapping, truncation, intrinsic sizes), the caret and the click-to-caret mapping all ask the
+# theme's measurer, so a text engine (text/) can replace the fixture font without layout knowing which one is in use.
+pub trait TextMeasurer:
+    # The advance of `s` set at `size` pixels per em, on one line.
+    req float width(string s, float size)
+
+# The fixture font: every display cell is half the size wide (a wide cluster two cells, a combining mark none).
+pub struct FixtureMeasurer as TextMeasurer:
+    pub req float width(string s, float size):
+        (s.displayWidth as float) * (size / 2.0)
+
 pub struct Theme as EnvValue:
     pub string name = "system"
     pub bool dark = false
@@ -262,6 +273,8 @@ pub struct Theme as EnvValue:
     pub [MetricEntry] metrics = []
     pub [MetricEntry] fontSizes = []
     pub [StyleEntry] buttonStyles = []
+    # The text metrics layout and painting use; the fixture font unless the application installs a real engine's.
+    pub TextMeasurer'shared measurer = FixtureMeasurer()
 
     # The resolved color of a role (`#RRGGBB[AA]`): the most specific override for the appearance in effect (a
     # `contrast` one under increased contrast, then `light`/`dark`, then one for every variant), else the base.

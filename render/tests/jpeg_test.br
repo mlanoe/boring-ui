@@ -1,0 +1,65 @@
+# JPEG decoding (src/jpeg.br) against libjpeg's own output (Pillow): fixtures/*.jpg with the RGB bytes Pillow decodes
+# from each (fixtures/*.rgb). The float inverse DCT and the chroma resampling differ from libjpeg's in rounding only,
+# so the comparison allows a few levels. Run from this directory: boring run jpeg_test.br
+
+use render.display_list.*
+use render.jpeg.*
+
+# [largest, summed] per-channel difference between a decoded picture and Pillow's RGB bytes
+def [int] compare(Bitmap img, [uint8] want):
+    var worst = 0
+    var sum = 0
+    for i in 0..<img.pixels.length:
+        let p = img.pixels[i] as int
+        for k in 0..<3:
+            let got = (p >> (16 - 8 * k)) & 255
+            var delta = got - (want[i * 3 + k] as int)
+            if delta < 0:
+                delta = 0 - delta
+            if delta > worst:
+                worst = delta
+            sum += delta
+    [worst, sum]
+
+def void checkSized(string name, int w, int h, int maxWorst, int maxMean100):
+    let bytes = fs.readBytes("fixtures/{name}.jpg")
+    let want = fs.readBytes("fixtures/{name}.rgb")
+    if let img = decodeJpeg(name, bytes):
+        assert_eq(img.width, w)
+        assert_eq(img.height, h)
+        let d = compare(img, want)
+        let mean100 = d[1] * 100 / (img.pixels.length * 3)
+        print "{name}: worst {d[0]} mean*100 {mean100}"
+        assert(d[0] <= maxWorst)
+        assert(mean100 <= maxMean100)
+    else:
+        print "{name} did not decode"
+        assert(false)
+
+def void check(string name, int maxWorst, int maxMean100):
+    checkSized(name, 50, 35, maxWorst, maxMean100)
+
+check("base444", 4, 60)
+check("gray", 4, 60)
+check("optimized", 4, 60)
+check("restart", 4, 60)
+check("base420", 8, 60)
+check("base422", 8, 60)
+check("prog444", 4, 60)
+check("prog420", 8, 60)
+
+# progressive and baseline noise (long Huffman codes, every coefficient used), gray progressive, one pixel, low quality
+checkSized("noise_prog", 40, 40, 4, 60)
+checkSized("noise_base", 40, 40, 8, 60)
+checkSized("gray_prog", 50, 35, 4, 60)
+checkSized("tiny", 1, 1, 4, 60)
+check("lowq_prog420", 8, 60)
+
+# not a JPEG, and a truncated one, are refused
+assert(decodeJpeg("x", [1 as uint8, 2 as uint8, 3 as uint8, 4 as uint8]) == nil)
+let whole = fs.readBytes("fixtures/base444.jpg")
+mut [uint8] cut = []
+for i in 0..<60:
+    cut.push(whole[i])
+assert(decodeJpeg("t", cut) == nil)
+print "jpeg ok"
