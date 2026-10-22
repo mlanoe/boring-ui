@@ -434,8 +434,7 @@ pub def Raster rasterizeWith([Command] list, [Bitmap] images, GlyphAtlas glyphs,
         elif c.kind == "DrawGlyph":
             drawAtlasGlyph(store, base, width, height, glyphs, c, clip, parseColor(c.hex))
         elif c.kind == "DrawImage" and findImage(images, c.text) >= 0:
-            let which = findImage(images, c.text)
-            drawImage(store, base, width, height, images[which], c, clip)
+            drawImage(store, base, width, height, images[findImage(images, c.text)], c, clip)
         elif c.kind == "PushClip":
             clips.push(intersect(areaOf(c), clip))
         elif c.kind == "PopClip":
