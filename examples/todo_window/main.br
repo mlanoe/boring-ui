@@ -49,9 +49,7 @@ def [Bitmap] readImages() throws:
     images
 
 def [Bitmap] loadImages():
-    if let found = try? readImages():
-        return found
-    []
+    readImages() else ([])
 
 # Encode the display list of the layout `placed` (the animator's presentation) for a `w` x `h` window; `images` are the decoded files its
 # `Image` views name by `source`.
