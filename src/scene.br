@@ -14,6 +14,7 @@
 # it. Children are tested front to back (reverse paint order), so the topmost wins.
 
 use render.display_list.*
+use ui.scrollbar.*
 use ui.layout.*
 use ui.theme.*
 use boring.ui.*
@@ -131,16 +132,28 @@ def paintNode(Placed p, mut [Command] out):
         let focusedField = propOrLive(p, "focused", "false") == "true"
         var caret = (propOrLive(p, "caret", "0")).parseInt() else (0)
         var anchor = (propOrLive(p, "anchor", "0")).parseInt() else (0)
-        # the horizontal scroll that keeps the caret inside the field (fieldScroll): everything below is shifted by it
-        var caretOffset = p.theme.measurer.width(value.graphemeSlice(0, caret), bodyHeight)
+        # (positions come from the measurer's caret stops: in right-to-left or mixed text they follow the visual order)
+        var caretIndex = caret
         if marked != "":
             let cursorText = propOrLive(p, "markedCursor", "0")
             let cursor = cursorText.parseInt() else (0)
-            caretOffset = p.theme.measurer.width(value.graphemeSlice(0, markedAt), bodyHeight) + p.theme.measurer.width(marked.graphemeSlice(0, cursor), bodyHeight)
-        var scroll = 0.0
+            caretIndex = markedAt + cursor
+        var caretOffset = 0.0
+        if marked != "":
+            caretOffset = p.theme.measurer.caretX(shownText, caretIndex, bodyHeight, 0)
+        else:
+            caretOffset = p.theme.measurer.caretX(value, caretIndex, bodyHeight, 0)
+        # where the text starts: against the left edge, or the right one for a right-to-left paragraph, shifted to keep the caret
+        # in view (layout.br fieldOrigin, shared with click-to-caret and the input method's area)
+        var originAt = 0
         if focusedField:
-            scroll = fieldScroll(caretOffset, p.w)
-        let originX = p.x + 4.0 - scroll
+            originAt = caretIndex
+        var originShift = 0.0
+        if marked != "":
+            originShift = fieldOrigin(p.theme.measurer, shownText, originAt, p.w, bodyHeight)
+        else:
+            originShift = fieldOrigin(p.theme.measurer, value, originAt, p.w, bodyHeight)
+        let originX = p.x + 4.0 + originShift
         # the selection sits under the text (not while composing: the marked text replaces it)
         if focusedField and marked == "" and caret != anchor:
             var lo = caret
@@ -148,12 +161,15 @@ def paintNode(Placed p, mut [Command] out):
             if anchor < caret:
                 lo = anchor
                 hi = caret
-            let startX = originX + p.theme.measurer.width(value.graphemeSlice(0, lo), bodyHeight)
-            let endX = originX + p.theme.measurer.width(value.graphemeSlice(0, hi), bodyHeight)
-            mut band = Command(kind = "FillRect", x = startX, y = p.y + 4.0, w = endX - startX, h = bodyHeight, text = "", color = "selection", node = p.id)
-            band.hex = p.theme.color(ColorRole.Selection)
-            out.push(band)
-        mut text = Command(kind = "DrawText", x = originX, y = p.y + 4.0, w = p.w - 8.0, h = p.theme.fontSizeNamed("Body"), text = shownText, color = "", node = p.id)
+            let spans = p.theme.measurer.selectionSpans(value, lo, hi, bodyHeight, 0)
+            var at = 0
+            while at + 1 < spans.length:
+                mut band = Command(kind = "FillRect", x = originX + spans[at], y = p.y + 4.0, w = spans[at + 1] - spans[at], h = bodyHeight, text = "", color = "selection", node = p.id)
+                band.hex = p.theme.color(ColorRole.Selection)
+                out.push(band)
+                at += 2
+        # (the command's width is the text's own: the field's origin already places it, so a right-to-left line is not aligned twice)
+        mut text = Command(kind = "DrawText", x = originX, y = p.y + 4.0, w = p.theme.measurer.width(shownText, bodyHeight), h = p.theme.fontSizeNamed("Body"), text = shownText, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
         if focusedField:
@@ -162,9 +178,13 @@ def paintNode(Placed p, mut [Command] out):
             bar.hex = p.theme.color(ColorRole.PrimaryText)
             out.push(bar)
         if marked != "":
-            mut underline = Command(kind = "MarkedText", x = originX + p.theme.measurer.width(value.graphemeSlice(0, markedAt), bodyHeight), y = p.y + 4.0, w = p.theme.measurer.width(marked, bodyHeight), h = p.theme.fontSizeNamed("Body"), text = marked, color = "", node = p.id)
-            underline.hex = p.theme.color(ColorRole.PrimaryText)
-            out.push(underline)
+            let markedSpans = p.theme.measurer.selectionSpans(shownText, markedAt, markedAt + marked.graphemeCount, bodyHeight, 0)
+            var m = 0
+            while m + 1 < markedSpans.length:
+                mut underline = Command(kind = "MarkedText", x = originX + markedSpans[m], y = p.y + 4.0, w = markedSpans[m + 1] - markedSpans[m], h = p.theme.fontSizeNamed("Body"), text = marked, color = "", node = p.id)
+                underline.hex = p.theme.color(ColorRole.PrimaryText)
+                out.push(underline)
+                m += 2
         out.push(Command(kind = "PopClip", x = p.x + 2.0, y = p.y, w = p.w - 4.0, h = p.h, text = "", color = "", node = p.id))
     if p.kind == "Separator":
         mut line = cmd("FillRect", p, "", "separator")
@@ -230,6 +250,16 @@ def paintNode(Placed p, mut [Command] out):
         paint(c, out)
     if p.kind == "Clip" or p.kind == "Scroll" or (p.kind == "List" or p.kind == "MultiList"):
         out.push(cmd("PopClip", p, "", ""))
+    if isScroller(p.kind):
+        # the scroll indicator, over the content, only while there is something to scroll
+        let t = thumbOf(p)
+        if t.length > 0:
+            mut thumb = Command(kind = "FillRect", x = t[0], y = t[1], w = t[2], h = t[3], text = "", color = "scrollbar", node = p.id)
+            var tone = p.theme.color(ColorRole.SecondaryText)
+            if tone.length == 7:
+                tone = "{tone}B0"
+            thumb.hex = tone
+            out.push(thumb)
     if p.kind == "Opacity":
         mut close = cmd("PopOpacity", p, "", "")
         close.value = num(p, "value", 1.0)

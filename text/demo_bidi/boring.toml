@@ -1,0 +1,23 @@
+[project]
+name    = "boring-ui-text-demo"
+version = "0.1.0"
+main    = "bidi_demo.br"
+
+# Not a test: mixed left-to-right and right-to-left text set by the text engine.
+# Run: demo_bidi/run.sh > bidi.ppm
+[deps]
+text = ".."
+ui = "../.."
+render = "../../render"
+
+[dependencies]
+swash = "0.2.10"
+unicode-bidi = "0.3.18"
+
+[external_fns]
+"FontRef::fromIndex" = ["&", ""]
+"Charmap::map" = ["&", ""]
+"Render::new" = ["&"]
+"Render::render" = ["&", "&mut", ""]
+"Render::format" = ["&mut", ""]
+"Render::offset" = ["&mut", ""]

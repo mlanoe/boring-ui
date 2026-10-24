@@ -16,3 +16,4 @@
 /render/bench/stages_*/
 /text/tests/*_rust/
 /text/demo/*_rust/
+/text/demo_bidi/*_rust/

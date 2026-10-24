@@ -10,6 +10,9 @@
 
 use swash.FontRef
 use swash.Charmap
+use swash.shape.Direction
+use swash.text.Script
+use unicode_bidi.BidiInfo
 use swash.shape.ShapeContext
 use swash.scale.ScaleContext
 use swash.scale.Render
@@ -27,6 +30,9 @@ pub struct PlacedGlyph:
     pub float dx
     pub float dy
     pub float advance
+    # the logical graphemes this glyph shows, `src` ..< `srcEnd` (indices into the shaped text; a ligature covers several)
+    pub int src = 0
+    pub int srcEnd = 0
 
 # One rasterized glyph: `width` x `height` coverage bytes (row-major), `left`/`top` the offset of the image's
 # top-left corner from the pen on the baseline (`top` is positive upward, as swash reports it).
@@ -46,19 +52,95 @@ pub struct LineMetrics:
 
 # The glyphs of `text` at `size` pixels per em, left to right.
 pub def [PlacedGlyph] shape([uint8] fontBytes, string text, float size):
+    shapeDir(fontBytes, text, size, false)
+
+# The script of a run, from its first character (the ones this engine sets differently from Latin: Hebrew and Arabic).
+def Script scriptOf(string text):
+    var code = 0
+    for ch in text.chars():
+        code = ord(ch)
+        break
+    if (code >= 1424 and code <= 1535) or (code >= 64285 and code <= 64335):
+        return Script.Hebrew
+    if (code >= 1536 and code <= 1791) or (code >= 1872 and code <= 1919) or (code >= 2208 and code <= 2303) or (code >= 64336 and code <= 65023) or (code >= 65136 and code <= 65279):
+        return Script.Arabic
+    Script.Latin
+
+# Characters that have a mirror image, in pairs (opening then closing): at an odd bidi level these are drawn as their partner
+# (UAX #9 L4, Bidi_Mirrored): the opening parenthesis of a right-to-left run looks like ")". The shaper does not do it.
+def string mirrorPairs():
+    "()[]{{}}<>«»‹›⟨⟩⟦⟧⌈⌉⌊⌋〈〉《》「」『』【】〔〕〖〗〘〙〚〛"
+
+# `text` as it is drawn in a right-to-left run: every paired bracket or quote swapped with its partner.
+pub def string mirrored(string text):
+    let pairs = mirrorPairs()
+    var out = ""
+    for i in 0..<text.graphemeCount:
+        let g = text.graphemeSlice(i, i + 1)
+        let at = pairs.indexOf(g) else (0 - 1)
+        if at < 0:
+            out = "{out}{g}"
+        elif at % 2 == 0:
+            out = "{out}{pairs.graphemeSlice(at + 1, at + 2)}"
+        else:
+            out = "{out}{pairs.graphemeSlice(at - 1, at)}"
+    out
+
+# `shape` for a run of one direction: `rtl` sets it right to left (a Hebrew or Arabic run, an odd bidi level). The glyphs
+# come back left to right, as they are drawn.
+pub def [PlacedGlyph] shapeDir([uint8] fontBytes, string text, float size, bool rtl):
     let fontOpt = FontRef.fromIndex(fontBytes, 0)
     guard let font = fontOpt else:
         return []
+    var dir = Direction.LeftToRight
+    if rtl:
+        dir = Direction.RightToLeft
     mut ctx = ShapeContext.new()
-    mut shaper = ctx.builder(font).size(size as float32).build()
-    shaper.addStr(text)
-    var mut out = [] as [PlacedGlyph]
-    var mut pen = [0.0]
+    mut shaper = ctx.builder(font).size(size as float32).direction(dir).script(scriptOf(text)).build()
+    if rtl:
+        shaper.addStr(mirrored(text))
+    else:
+        shaper.addStr(text)
+    # the grapheme each UTF-8 byte of the text belongs to (the shaper reports a cluster's source as byte offsets)
+    var mut graphemeOfByte = [] as [int]
+    for gi in 0..<text.graphemeCount:
+        for b in 0..<graphemeUtf8Bytes(text.graphemeSlice(gi, gi + 1)):
+            graphemeOfByte.push(gi)
+    graphemeOfByte.push(text.graphemeCount)
+    # the glyphs in logical order, and where each cluster starts in that list (a cluster's glyphs stay together)
+    var mut logical = [] as [PlacedGlyph]
+    var mut starts = [] as [int]
     shaper.shapeWith((cluster):
+        starts.push(logical.length)
+        # (typed locals: indexing straight by a cast external field is emitted with an `isize` index)
+        let int startByte = cluster.source.start as int
+        let int endByte = cluster.source.end as int
+        let first = graphemeOfByte[startByte]
+        var last = graphemeOfByte[endByte]
+        if last <= first:
+            last = first + 1
         for g in cluster.glyphs:
-            out.push(PlacedGlyph(id = g.id as uint, x = pen[0], dx = g.x as float, dy = g.y as float, advance = g.advance as float))
-            pen[0] = pen[0] + g.advance as float
+            logical.push(PlacedGlyph(id = g.id as uint, x = 0.0, dx = g.x as float, dy = g.y as float, advance = g.advance as float, src = first, srcEnd = last))
     )
+    # the shaper does not reverse a right-to-left run: clusters go last to first, glyphs inside one stay in logical order
+    var mut out = [] as [PlacedGlyph]
+    var pen = 0.0
+    var c = 0
+    while c < starts.length:
+        var k = c
+        if rtl:
+            k = starts.length - 1 - c
+        var from = starts[k]
+        var to = logical.length
+        if k + 1 < starts.length:
+            to = starts[k + 1]
+        var at = from
+        while at < to:
+            let g = logical[at]
+            out.push(PlacedGlyph(id = g.id, x = pen, dx = g.dx, dy = g.dy, advance = g.advance, src = g.src, srcEnd = g.srcEnd))
+            pen += g.advance
+            at += 1
+        c += 1
     out
 
 # The width of a shaped run.
@@ -123,10 +205,10 @@ def bool coversAt([uint8] primary, [[uint8]] fallbacks, int i, string text):
     covers(fallbacks[i - 1], text)
 
 # `shape` with font `i` of the list `primary` then `fallbacks`.
-def [PlacedGlyph] shapeAt([uint8] primary, [[uint8]] fallbacks, int i, string text, float size):
+def [PlacedGlyph] shapeAt([uint8] primary, [[uint8]] fallbacks, int i, string text, float size, bool rtl):
     if i == 0:
-        return shape(primary, text, size)
-    shape(fallbacks[i - 1], text, size)
+        return shapeDir(primary, text, size, rtl)
+    shapeDir(fallbacks[i - 1], text, size, rtl)
 
 # The index of the first font that covers the grapheme `cluster` (0, the primary, when none does: it draws its own
 # missing-glyph box, as a font would).
@@ -140,27 +222,47 @@ def int fontFor([uint8] primary, [[uint8]] fallbacks, string cluster):
 # consecutive graphemes of one font are shaped together (so kerning and ligatures still apply inside a run), and the runs
 # are laid out one after the other. `PlacedGlyph.font` says which font each glyph came from (0 = the primary).
 pub def [PlacedGlyph] shapeWithFallbacks([uint8] primary, [[uint8]] fallbacks, string text, float size):
+    shapeWithFallbacksDir(primary, fallbacks, text, size, false)
+
+# `shapeWithFallbacks` for one directional run: `rtl` sets the run right to left, so its font sub-runs are also laid out last
+# to first.
+pub def [PlacedGlyph] shapeWithFallbacksDir([uint8] primary, [[uint8]] fallbacks, string text, float size, bool rtl):
     if fallbacks.length == 0:
-        return shape(primary, text, size)
-    var mut out = [] as [PlacedGlyph]
-    var pen = 0.0
+        return shapeDir(primary, text, size, rtl)
+    # the sub-runs in logical order: their glyphs (font set) shaped on their own
+    var mut parts = [] as [[PlacedGlyph]]
     var run = ""
     var runFont = 0
+    var runStart = 0
     let count = text.graphemeCount
     for i in 0..<count:
         let g = text.graphemeSlice(i, i + 1)
         let f = fontFor(primary, fallbacks, g)
         if run != "" and f != runFont:
-            let shaped = shapeAt(primary, fallbacks, runFont, run, size)
-            for p in shaped:
-                out.push(PlacedGlyph(id = p.id, font = runFont, x = pen + p.x, dx = p.dx, dy = p.dy, advance = p.advance))
-            pen += runWidth(shaped)
+            var mut part = [] as [PlacedGlyph]
+            for p in shapeAt(primary, fallbacks, runFont, run, size, rtl):
+                part.push(PlacedGlyph(id = p.id, font = runFont, x = p.x, dx = p.dx, dy = p.dy, advance = p.advance, src = p.src + runStart, srcEnd = p.srcEnd + runStart))
+            parts.push(part)
             run = ""
+            runStart = i
         run = "{run}{g}"
         runFont = f
     if run != "":
-        for p in shapeAt(primary, fallbacks, runFont, run, size):
-            out.push(PlacedGlyph(id = p.id, font = runFont, x = pen + p.x, dx = p.dx, dy = p.dy, advance = p.advance))
+        var mut part = [] as [PlacedGlyph]
+        for p in shapeAt(primary, fallbacks, runFont, run, size, rtl):
+            part.push(PlacedGlyph(id = p.id, font = runFont, x = p.x, dx = p.dx, dy = p.dy, advance = p.advance, src = p.src + runStart, srcEnd = p.srcEnd + runStart))
+        parts.push(part)
+    var mut out = [] as [PlacedGlyph]
+    var pen = 0.0
+    var n = 0
+    while n < parts.length:
+        var k = n
+        if rtl:
+            k = parts.length - 1 - n
+        for p in parts[k]:
+            out.push(PlacedGlyph(id = p.id, font = p.font, x = pen + p.x, dx = p.dx, dy = p.dy, advance = p.advance, src = p.src, srcEnd = p.srcEnd))
+        pen += runWidth(parts[k])
+        n += 1
     out
 
 # `shapeWithFallbacks` for one list of fonts (the first is the primary). Copies the fallbacks: for callers that do not hold
@@ -170,3 +272,232 @@ pub def [PlacedGlyph] shapeRuns([[uint8]] fonts, string text, float size):
     for i in 1..<fonts.length:
         rest.push(fonts[i])
     shapeWithFallbacks(fonts[0], rest, text, size)
+
+# ── bidirectional text ────────────────────────────────────────────────────────────────────────────
+
+# The length of `g` in UTF-8 bytes (`length` counts characters).
+def int graphemeUtf8Bytes(string g):
+    var n = 0
+    for ch in g.chars():
+        let code = ord(ch)
+        if code < 128:
+            n += 1
+        elif code < 2048:
+            n += 2
+        elif code < 65536:
+            n += 3
+        else:
+            n += 4
+    n
+
+# Whether the paragraph's base direction is right to left (its first strong letter is Hebrew, Arabic, ...): such text is set
+# against the right edge.
+pub def bool paragraphIsRtl(string text):
+    if text.graphemeCount == 0:
+        return false
+    let info = BidiInfo.new(text, nil)
+    let para = info.paragraphs[0]
+    para.level.is_rtl()
+
+# The embedding level of every grapheme of `text` (UAX #9, `unicode-bidi`): 0 for left-to-right text, 1 for right-to-left,
+# higher for nested runs (a number inside right-to-left text). The paragraph's base direction is its first strong letter.
+pub def [int] bidiLevels(string text):
+    let info = BidiInfo.new(text, nil)
+    var mut levels = [] as [int]
+    var byte = 0
+    for i in 0..<text.graphemeCount:
+        let cluster = text.graphemeSlice(i, i + 1)
+        let lvl = info.levels[byte]
+        levels.push(lvl.number() as int)
+        byte += graphemeUtf8Bytes(cluster)
+    levels
+
+# The visual order of items with embedding `levels` (UAX #9 L2): from the highest level down to the lowest odd one, every
+# maximal sequence of items at that level or above is reversed. Returns the item index at each visual position.
+def [int] visualOrder([int] levels):
+    var mut order = [] as [int]
+    var highest = 0
+    var lowestOdd = 1000
+    for i in 0..<levels.length:
+        order.push(i)
+        if levels[i] > highest:
+            highest = levels[i]
+        if levels[i] % 2 == 1 and levels[i] < lowestOdd:
+            lowestOdd = levels[i]
+    var lvl = highest
+    while lvl >= lowestOdd:
+        var i = 0
+        while i < order.length:
+            if levels[order[i]] >= lvl:
+                var j = i
+                while j + 1 < order.length and levels[order[j + 1]] >= lvl:
+                    j += 1
+                var a = i
+                var b = j
+                while a < b:
+                    let t = order[a]
+                    order[a] = order[b]
+                    order[b] = t
+                    a += 1
+                    b -= 1
+                i = j + 1
+            else:
+                i += 1
+        lvl -= 1
+    order
+
+# `shapeWithFallbacks` for text with right-to-left parts (Hebrew, Arabic): the text is split into runs of one embedding level,
+# each run is shaped in its own direction, and the runs are laid out in visual order. Left-to-right text takes the plain path.
+pub def [PlacedGlyph] shapeBidi([uint8] primary, [[uint8]] fallbacks, string text, float size):
+    if text.graphemeCount == 0:
+        return []
+    let levels = bidiLevels(text)
+    var highest = 0
+    for l in levels:
+        if l > highest:
+            highest = l
+    if highest == 0:
+        return shapeWithFallbacks(primary, fallbacks, text, size)
+    # runs of equal level, in logical order
+    var mut runText = [] as [string]
+    var mut runLevel = [] as [int]
+    var mut runFirst = [] as [int]
+    var current = ""
+    var currentLevel = levels[0]
+    var currentFirst = 0
+    for i in 0..<text.graphemeCount:
+        if levels[i] != currentLevel:
+            runText.push(current)
+            runLevel.push(currentLevel)
+            runFirst.push(currentFirst)
+            current = ""
+            currentLevel = levels[i]
+            currentFirst = i
+        current = "{current}{text.graphemeSlice(i, i + 1)}"
+    runText.push(current)
+    runLevel.push(currentLevel)
+    runFirst.push(currentFirst)
+    var mut out = [] as [PlacedGlyph]
+    var pen = 0.0
+    for r in visualOrder(runLevel):
+        let glyphs = shapeWithFallbacksDir(primary, fallbacks, runText[r], size, runLevel[r] % 2 == 1)
+        for p in glyphs:
+            out.push(PlacedGlyph(id = p.id, font = p.font, x = pen + p.x, dx = p.dx, dy = p.dy, advance = p.advance, src = p.src + runFirst[r], srcEnd = p.srcEnd + runFirst[r]))
+        pen += runWidth(glyphs)
+    out
+
+# ── caret positions in shaped (bidirectional) text ────────────────────────────────────────────────
+
+# Where each grapheme of a shaped text sits on the line: `left[i]` ..< `right[i]` in pixels from the line's origin, in
+# *logical* order (grapheme i of the string), whatever the visual order of the runs; `rtl[i]` says whether it belongs to a
+# right-to-left run. A glyph that shows several graphemes (a ligature) shares its box between them.
+pub struct CaretStops:
+    pub [float] left
+    pub [float] right
+    pub [bool] rtl
+
+pub def CaretStops caretStops([uint8] primary, [[uint8]] fallbacks, string text, float size):
+    let n = text.graphemeCount
+    var mut left = [] as [float]
+    var mut right = [] as [float]
+    var mut rtl = [] as [bool]
+    let levels = bidiLevels(text)
+    for i in 0..<n:
+        left.push(1000000000.0)
+        right.push(0.0 - 1000000000.0)
+        rtl.push(levels[i] % 2 == 1)
+    for g in shapeBidi(primary, fallbacks, text, size):
+        var span = g.srcEnd - g.src
+        if span < 1:
+            span = 1
+        let share = g.advance / span as float
+        for k in 0..<span:
+            let gi = g.src + k
+            if gi >= 0 and gi < n:
+                var a = g.x + share * k as float
+                if rtl[gi]:
+                    a = g.x + g.advance - share * (k + 1) as float
+                if a < left[gi]:
+                    left[gi] = a
+                if a + share > right[gi]:
+                    right[gi] = a + share
+    # a grapheme with no glyph of its own (a control character) has no extent: it sits at the previous edge
+    var edge = 0.0
+    for i in 0..<n:
+        if left[i] > right[i]:
+            left[i] = edge
+            right[i] = edge
+        else:
+            edge = right[i]
+            if rtl[i]:
+                edge = left[i]
+    CaretStops(left = left, right = right, rtl = rtl)
+
+# The x of the caret at logical `index` (between grapheme index - 1 and index), in pixels from the line's origin: after the
+# previous grapheme in its own direction (its right edge when it is left to right, its left edge when right to left); at the
+# start, before the first one. In mixed text a caret is one of the two stops a boundary has (the one that continues the
+# previous grapheme).
+pub def float caretXIn([uint8] primary, [[uint8]] fallbacks, string text, float size, int index):
+    let n = text.graphemeCount
+    if n == 0:
+        return 0.0
+    let stops = caretStops(primary, fallbacks, text, size)
+    var at = index
+    if at < 0:
+        at = 0
+    if at > n:
+        at = n
+    if at == 0:
+        if stops.rtl[0]:
+            return stops.right[0]
+        return stops.left[0]
+    if stops.rtl[at - 1]:
+        return stops.left[at - 1]
+    stops.right[at - 1]
+
+# The visual extents of the graphemes `lo` ..< `hi` as [x0, x1, x0, x1, ...]: neighbouring boxes merge into one span, so a
+# selection that crosses a direction change comes back as several.
+pub def [float] selectionSpansIn([uint8] primary, [[uint8]] fallbacks, string text, float size, int lo, int hi):
+    let n = text.graphemeCount
+    var mut spans = [] as [float]
+    if n == 0 or hi <= lo:
+        return spans
+    let stops = caretStops(primary, fallbacks, text, size)
+    var from = lo
+    if from < 0:
+        from = 0
+    var to = hi
+    if to > n:
+        to = n
+    # the boxes of the range, ordered by position, merged where they touch
+    var mut order = [] as [int]
+    for i in from..<to:
+        order.push(i)
+    var a = 0
+    while a < order.length:
+        var b = a + 1
+        while b < order.length:
+            if stops.left[order[b]] < stops.left[order[a]]:
+                let t = order[a]
+                order[a] = order[b]
+                order[b] = t
+            b += 1
+        a += 1
+    var start = stops.left[order[0]]
+    var end = stops.right[order[0]]
+    var k = 1
+    while k < order.length:
+        let l = stops.left[order[k]]
+        let r = stops.right[order[k]]
+        if l <= end + 0.5:
+            if r > end:
+                end = r
+        else:
+            spans.push(start)
+            spans.push(end)
+            start = l
+            end = r
+        k += 1
+    spans.push(start)
+    spans.push(end)
+    spans

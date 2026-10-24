@@ -258,6 +258,17 @@ pub trait TextMeasurer:
     req float width(string s, float size)
     # The same with a style: 0 regular, 1 bold, 2 italic, 3 bold italic. A measurer without styled cuts ignores it.
     req float widthStyled(string s, float size, int style)
+    # What a truncated line ends with: "..." in the fixture font, "…" (one glyph) in a font that has it.
+    req string ellipsis()
+    # Where the caret is at logical grapheme `index` of `s` (between grapheme index - 1 and index): pixels from the start of
+    # the line. For left-to-right text this is the width of the first `index` graphemes; in right-to-left or mixed text it
+    # is the visual position (the text engine knows the run order).
+    req float caretX(string s, int index, float size, int style)
+    # The visual extents of the graphemes `lo` ..< `hi` as [x0, x1, x0, x1, ...]: one span, or several where a selection
+    # crosses a direction change.
+    req [float] selectionSpans(string s, int lo, int hi, float size, int style)
+    # Whether `s` is a right-to-left paragraph (set against the right edge of its box).
+    req bool isRtl(string s)
 
 # The fixture font: every display cell is half the size wide (a wide cluster two cells, a combining mark none).
 pub struct FixtureMeasurer as TextMeasurer:
@@ -267,6 +278,19 @@ pub struct FixtureMeasurer as TextMeasurer:
     # (the fixture font has one cut: every style measures like the regular one)
     pub req float widthStyled(string s, float size, int style):
         (s.displayWidth as float) * (size / 2.0)
+
+    pub req string ellipsis():
+        "..."
+
+    pub req float caretX(string s, int index, float size, int style):
+        (s.graphemeSlice(0, index).displayWidth as float) * (size / 2.0)
+
+    pub req bool isRtl(string s):
+        false
+
+    pub req [float] selectionSpans(string s, int lo, int hi, float size, int style):
+        let cell = size / 2.0
+        [(s.graphemeSlice(0, lo).displayWidth as float) * cell, (s.graphemeSlice(0, hi).displayWidth as float) * cell]
 
 pub struct Theme as EnvValue:
     pub string name = "system"

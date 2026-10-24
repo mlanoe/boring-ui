@@ -1,0 +1,26 @@
+# Mixed left-to-right and right-to-left text, set by the text engine and painted by the CPU reference: a PPM on stdout.
+
+use render.display_list.*
+use render.raster.*
+use text.glyph_run.*
+use text.fonts.*
+
+mut cache = GlyphCache(font = systemSansFontOrEmpty(), styled = systemSansStyles(), fallbacks = systemFallbackFonts())
+
+def Command line(float y, string text, string hex):
+    Command(kind = "DrawText", x = 12.0, y = y, w = 400.0, h = 24.0, text = text, hex = hex)
+
+let samples = [
+    line(8.0, "Hello world, left to right", "#000000"),
+    line(40.0, "שלום עולם", "#000000"),
+    line(72.0, "abc שלום עולם def", "#000000"),
+    line(104.0, "שלום abc עולם", "#000000"),
+    line(136.0, "مرحبا بالعالم", "#000000"),
+    line(168.0, "Hello مرحبا 123 world", "#000000"),
+    line(200.0, "שלום (עולם) [abc] יום", "#000000")
+]
+let list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = 420.0, h = 240.0, hex = "#FFFFFF")]
+mut all = list
+for c in glyphify(samples, cache):
+    all.push(c)
+print toPpm(rasterizeWith(all, [], cache.atlas, 420, 240))

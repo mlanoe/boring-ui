@@ -1,0 +1,90 @@
+# Scroll indicators: the geometry of the thumb a `Scroll`, `List` or `MultiList` shows when its content is longer than
+# its box, shared by the painter (scene.br) and the pointer (events.br: drag the thumb, click the track). Vertical
+# scrollers carry the indicator along their right edge, horizontal ones along the bottom. It is only drawn, and only
+# hit, when there is something to scroll (`scrollMax` > 0).
+
+use ui.layout.*
+
+pub def float barWidth():
+    6.0
+
+def float barInset():
+    2.0
+
+def float minThumb():
+    20.0
+
+pub def bool isScroller(string kind):
+    kind == "Scroll" or kind == "List" or kind == "MultiList"
+
+pub def bool scrollsVertically(Placed n):
+    (n.props["axis"] else ("Vertical")) == "Vertical"
+
+def float numberProp(Placed n, string key):
+    let text = n.props[key] else ("0")
+    text.parseFloat() else (0.0)
+
+# The thumb of scroller `n` as [x, y, w, h, trackStart, trackLength, scrollMax] (the track runs along the scroll axis
+# from `trackStart`), or [] when the content fits.
+pub def [float] thumbOf(Placed n):
+    let most = numberProp(n, "scrollMax")
+    if most <= 0.0:
+        return []
+    let offset = numberProp(n, "scroll")
+    let vertical = scrollsVertically(n)
+    var viewport = n.w
+    if vertical:
+        viewport = n.h
+    let trackStart = barInset()
+    let trackLength = viewport - 2.0 * barInset()
+    if trackLength <= 0.0:
+        return []
+    var length = trackLength * viewport / (viewport + most)
+    if length < minThumb():
+        length = minThumb()
+    if length > trackLength:
+        length = trackLength
+    var along = 0.0
+    if most > 0.0:
+        along = (trackLength - length) * offset / most
+    if vertical:
+        return [n.x + n.w - barInset() - barWidth(), n.y + trackStart + along, barWidth(), length, n.y + trackStart, trackLength, most]
+    [n.x + trackStart + along, n.y + n.h - barInset() - barWidth(), length, barWidth(), n.x + trackStart, trackLength, most]
+
+# Whether (x, y) is on the scroller's indicator strip: the whole track, so a click beside the thumb can page.
+pub def bool onTrack(Placed n, float x, float y):
+    let t = thumbOf(n)
+    if t.length == 0:
+        return false
+    let slack = 3.0
+    if scrollsVertically(n):
+        return x >= t[0] - slack and x <= t[0] + t[2] + slack and y >= t[4] and y <= t[4] + t[5]
+    y >= t[1] - slack and y <= t[1] + t[3] + slack and x >= t[4] and x <= t[4] + t[5]
+
+# Whether (x, y) is on the thumb itself.
+pub def bool onThumb(Placed n, float x, float y):
+    let t = thumbOf(n)
+    if t.length == 0:
+        return false
+    x >= t[0] and x <= t[0] + t[2] and y >= t[1] and y <= t[1] + t[3]
+
+# The scroll offset that puts the thumb's leading edge at `edge` (a pointer coordinate minus where the thumb was grabbed),
+# clamped to the scroller's range.
+pub def float offsetForEdge(Placed n, float edge):
+    let t = thumbOf(n)
+    if t.length == 0:
+        return 0.0
+    var length = t[3]
+    if scrollsVertically(n):
+        length = t[3]
+    else:
+        length = t[2]
+    let free = t[5] - length
+    if free <= 0.0:
+        return 0.0
+    var frac = (edge - t[4]) / free
+    if frac < 0.0:
+        frac = 0.0
+    if frac > 1.0:
+        frac = 1.0
+    frac * t[6]

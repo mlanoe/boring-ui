@@ -14,8 +14,9 @@
 # Animation: the "Toggle logo" button shrinks and fades the logo (window_app.br, an `AnimationScope` triggered by the
 # toggled value). Each frame paints the animator's presentation (pace.br); while one runs the loop asks for another
 # frame (`screen.requestRedraw()`), otherwise it sleeps. Pointer motion in the middle of an animation waits instead of
-# snapping it. Momentum scrolling is not driven: a mouse wheel has no fling (a touch host would call `fling` and
-# `stepMomentum`).
+# snapping it. Touch (screen.touch*, or the right mouse button standing in for a finger on a desktop) drives the gesture
+# API of events.br (`touchDown` / `touchMove` / `touchUp`): dragging scrolls the content under the finger, lifting a moving
+# one flings it (`stepMomentum` each frame while it lasts), a short touch is a tap.
 #
 # The caret inside an IME composition comes from `screen.marked_end` (a byte offset, converted by ime_caret.br) and
 # places the input method's candidate window; the focused field draws its own caret bar and selection (scene.br).
@@ -167,10 +168,15 @@ def [int] caretAt(Runtime rt, int w, int h):
                 let body = placed.theme.fontSizeNamed("Body")
                 let caret = selectionOf(rt, f)[0]
                 let value = node.props["value"] else ("")
-                var offset = placed.theme.measurer.width(value.graphemeSlice(0, caret), body)
+                # (the measurer's caret stops follow the visual order in right-to-left or mixed text)
+                var shown = "{value}"
+                var at = caret
                 if let c = rt.composition:
-                    offset = placed.theme.measurer.width(value.graphemeSlice(0, caret), body) + placed.theme.measurer.width(c.text.graphemeSlice(0, c.cursor), body)
-                return [(node.x + 4.0 + offset - fieldScroll(offset, node.w)) as int, (node.y + 4.0) as int]
+                    shown = "{value.graphemeSlice(0, caret)}{c.text}{value.graphemeSlice(caret, value.graphemeCount)}"
+                    at = caret + c.cursor
+                let offset = placed.theme.measurer.caretX(shown, at, body, 0)
+                let origin = fieldOrigin(placed.theme.measurer, shown, at, node.w, body)
+                return [(node.x + 4.0 + origin + offset) as int, (node.y + 4.0) as int]
     [0, 0]
 
 def int caretX(Runtime rt, int w, int h):
@@ -219,6 +225,8 @@ kernel:
         let ph = (screen.height as float / scale) as int
         let mx = (screen.mouse.x as float / scale) as int
         let my = (screen.mouse.y as float / scale) as int
+        let tx = (screen.touch.x as float / scale) as int
+        let ty = (screen.touch.y as float / scale) as int
         if screen.resized:
             k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins.list, bins.across, frame.count, screen.width, screen.height)
         motion(rt, host, pw, ph, mx, my)
@@ -226,6 +234,23 @@ kernel:
             pressWith(pace, rt, host, pw, ph, mx, my, screen.time, screen.shift)
         if screen.mouse_released("left"):
             release(rt, host, pw, ph, mx, my)
+        # a finger on a touch screen (screen.touch*): drag to scroll, lift a moving one to fling, a short touch is a tap
+        if screen.touchStarted:
+            touchStart(rt, host, pw, ph, tx, ty, screen.time)
+        if screen.touching:
+            touchDrag(pace, rt, host, pw, ph, tx, ty, screen.time)
+        if screen.touchEnded:
+            touchEnd(pace, rt, host, pw, ph, tx, ty, screen.time)
+        if screen.touchCancelled:
+            touchAbort(pace, rt)
+        # the right mouse button stands in for a finger on a desktop: the same gesture
+        if screen.mouse_pressed("right"):
+            touchStart(rt, host, pw, ph, mx, my, screen.time)
+        if screen.mouse.right:
+            touchDrag(pace, rt, host, pw, ph, mx, my, screen.time)
+        if screen.mouse_released("right"):
+            touchEnd(pace, rt, host, pw, ph, mx, my, screen.time)
+        paceMomentum(pace, rt, host, pw, ph, screen.time)
         if screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0:
             wheel(rt, host, pw, ph, mx, my, screen.mouse.scroll_x as float / scale, screen.mouse.scroll_y as float / scale)
         for name in screen.key_events:

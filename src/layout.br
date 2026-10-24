@@ -191,18 +191,20 @@ def [string] flattenKeys(Mounted n):
 def float textWidthAt(TextMeasurer m, string s, float cell, int style):
     m.widthStyled(s, cell * 2.0, style)
 
-# The grapheme index nearest to an x offset (in cells of the fixture font) inside `s`: a click on the left
-# half of a cluster puts the caret before it, on the right half after it.
+# The logical caret index of `s` whose caret stop is nearest to the x offset `x` (a tie goes to the later one): a click on the
+# left half of a left-to-right cluster puts the caret before it, on the right half after it; right-to-left and mixed text
+# follow the visual order (the measurer knows it).
 pub def int graphemeAtX(TextMeasurer m, string s, float x, float size):
-    var before = 0.0
-    var i = 0
-    for k in 1..=s.graphemeCount:
-        let after = m.width(s.graphemeSlice(0, k), size)
-        if x < before + (after - before) / 2.0:
-            return i
-        before = after
-        i += 1
-    i
+    var best = 0
+    var bestDistance = 1000000000.0
+    for k in 0..=s.graphemeCount:
+        var d = m.caretX(s, k, size, 0) - x
+        if d < 0.0:
+            d = 0.0 - d
+        if d <= bestDistance:
+            best = k
+            bestDistance = d
+    best
 
 # `graphemeAtX` for the fixture font, in cells.
 pub def int graphemeAtCells(string s, float cells):
@@ -222,6 +224,26 @@ pub def int graphemeAtCells(string s, float cells):
 # caret would pass the right edge, then the caret rests at that edge.
 pub def float fieldScroll(float caretOffset, float fieldWidth):
     maxOf(0.0, caretOffset + 1.0 - (fieldWidth - 8.0))
+
+# Where a text field's text starts, in pixels from the left of the field's inner box (the field minus its 4 px inset each side):
+# 0 for left-to-right text, the right edge for a right-to-left paragraph, then shifted as far as it takes to keep the caret
+# (`caretIndex` of `text`) inside. Painting, click-to-caret and the input method's candidate window all use it.
+pub def float fieldOrigin(TextMeasurer m, string text, int caretIndex, float fieldWidth, float size):
+    let inner = fieldWidth - 8.0
+    let w = m.width(text, size)
+    let x = m.caretX(text, caretIndex, size, 0)
+    var origin = 0.0
+    # a caret bar one pixel wide needs one pixel to its right: a left-to-right text's end stops short of the edge by one
+    # (a right-to-left one already sits flush against the right edge, its caret at the edge itself)
+    var limit = inner - 1.0
+    if m.isRtl(text):
+        origin = inner - w
+        limit = inner
+    if origin + x > limit:
+        origin = limit - x
+    if origin + x < 0.0:
+        origin = 0.0 - x
+    origin
 
 def float textWidth(string s):
     textWidthAt(FixtureMeasurer(), s, charWidth, 0)
@@ -250,29 +272,102 @@ def [string] words(string s):
             out.push(w)
     out
 
-# Greedy word wrap under `limit` (nil = no wrapping). A word longer than the limit overflows.
-def [string] wrapAt(TextMeasurer m, string content, float? limit, float cell, int style):
-    let ws = words(content)
-    if ws.length == 0:
-        return [""]
-    if limit == nil:
-        return [ws.join(" ")]
-    let max = limit else (0.0)
+# ── line breaking ─────────────────────────────────────────────────────────────────────────────────
+# A small version of the Unicode line-break rules (UAX #14), independent of the measurer: a break is allowed after a run of
+# spaces, after a hyphen (not before a digit), and next to a wide (CJK) grapheme, except that a line never starts with closing
+# punctuation nor ends with opening punctuation. "\n" always breaks. A word wider than the line overflows (it is never split
+# inside: `lineLimit` truncates it with an ellipsis) — the usual `overflow-wrap: normal`.
+
+def bool isSpaceGrapheme(string g):
+    g == " " or g == "\t"
+
+# Characters a line may not start with (closing punctuation, CJK and Latin).
+def bool noBreakBefore(string g):
+    "、。，．）」』】》〉！？：；,.!?;:)]}}".contains(g)
+
+# Characters a line may not end with (opening punctuation).
+def bool noBreakAfter(string g):
+    "（「『【《〈([{{".contains(g)
+
+# Whether a line may break between the graphemes `prev` and `cur`.
+def bool breakBetween(string prev, string cur):
+    if isSpaceGrapheme(prev):
+        return !isSpaceGrapheme(cur)
+    if isSpaceGrapheme(cur):
+        return false
+    if prev == "-" and cur != "-" and !"0123456789".contains(cur):
+        return true
+    if (prev.displayWidth == 2 or cur.displayWidth == 2) and !noBreakBefore(cur) and !noBreakAfter(prev):
+        return true
+    false
+
+# The pieces of a paragraph between break opportunities, spaces kept at the end of the piece they follow.
+def [string] segmentsOf(string para):
+    mut [string] out = []
+    let count = para.graphemeCount
+    var current = ""
+    var prev = ""
+    for i in 0..<count:
+        let g = para.graphemeSlice(i, i + 1)
+        if i > 0 and breakBetween(prev, g):
+            out.push(current)
+            current = ""
+        current = "{current}{g}"
+        prev = "{g}"
+    if current != "":
+        out.push(current)
+    out
+
+# `s` without its trailing spaces.
+def string trimEnd(string s):
+    var n = s.graphemeCount
+    while n > 0 and isSpaceGrapheme(s.graphemeSlice(n - 1, n)):
+        n -= 1
+    s.graphemeSlice(0, n)
+
+# Runs of spaces collapse to one, and the ends are trimmed (white-space: normal).
+def string collapseSpaces(string s):
+    var out = ""
+    var lastSpace = true
+    for i in 0..<s.graphemeCount:
+        let g = s.graphemeSlice(i, i + 1)
+        if isSpaceGrapheme(g):
+            if !lastSpace:
+                out = "{out} "
+            lastSpace = true
+        else:
+            out = "{out}{g}"
+            lastSpace = false
+    trimEnd(out)
+
+# Greedy wrap of one paragraph under `limit`.
+def [string] wrapParagraph(TextMeasurer m, string paragraph, float limit, float cell, int style):
     mut [string] lines = []
     var current = ""
-    for w in ws:
+    for seg in segmentsOf(collapseSpaces(paragraph)):
         if current == "":
-            current = w
-        elif textWidthAt(m, "{current} {w}", cell, style) <= max:
-            current = "{current} {w}"
+            current = seg
+        elif textWidthAt(m, trimEnd("{current}{seg}"), cell, style) <= limit:
+            current = "{current}{seg}"
         else:
-            lines.push(current)
-            current = w
-    lines.push(current)
+            lines.push(trimEnd(current))
+            current = seg
+    lines.push(trimEnd(current))
+    lines
+
+# Word wrap under `limit` (nil = no wrapping: one line per paragraph).
+def [string] wrapAt(TextMeasurer m, string content, float? limit, float cell, int style):
+    mut [string] lines = []
+    for paragraph in content.split("\n"):
+        if limit == nil:
+            lines.push(collapseSpaces(paragraph))
+        else:
+            for l in wrapParagraph(m, paragraph, limit else (0.0), cell, style):
+                lines.push(l)
     lines
 
 # The visible lines of a text under a width limit and an optional line limit: it wraps first, then
-# the last visible line is truncated with an ellipsis ("..." in the fixture font).
+# the last visible line is truncated with the measurer's ellipsis ("..." in the fixture font).
 pub def [string] shownLinesAt(TextMeasurer m, string content, float? limit, int? maxLines, float cell, int style):
     let lines = wrapAt(m, content, limit, cell, style)
     if let cap = maxLines:
@@ -284,9 +379,10 @@ pub def [string] shownLinesAt(TextMeasurer m, string content, float? limit, int?
             if let room = limit:
                 # The fixture ellipsis is the ASCII "..." (3 cells): a real font engine substitutes the
                 # ellipsis glyph. Truncation drops whole grapheme clusters, measured by display width.
-                while last.graphemeCount > 0 and textWidthAt(m, last, cell, style) + textWidthAt(m, "...", cell, style) > room:
+                let dots = m.ellipsis()
+                while last.graphemeCount > 0 and textWidthAt(m, last, cell, style) + textWidthAt(m, dots, cell, style) > room:
                     last = last.graphemeSlice(0, last.graphemeCount - 1)
-            visible[cap - 1] = "{last}..."
+            visible[cap - 1] = "{last}{m.ellipsis()}"
             return visible
     lines
 

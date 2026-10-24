@@ -159,4 +159,168 @@ if cuts[0].length > 0:
         for i in 0..<(styledCache.atlas.width[at] * styledCache.atlas.height[at]):
             boldInk += styledCache.atlas.alpha[styledCache.atlas.offset[at] + i] as int
     assert(boldInk > regularInk)
+# line breaking with the real font: proportional widths decide the lines, the truncated one ends with the one-glyph ellipsis
+let breakTheme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty()))
+assert_eq(breakTheme.measurer.ellipsis(), "…")
+let narrowLines = shownLinesAt(breakTheme.measurer, "Implement the vertical slice", 120.0, nil, 8.0, 0)
+assert(narrowLines.length >= 2)
+for l in narrowLines:
+    assert(breakTheme.measurer.widthStyled(l, 16.0, 0) <= 120.0)
+let cut = shownLinesAt(breakTheme.measurer, "Implement the vertical slice", 120.0, 1, 8.0, 0)
+assert_eq(cut.length, 1)
+assert(cut[0].endsWith("…"))
+assert(breakTheme.measurer.widthStyled(cut[0], 16.0, 0) <= 120.0)
+# ── bidirectional text ────────────────────────────────────────────────────────────────────────────
+let alef = "א"
+let bet = "ב"
+let gimel = "ג"
+def uint idOf([uint8] f, string s):
+    shape(f, s, 20.0)[0].id
+
+def [uint] idsOf([PlacedGlyph] glyphs):
+    var mut out = [] as [uint]
+    for g in glyphs:
+        out.push(g.id)
+    out
+
+let aId = idOf(font, "a")
+let bId = idOf(font, "b")
+let alefId = idOf(font, alef)
+let betId = idOf(font, bet)
+let gimelId = idOf(font, gimel)
+
+# levels: Latin 0, Hebrew 1 (and the base direction is the first strong letter)
+assert_eq(bidiLevels("ab {alef}{bet}{gimel} cd"), [0, 0, 0, 1, 1, 1, 0, 0, 0])
+assert_eq(bidiLevels("{alef}{bet} ab"), [1, 1, 1, 2, 2])
+assert_eq(bidiLevels("abc"), [0, 0, 0])
+assert_eq(bidiLevels(""), [])
+
+# a Hebrew word is laid out right to left: last letter first on the left
+let heb = shapeBidi(font, [], "{alef}{bet}{gimel}", 20.0)
+assert_eq(idsOf(heb), [gimelId, betId, alefId])
+assert_eq(heb[0].x, 0.0)
+assert(heb[1].x > heb[0].x and heb[2].x > heb[1].x)
+
+# mixed text: the Latin run stays left to right, the Hebrew run is reversed, in an LTR paragraph
+let mixed = shapeBidi(font, [], "ab {alef}{bet}", 20.0)
+let mixedIds = idsOf(mixed)
+assert_eq(mixedIds[0], aId)
+assert_eq(mixedIds[1], bId)
+assert_eq(mixedIds[mixedIds.length - 2], betId)
+assert_eq(mixedIds[mixedIds.length - 1], alefId)
+
+# in a right-to-left paragraph the Latin word goes to the left of the Hebrew one: "{alef}{bet} ab" shows "ab {bet}{alef}"
+let rtlPara = shapeBidi(font, [], "{alef}{bet} ab", 20.0)
+let rtlIds = idsOf(rtlPara)
+assert_eq(rtlIds[0], aId)
+assert_eq(rtlIds[1], bId)
+assert_eq(rtlIds[rtlIds.length - 1], alefId)
+
+# widths do not depend on the order: the same glyph advances, however they are arranged
+assert_eq(runWidth(shapeBidi(font, [], "{alef}{bet}{gimel}", 20.0)), runWidth(shapeDir(font, "{alef}{bet}{gimel}", 20.0, false)))
+# plain Latin takes the ordinary path
+assert_eq(idsOf(shapeBidi(font, [], "ab", 20.0)), [aId, bId])
+# the measurer and the cache use it: a Hebrew string has a width and draws glyphs
+let hebTheme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty()))
+assert(hebTheme.measurer.width("{alef}{bet}{gimel}", 16.0) > 10.0)
+mut hebCache = GlyphCache(font = systemSansFontOrEmpty())
+assert_eq(hebCache.draw("{alef}{bet}{gimel}", 16.0, 0.0, 14.0, "#000000").length, 3)
+# ── caret and selection in shaped text ────────────────────────────────────────────────────────────
+def float near(float a, float b):
+    if a > b:
+        return a - b
+    b - a
+
+# left to right: the caret at index i is the width of the first i graphemes
+let abcWidth = runWidth(shape(font, "abc", 20.0))
+assert_eq(caretXIn(font, [], "abc", 20.0, 0), 0.0)
+assert(near(caretXIn(font, [], "abc", 20.0, 3), abcWidth) < 0.01)
+assert(caretXIn(font, [], "abc", 20.0, 1) > 0.0 and caretXIn(font, [], "abc", 20.0, 1) < caretXIn(font, [], "abc", 20.0, 2))
+assert_eq(caretXIn(font, [], "", 20.0, 0), 0.0)
+
+# right to left: the caret starts at the right edge and moves left as the index grows
+let hebWidth = runWidth(shape(font, "{alef}{bet}{gimel}", 20.0))
+let hebText = "{alef}{bet}{gimel}"
+assert(near(caretXIn(font, [], hebText, 20.0, 0), hebWidth) < 0.01)
+assert(near(caretXIn(font, [], hebText, 20.0, 3), 0.0) < 0.01)
+assert(caretXIn(font, [], hebText, 20.0, 1) > caretXIn(font, [], hebText, 20.0, 2))
+
+# mixed "ab " then Hebrew: the caret before the first Hebrew letter and after the last are both at the Hebrew run's left edge
+let mixedText = "ab {alef}{bet}{gimel}"
+let beforeHebrew = caretXIn(font, [], mixedText, 20.0, 3)
+let afterHebrew = caretXIn(font, [], mixedText, 20.0, 6)
+assert(near(beforeHebrew, runWidth(shape(font, "ab ", 20.0))) < 0.01)
+assert(near(afterHebrew, beforeHebrew) < 0.01 or afterHebrew > beforeHebrew)
+assert(caretXIn(font, [], mixedText, 20.0, 4) > caretXIn(font, [], mixedText, 20.0, 5))
+assert(caretXIn(font, [], mixedText, 20.0, 5) > caretXIn(font, [], mixedText, 20.0, 6) - 0.01)
+
+# selections: one span for a left-to-right range, one for a whole Hebrew word, two when the range crosses the direction change
+assert_eq(selectionSpansIn(font, [], "abc", 20.0, 1, 3).length, 2)
+assert_eq(selectionSpansIn(font, [], hebText, 20.0, 0, 3).length, 2)
+assert_eq(selectionSpansIn(font, [], mixedText, 20.0, 1, 5).length, 4)
+assert_eq(selectionSpansIn(font, [], "abc", 20.0, 2, 2).length, 0)
+let abSpans = selectionSpansIn(font, [], "abc", 20.0, 1, 3)
+assert(near(abSpans[1] - abSpans[0], runWidth(shape(font, "bc", 20.0))) < 0.01)
+
+# the measurer exposes them, and a click lands on the nearest caret stop in visual order
+let caretTheme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty()))
+let hebW = caretTheme.measurer.width(hebText, 16.0)
+assert_eq(graphemeAtX(caretTheme.measurer, hebText, hebW - 1.0, 16.0), 0)
+assert_eq(graphemeAtX(caretTheme.measurer, hebText, 1.0, 16.0), 3)
+assert_eq(graphemeAtX(caretTheme.measurer, "abc", 1.0, 16.0), 0)
+assert_eq(graphemeAtX(caretTheme.measurer, "abc", 500.0, 16.0), 3)
+# ── alignment of right-to-left paragraphs ─────────────────────────────────────────────────────────
+assert(paragraphIsRtl("{alef}{bet}{gimel}"))
+assert(paragraphIsRtl("{alef}{bet} ab"))
+assert(!paragraphIsRtl("ab {alef}{bet}"))
+assert(!paragraphIsRtl("abc"))
+assert(!paragraphIsRtl("123"))
+assert(!paragraphIsRtl(""))
+
+# glyphify sets a right-to-left line against the right edge of its box, a left-to-right one against the left
+mut alignCache = GlyphCache(font = systemSansFontOrEmpty())
+let hebLine = Command(kind = "DrawText", x = 10.0, y = 0.0, w = 200.0, h = 20.0, text = "{alef}{bet}{gimel}", hex = "#000000")
+let ltrLine = Command(kind = "DrawText", x = 10.0, y = 0.0, w = 200.0, h = 20.0, text = "abc", hex = "#000000")
+let hebGlyphs = glyphify([hebLine], alignCache)
+let ltrGlyphs = glyphify([ltrLine], alignCache)
+let hebWidthPx = runWidth(shapeBidi(systemSansFontOrEmpty(), [], "{alef}{bet}{gimel}", 20.0))
+assert_eq(hebGlyphs.length, 3)
+assert(near(hebGlyphs[0].x, 10.0 + 200.0 - hebWidthPx) <= 1.0)
+assert(near(ltrGlyphs[0].x, 10.0) <= 1.0)
+# a box no wider than the line leaves it at the left edge
+let tight = Command(kind = "DrawText", x = 10.0, y = 0.0, w = 5.0, h = 20.0, text = "{alef}{bet}{gimel}", hex = "#000000")
+assert(near(glyphify([tight], alignCache)[0].x, 10.0) <= 1.0)
+
+# a text field's origin with the real font: a Hebrew value sits against the right edge, an English one against the left
+let fieldTheme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty()))
+let hebOrigin = fieldOrigin(fieldTheme.measurer, "{alef}{bet}{gimel}", 0, 160.0, 16.0)
+assert(near(hebOrigin, 152.0 - fieldTheme.measurer.width("{alef}{bet}{gimel}", 16.0)) < 0.01)
+assert(hebOrigin > 60.0)
+assert_eq(fieldOrigin(fieldTheme.measurer, "abc", 0, 160.0, 16.0), 0.0)
+# ── mirroring ─────────────────────────────────────────────────────────────────────────────────────
+assert_eq(mirrored("a(b)c"), "a)b(c")
+assert_eq(mirrored("[x]"), "]x[")
+assert_eq(mirrored("<«»>"), ">»«<")
+assert_eq(mirrored("abc"), "abc")
+assert_eq(mirrored(""), "")
+assert_eq(mirrored("{{x}}"), "}}x{{")
+# in a right-to-left run an opening parenthesis is drawn as the closing glyph, and a left-to-right run keeps it
+let openGlyph = shapeDir(font, "(", 20.0, false)[0].id
+let closeGlyph = shapeDir(font, ")", 20.0, false)[0].id
+assert(openGlyph != closeGlyph)
+assert_eq(shapeDir(font, "(", 20.0, true)[0].id, closeGlyph)
+assert_eq(shapeDir(font, ")", 20.0, true)[0].id, openGlyph)
+assert_eq(shapeDir(font, "(", 20.0, false)[0].id, openGlyph)
+# a Hebrew phrase in parentheses: bidi puts the parentheses at odd level when they sit between Hebrew letters, so they flip
+let phrase = shapeBidi(font, [], "{alef}({bet}){gimel}", 20.0)
+let phraseIds = idsOf(phrase)
+assert_eq(phraseIds.length, 5)
+# visual order is right to left: gimel, then the (mirrored) closing parenthesis, bet, then the opening one, then alef: the
+# glyph shown for the logical "(" is the closing glyph and the one for ")" is the opening glyph
+assert_eq(phraseIds[0], gimelId)
+assert_eq(phraseIds[1], openGlyph)
+assert_eq(phraseIds[2], betId)
+assert_eq(phraseIds[3], closeGlyph)
+assert_eq(phraseIds[4], alefId)
+print "bidi ok"
 print "styles ok"

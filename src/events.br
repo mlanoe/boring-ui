@@ -42,6 +42,7 @@
 
 use boring.ui.*
 use ui.core.*
+use ui.scrollbar.*
 use ui.layout.*
 use ui.scene.*
 
@@ -418,8 +419,66 @@ def Handle? focusedField(Runtime rt):
 def int caretAtPointer(Runtime rt, Handle h, Placed at, Mounted node, float x):
     let body = at.theme.fontSizeNamed("Body")
     let current = propOf(node, "value")
-    let scroll = fieldScroll(at.theme.measurer.width(current.graphemeSlice(0, selectionOf(rt, h)[0]), body), at.w)
-    graphemeAtX(at.theme.measurer, current, x - at.x - 4.0 + scroll, body)
+    let origin = fieldOrigin(at.theme.measurer, current, selectionOf(rt, h)[0], at.w, body)
+    graphemeAtX(at.theme.measurer, current, x - at.x - 4.0 - origin, body)
+
+# A press on a scroller's indicator (checked before any control: the strip overlays the content): on the thumb it starts a
+# drag, on the track beside it the scroller pages toward the pointer.
+def bool pressScrollbar(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    let path = hitTest(placed, x, y)
+    var i = path.length - 1
+    while i >= 0:
+        if let node = findPlaced(placed, path[i]):
+            if isScroller(node.kind) and onTrack(node, x, y):
+                let vertical = scrollsVertically(node)
+                if let h = rt.handle(node.id):
+                    let t = thumbOf(node)
+                    var pointer = x
+                    var start = t[0]
+                    if vertical:
+                        pointer = y
+                        start = t[1]
+                    if onThumb(node, x, y):
+                        rt.thumbDrag = ThumbDrag(node = h.id, generation = h.generation, vertical = vertical, grab = pointer - start)
+                        return true
+                    var page = node.w
+                    if vertical:
+                        page = node.h
+                    var target = numOf(node, "scroll") + page * 0.9
+                    if pointer < start:
+                        target = numOf(node, "scroll") - page * 0.9
+                    rt.beginEvent()
+                    _ = rt.scrollTo(node.id, target)
+                    rt.invalidateRoot()
+                    rt.endEvent(host)
+                    return true
+        i -= 1
+    false
+
+# One drag step of a scroll thumb: the scroller follows the pointer along its track.
+def bool dragThumb(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    let held = rt.thumbDrag
+    guard let d = held else:
+        return false
+    guard let h = rt.handle(d.node) else:
+        rt.thumbDrag = nil
+        return false
+    if h.generation != d.generation:
+        rt.thumbDrag = nil
+        return false
+    guard let node = findPlaced(placed, d.node) else:
+        return false
+    var pointer = x
+    if d.vertical:
+        pointer = y
+    let target = offsetForEdge(node, pointer - d.grab)
+    if target == numOf(node, "scroll"):
+        return true
+    rt.beginEvent()
+    _ = rt.scrollTo(d.node, target)
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    true
 
 # A pointer press at (x, y) of the laid-out window `placed`: the deepest enabled control on the hit path
 # takes focus and captures the pointer (a TextField also places its caret). Nothing activates yet — that
@@ -431,6 +490,8 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
 # "Range" (Shift) selects from the anchor to it; "" replaces the selection. Anything else ignores it.
 pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float x, float y, string mods):
     rt.momentum = nil
+    if pressScrollbar(rt, host, placed, x, y):
+        return true
     let path = hitTest(placed, x, y)
     var i = path.length - 1
     while i >= 0:
@@ -545,6 +606,8 @@ def Handle? hoverTarget(Runtime rt, Placed placed, float x, float y):
 # painter shades it), and while a slider holds the pointer, moving it (even outside the slider) drags the value.
 # Returns whether anything changed.
 pub def bool pointerMove(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    if rt.thumbDrag != nil:
+        return dragThumb(rt, host, placed, x, y)
     var changed = false
     var nextId = -1
     if let t = hoverTarget(rt, placed, x, y):
@@ -589,6 +652,9 @@ pub def bool pointerLeave(mut Runtime rt, Builder host):
 # A pointer release: a Button activates and a Toggle toggles only when the pointer is still over the
 # control that captured it; released anywhere else it is a cancel. The capture always ends.
 pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    if rt.thumbDrag != nil:
+        rt.thumbDrag = nil
+        return true
     let held = rt.capture
     rt.capture = nil
     rt.dragSelect = false
@@ -614,6 +680,7 @@ pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, flo
 
 # The platform cancelled the pointer (window lost, modal opened): the capture ends, nothing happens.
 pub def void pointerCancel(mut Runtime rt):
+    rt.thumbDrag = nil
     rt.capture = nil
     rt.dragSelect = false
 
@@ -1363,6 +1430,66 @@ pub def bool stepMomentum(mut Runtime rt, Builder host, Placed placed, float dt)
     else:
         rt.momentum = nil
     alive
+
+# ── touch gestures ────────────────────────────────────────────────────────────────────────────
+# A finger as a host reports it: `touchDown` / `touchMove` / `touchUp` with the position and a timestamp in seconds. A finger
+# that stays within `slop` pixels is a tap (a press and release at its start). One that moves further is a drag: the
+# deepest scroller under where it started follows it (the content tracks the finger, so the offset moves opposite), the
+# velocity is smoothed over the last frames, and lifting the finger hands that velocity to `fling` so the content
+# keeps going and slows down (`stepMomentum`). Any new touch stops the inertia.
+
+def float touchSlop():
+    8.0
+
+# The finger's velocity is considered lost when the last movement is older than this (a held finger does not fling).
+def float flingWindow():
+    0.1
+
+pub def bool touchDown(mut Runtime rt, Builder host, Placed placed, float x, float y, float t):
+    rt.momentum = nil
+    rt.gesture = TouchGesture(startX = x, startY = y, lastX = x, lastY = y, lastT = t)
+    true
+
+pub def bool touchMove(mut Runtime rt, Builder host, Placed placed, float x, float y, float t):
+    let current = rt.gesture
+    guard let g = current else:
+        return false
+    var dragging = g.dragging
+    if !dragging:
+        let dx0 = x - g.startX
+        let dy0 = y - g.startY
+        if dx0 * dx0 + dy0 * dy0 > touchSlop() * touchSlop():
+            dragging = true
+    if !dragging:
+        return false
+    let dx = x - g.lastX
+    let dy = y - g.lastY
+    var vx = g.vx
+    var vy = g.vy
+    let dt = t - g.lastT
+    if dt > 0.0:
+        # an exponential blend: recent frames count most, one jittery frame does not decide the fling
+        vx = 0.7 * (dx / dt) + 0.3 * vx
+        vy = 0.7 * (dy / dt) + 0.3 * vy
+    rt.gesture = TouchGesture(startX = g.startX, startY = g.startY, lastX = x, lastY = y, lastT = t, vx = vx, vy = vy, dragging = true)
+    # the content follows the finger: the scroll offset moves the other way
+    scrollBy(rt, host, placed, g.startX, g.startY, 0.0 - dx, 0.0 - dy)
+
+pub def bool touchUp(mut Runtime rt, Builder host, Placed placed, float x, float y, float t):
+    let current = rt.gesture
+    guard let g = current else:
+        return false
+    rt.gesture = nil
+    if !g.dragging:
+        _ = pointerDown(rt, host, placed, g.startX, g.startY)
+        return pointerUp(rt, host, placed, g.startX, g.startY)
+    if t - g.lastT > flingWindow():
+        return true
+    fling(rt, placed, g.startX, g.startY, 0.0 - g.vx, 0.0 - g.vy)
+
+# The platform cancelled the touch (a call, the window lost): nothing is pressed, nothing flings.
+pub def void touchCancel(mut Runtime rt):
+    rt.gesture = nil
 
 # Wheel / trackpad input: the delta (dx, dy) at (x, y) of the laid-out window `placed`. The deepest
 # `Scroll` under the pointer consumes what it can apply on its own axis (clamped to its content); the

@@ -23,6 +23,18 @@ struct StyledMeasurer as TextMeasurer:
     pub req float width(string s, float size):
         (s.displayWidth as float) * (size / 2.0)
 
+    pub req string ellipsis():
+        "..."
+
+    pub req bool isRtl(string s):
+        false
+
+    pub req float caretX(string s, int index, float size, int style):
+        (s.graphemeSlice(0, index).displayWidth as float) * (size / 2.0)
+
+    pub req [float] selectionSpans(string s, int lo, int hi, float size, int style):
+        [(s.graphemeSlice(0, lo).displayWidth as float) * (size / 2.0), (s.graphemeSlice(0, hi).displayWidth as float) * (size / 2.0)]
+
     pub req float widthStyled(string s, float size, int style):
         var w = (s.displayWidth as float) * (size / 2.0)
         if style == 1 or style == 3:

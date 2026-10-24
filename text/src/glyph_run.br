@@ -50,14 +50,24 @@ pub struct GlyphCache:
             return lineMetrics(self.styled[style - 1], size)
         lineMetrics(self.font, size)
 
+    # Whether the line is a right-to-left paragraph.
+    req bool lineIsRtl(string line):
+        paragraphIsRtl(line)
+
+    # The width of the line set in `style` at `size`.
+    req float lineWidth(string line, float size, int style):
+        if self.hasCut(style):
+            return runWidth(shapeBidi(self.styled[style - 1], self.fallbacks, line, size))
+        runWidth(shapeBidi(self.font, self.fallbacks, line, size))
+
     # `draw` in a style: 1 bold, 2 italic, 3 both (the regular font where the cut is missing).
     def [Command] drawStyled(string text, float size, int style, float x, float baseline, string hex):
         var mut out = [] as [Command]
         var shaped = [] as [PlacedGlyph]
         if self.hasCut(style):
-            shaped = shapeWithFallbacks(self.styled[style - 1], self.fallbacks, text, size)
+            shaped = shapeBidi(self.styled[style - 1], self.fallbacks, text, size)
         else:
-            shaped = shapeWithFallbacks(self.font, self.fallbacks, text, size)
+            shaped = shapeBidi(self.font, self.fallbacks, text, size)
         for g in shaped:
             # the pen's fraction of a pixel is quantized to quarters and baked into the mask; the command's pen is whole
             let pen = x + g.x + g.dx
@@ -82,7 +92,13 @@ pub def [Command] glyphify([Command] list, mut GlyphCache cache):
             let baseline = (c.h - (m.ascent + m.descent)) / 2.0 + m.ascent
             var row = 0
             for line in c.text.split("\n"):
-                for g in cache.drawStyled(line, c.h, c.style, c.x, c.y + baseline + row as float * c.h, c.hex):
+                # a right-to-left line is set against the right edge of the command's box
+                var shift = 0.0
+                if cache.lineIsRtl(line):
+                    shift = c.w - cache.lineWidth(line, c.h, c.style)
+                    if shift < 0.0:
+                        shift = 0.0
+                for g in cache.drawStyled(line, c.h, c.style, c.x + shift, c.y + baseline + row as float * c.h, c.hex):
                     out.push(g)
                 row += 1
         else:

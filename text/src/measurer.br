@@ -12,20 +12,6 @@ use text.engine.*
 
 pub let MEMO_LIMIT = 4096
 
-# The remembered widths. A struct with methods, held in an `'actor` field: indexing or `.length` straight on an `'actor`
-# dictionary field does not transpile (it is not locked first), a method call does.
-@derive(Debug, Default)
-pub struct WidthMemo:
-    var mut {string=float} items = {=}
-
-    req float recall(string key):
-        items[key] else (0.0 - 1.0)
-
-    def remember(string key, float w):
-        if items.length >= MEMO_LIMIT:
-            items.clear()
-        items[key] = w
-
 pub struct EngineMeasurer as TextMeasurer:
     pub let [uint8] font
     # fonts tried, in order, for the characters `font` lacks (see `GlyphCache.fallbacks`)
@@ -33,23 +19,46 @@ pub struct EngineMeasurer as TextMeasurer:
     # the bold, italic and bold italic cuts of `font` (style 1, 2, 3); a missing or empty entry means the regular font
     pub let [[uint8]] styled = []
 
-    mut WidthMemo'actor memo = WidthMemo()
+    # the widths already measured, per "<style>|<size>|<text>" (an `'actor` field: a `req` method fills it)
+    let {string=float}'actor memo = {=}
 
     req bool hasCut(int style):
         style > 0 and self.styled.length >= style and self.styled[style - 1].length > 0
 
+    # The one-glyph ellipsis when the font has it, else three dots.
+    pub req string ellipsis():
+        if covers(self.font, "…"):
+            return "…"
+        "..."
+
     pub req float width(string s, float size):
         self.widthStyled(s, size, 0)
 
+    pub req bool isRtl(string s):
+        paragraphIsRtl(s)
+
+    # (the caret and selection are placed with the real shaping: right-to-left and mixed text have a visual order)
+    pub req float caretX(string s, int index, float size, int style):
+        if self.hasCut(style):
+            return caretXIn(self.styled[style - 1], self.fallbacks, s, size, index)
+        caretXIn(self.font, self.fallbacks, s, size, index)
+
+    pub req [float] selectionSpans(string s, int lo, int hi, float size, int style):
+        if self.hasCut(style):
+            return selectionSpansIn(self.styled[style - 1], self.fallbacks, s, size, lo, hi)
+        selectionSpansIn(self.font, self.fallbacks, s, size, lo, hi)
+
     pub req float widthStyled(string s, float size, int style):
         let key = "{style}|{size}|{s}"
-        let known = self.memo.recall(key)
+        let known = memo[key] else (0.0 - 1.0)
         if known >= 0.0:
             return known
         var w = 0.0
         if self.hasCut(style):
-            w = runWidth(shapeWithFallbacks(self.styled[style - 1], self.fallbacks, s, size))
+            w = runWidth(shapeBidi(self.styled[style - 1], self.fallbacks, s, size))
         else:
-            w = runWidth(shapeWithFallbacks(self.font, self.fallbacks, s, size))
-        self.memo.remember(key, w)
+            w = runWidth(shapeBidi(self.font, self.fallbacks, s, size))
+        if memo.length >= MEMO_LIMIT:
+            memo.clear()
+        memo[key] = w
         w

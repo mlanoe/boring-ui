@@ -279,6 +279,24 @@ pub struct ErrorReport:
 # An input-method composition in progress (draft, "Accepted value, editing buffer, and IME"): the platform's marked
 # (uncommitted) text for one TextField and the cursor inside it. The field's bound value is untouched until the text
 # is committed; a composition belongs to the focused field and ends when focus leaves it.
+# One finger down (events.br `touchDown` ...): where it started, where it was last seen and when, its smoothed velocity in
+# pixels per second, and whether it has moved far enough to be a drag rather than a tap.
+pub struct TouchGesture:
+    pub float startX
+    pub float startY
+    pub var float lastX
+    pub var float lastY
+    pub var float lastT
+    pub var float vx = 0.0
+    pub var float vy = 0.0
+    pub var bool dragging = false
+
+pub struct ThumbDrag:
+    pub int node
+    pub int generation
+    pub bool vertical
+    pub float grab
+
 pub struct Composition:
     pub int node
     pub string text
@@ -363,6 +381,10 @@ pub struct Runtime:
     pub var string clipboard = ""
     # A press in a text field is still dragging a selection (a double or triple click is not: it already selected).
     pub var bool dragSelect = false
+    # A scroll indicator's thumb being dragged (events.br): the scroller, and where along the thumb it was grabbed.
+    pub var ThumbDrag? thumbDrag = nil
+    # The touch in progress, if any (see `touchDown`).
+    pub var TouchGesture? gesture = nil
     # Per-TextField undo/redo history, keyed by mounted id (generation-checked; dropped when the node unmounts).
     pub var mut {int=EditHistory} histories = {=}
     pub var mut [KeyObserver] keyObservers = []

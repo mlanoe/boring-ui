@@ -1,0 +1,105 @@
+# Scroll viewports: offset as mounted state, clamping, clipping, hit testing and wheel input with
+# bubbling (src/layout.br, src/scene.br, src/events.br). Run: boring run tests/scroll_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+use ui.scrollbar.*
+
+view Page:
+    state int taps = 0
+
+    def tap():
+        taps += 1
+
+    req int count():
+        taps
+
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                for i in 0..<9:
+                    Text("l{i}")
+                Button(label = "end", onActivate = ():
+                    self.tap())
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed laid(Runtime rt):
+    let p = layout(rt, 100.0, 48.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Placed scrollOf(Placed root):
+    root.children[0]
+
+# the indicator commands the painter emitted for the scroller
+def [Command] bars(Placed placed):
+    mut out = []
+    for c in displayList(placed):
+        if c.color == "scrollbar":
+            out.push(c)
+    out
+
+def float offsetOf(Runtime rt):
+    let s = scrollOf(laid(rt))
+    (s.props["scroll"] else ("0")).parseFloat() else (0.0)
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+var placed = laid(rt)
+let s = scrollOf(placed)
+# 176 px of content in a 48 px viewport: 128 px to scroll
+assert_eq(s.props["scrollMax"] else (""), "128")
+
+# ── the thumb: along the right edge, as long as the viewport is of the content ─────────────────────
+
+let t = thumbOf(s)
+assert_eq(t.length, 7)
+assert_eq(t[0], s.x + s.w - 2.0 - 6.0)                  # inset 2, 6 wide
+assert_eq(t[2], 6.0)
+assert_eq(t[4], 2.0)                                   # the track starts 2 px below the top
+assert_eq(t[5], 44.0)                                  # and runs the viewport less both insets
+assert_eq(t[3], 20.0)                                  # 44 * 48 / 176 = 12, raised to the minimum of 20
+assert_eq(t[1], 2.0)                                   # at the top while the offset is 0
+assert_eq(bars(placed).length, 1)
+assert_eq(bars(placed)[0].x, t[0])
+assert_eq(bars(placed)[0].h, 20.0)
+
+# content that fits has no indicator
+assert_eq(thumbOf(Placed(id = 9, kind = "Scroll", x = 0.0, y = 0.0, w = 100.0, h = 48.0)).length, 0)
+
+# ── dragging the thumb scrolls proportionally; grabbing keeps the point of the thumb under the pointer ──
+
+assert(pointerDown(rt, host, placed, t[0] + 3.0, t[1] + 5.0))        # 5 px below the thumb's top
+assert(rt.thumbDrag != nil)
+assert(pointerMove(rt, host, laid(rt), t[0] + 3.0, t[1] + 5.0 + 12.0))   # half of the 24 free pixels
+assert_eq(offsetOf(rt), 64.0)
+assert(pointerMove(rt, host, laid(rt), t[0] + 3.0, 500.0))            # past the end: clamped
+assert_eq(offsetOf(rt), 128.0)
+assert(pointerMove(rt, host, laid(rt), t[0] + 3.0, -500.0))
+assert_eq(offsetOf(rt), 0.0)
+assert(pointerUp(rt, host, laid(rt), t[0] + 3.0, -500.0))
+assert(rt.thumbDrag == nil)
+
+# the thumb follows the offset on screen, and stays within its track at the end
+assert(scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, 40.0))
+placed = laid(rt)
+assert(thumbOf(scrollOf(placed))[1] > 2.0)
+
+# ── a press on the track beside the thumb pages toward the pointer ─────────────────────────────────
+
+_ = scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, -1000.0)
+placed = laid(rt)
+let top = thumbOf(scrollOf(placed))
+assert(pointerDown(rt, host, placed, top[0] + 3.0, 40.0))               # below the thumb
+assert(rt.thumbDrag == nil)
+assert(offsetOf(rt) > 40.0)
+_ = pointerUp(rt, host, laid(rt), top[0] + 3.0, 40.0)
+
+# a press elsewhere is not a scrollbar press: the content under it gets it as usual
+assert(!onTrack(scrollOf(laid(rt)), 10.0, 10.0))
+print "scrollbar ok"

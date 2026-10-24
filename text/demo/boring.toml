@@ -13,6 +13,7 @@ todo = "../../examples/todo"
 
 [dependencies]
 swash = "0.2.10"
+unicode-bidi = "0.3.18"
 
 [external_fns]
 "FontRef::fromIndex" = ["&", ""]

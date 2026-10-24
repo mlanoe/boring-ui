@@ -23,6 +23,9 @@ struct Motion:
     var int pressX = 0 - 100
     var int pressY = 0 - 100
     var int clicks = 0
+    # the time of the previous frame (for inertia) and whether a fling is still running
+    var float32 lastSeconds = 0.0
+    var bool rolling = false
 
 def void begin(mut Motion m, Placed first):
     commit(m.an, first, nil, [], 0.0)
@@ -53,7 +56,7 @@ def Placed paceFrame(mut Motion m, mut Runtime rt, Builder host, bool eventful, 
 # Whether another frame is due without any input: an animation is running or finishing, or a change waits.
 def bool pacePending(Motion m, float32 seconds):
     let now = (seconds as float) * 1000.0
-    m.dirty or isAnimating(m.an, now) or !m.an.completionTaken
+    m.dirty or m.rolling or isAnimating(m.an, now) or !m.an.completionTaken
 
 def void touch(mut Motion m):
     m.dirty = true
@@ -73,3 +76,33 @@ def void pressWith(mut Motion m, mut Runtime rt, Builder host, int w, int h, int
     if shift:
         mods = "Range"
     _ = pointerDownClicks(rt, host, placedOf(rt, w, h), x as float, y as float, mods, m.clicks)
+
+# One finger (a touch host, or the right mouse button standing in for one on a desktop): see events.br `touchDown`.
+def void touchStart(mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    _ = touchDown(rt, host, placedOf(rt, w, h), x as float, y as float, seconds as float)
+
+def void touchDrag(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    if touchMove(rt, host, placedOf(rt, w, h), x as float, y as float, seconds as float):
+        m.dirty = true
+
+def void touchEnd(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    _ = touchUp(rt, host, placedOf(rt, w, h), x as float, y as float, seconds as float)
+    m.dirty = true
+
+# Advances a running fling by the time since the previous frame; `rolling` keeps the loop asking for frames while it lasts.
+def void paceMomentum(mut Motion m, mut Runtime rt, Builder host, int w, int h, float32 seconds):
+    var dt = (seconds - m.lastSeconds) as float
+    m.lastSeconds = seconds
+    if dt < 0.001:
+        dt = 0.001
+    if dt > 0.1:
+        dt = 0.1
+    m.rolling = false
+    if momentumActive(rt):
+        m.rolling = stepMomentum(rt, host, placedOf(rt, w, h), dt)
+        m.dirty = true
+
+# The system cancelled the touch (a call, the window lost): nothing is pressed and nothing flings.
+def void touchAbort(mut Motion m, mut Runtime rt):
+    touchCancel(rt)
+    m.dirty = true

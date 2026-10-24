@@ -1,0 +1,118 @@
+# Touch gestures: a tap presses, a drag scrolls (the content follows the finger), lifting the finger flings
+# (src/events.br touchDown / touchMove / touchUp, with `fling` and `stepMomentum`). Run: boring run tests/touch_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+
+view Page:
+    state int taps = 0
+
+    def tap():
+        taps += 1
+
+    req int count():
+        taps
+
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                for i in 0..<9:
+                    Text("l{i}")
+                Button(label = "end", onActivate = ():
+                    self.tap())
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed laid(Runtime rt):
+    let p = layout(rt, 100.0, 48.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 100.0, h = 48.0))
+
+def float offsetOf(Runtime rt):
+    let s = laid(rt).children[0]
+    (s.props["scroll"] else ("0")).parseFloat() else (0.0)
+
+def int taps(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    mut st = box as Page__State else (Page__State())
+    Page().count(st)
+
+def Placed? firstOfKind(Placed p, string kind):
+    if p.kind == kind:
+        return p
+    for c in p.children:
+        if let f = firstOfKind(c, kind):
+            return f
+    nil
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# ── a drag: the offset follows the finger the other way ───────────────────────────────────────────
+
+assert(touchDown(rt, host, laid(rt), 10.0, 40.0, 1.0))
+assert(!touchMove(rt, host, laid(rt), 10.0, 37.0, 1.016))             # within the slop: still a tap candidate
+assert_eq(offsetOf(rt), 0.0)
+assert(touchMove(rt, host, laid(rt), 10.0, 30.0, 1.033))              # past it: the 10 px since the start apply
+assert_eq(offsetOf(rt), 10.0)
+assert(touchMove(rt, host, laid(rt), 10.0, 20.0, 1.050))
+assert_eq(offsetOf(rt), 20.0)
+assert(touchMove(rt, host, laid(rt), 10.0, 25.0, 1.066))              # the finger comes back down: the content too
+assert_eq(offsetOf(rt), 15.0)
+
+# ── lifting a moving finger flings; a held one does not ───────────────────────────────────────────
+
+_ = touchMove(rt, host, laid(rt), 10.0, 15.0, 1.083)
+_ = touchMove(rt, host, laid(rt), 10.0, 5.0, 1.100)                   # about 600 px/s upward
+assert(touchUp(rt, host, laid(rt), 10.0, 5.0, 1.101))
+assert(momentumActive(rt))
+let before = offsetOf(rt)
+assert(stepMomentum(rt, host, laid(rt), 0.016))
+assert(offsetOf(rt) > before)                                         # the content keeps going the same way
+var steps = 0
+while momentumActive(rt) and steps < 600:
+    _ = stepMomentum(rt, host, laid(rt), 0.016)
+    steps += 1
+assert(steps > 5 and steps < 600)                                     # it slows down and stops
+assert(offsetOf(rt) > before + 20.0)
+
+# a finger that rests before lifting leaves no inertia
+_ = scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, -1000.0)
+assert(touchDown(rt, host, laid(rt), 10.0, 40.0, 5.0))
+_ = touchMove(rt, host, laid(rt), 10.0, 20.0, 5.016)
+_ = touchMove(rt, host, laid(rt), 10.0, 10.0, 5.033)
+assert(touchUp(rt, host, laid(rt), 10.0, 10.0, 5.5))
+assert(!momentumActive(rt))
+
+# a new touch stops running inertia
+_ = scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, -1000.0)
+assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 600.0))
+assert(momentumActive(rt))
+assert(touchDown(rt, host, laid(rt), 10.0, 10.0, 6.0))
+assert(!momentumActive(rt))
+touchCancel(rt)
+assert(rt.gesture == nil)
+
+# ── a tap presses what is under the finger ────────────────────────────────────────────────────────
+
+_ = scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, 1000.0)             # the button is at the bottom of the content
+let button = firstOfKind(laid(rt), "Button") else (laid(rt))
+let bx = button.x + 4.0
+let by = button.y + 4.0
+assert_eq(taps(rt), 0)
+assert(touchDown(rt, host, laid(rt), bx, by, 7.0))
+assert(touchUp(rt, host, laid(rt), bx + 2.0, by + 1.0, 7.05))
+assert_eq(taps(rt), 1)
+# a drag that starts on the button scrolls instead of pressing it
+assert(touchDown(rt, host, laid(rt), bx, by, 8.0))
+_ = touchMove(rt, host, laid(rt), bx, by + 20.0, 8.02)
+_ = touchUp(rt, host, laid(rt), bx, by + 20.0, 8.6)
+assert_eq(taps(rt), 1)
+assert(offsetOf(rt) < 128.0)
+
+print "touch ok"

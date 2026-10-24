@@ -1,0 +1,52 @@
+# Where a text field's text starts (layout.br fieldOrigin): left-aligned for left-to-right text, against the right edge for a
+# right-to-left paragraph, shifted to keep the caret in view. A stub measurer stands in for the text engine: 8 px a grapheme,
+# and a string starting with "R" is right to left (its caret stops run from the right: index i sits at width - 8 i).
+# Run: boring run tests/field_origin_test.br
+
+use ui.theme.*
+use ui.layout.*
+
+struct StubMeasurer as TextMeasurer:
+    pub req float width(string s, float size):
+        (s.graphemeCount as float) * 8.0
+
+    pub req float widthStyled(string s, float size, int style):
+        (s.graphemeCount as float) * 8.0
+
+    pub req string ellipsis():
+        "..."
+
+    pub req bool isRtl(string s):
+        s.graphemeCount > 0 and s.graphemeSlice(0, 1) == "R"
+
+    pub req float caretX(string s, int index, float size, int style):
+        let w = (s.graphemeCount as float) * 8.0
+        if s.graphemeCount > 0 and s.graphemeSlice(0, 1) == "R":
+            return w - (index as float) * 8.0
+        (index as float) * 8.0
+
+    pub req [float] selectionSpans(string s, int lo, int hi, float size, int style):
+        [(lo as float) * 8.0, (hi as float) * 8.0]
+
+let m = StubMeasurer()
+
+# the field is 160 wide: 152 inside (4 px each side)
+# left to right: unshifted while the caret fits, then the caret rests one pixel short of the right edge (the old fieldScroll)
+assert_eq(fieldOrigin(m, "abc", 3, 160.0, 16.0), 0.0)
+assert_eq(fieldOrigin(m, "", 0, 160.0, 16.0), 0.0)
+assert_eq(fieldOrigin(m, "abcdefghijklmnopqrstuvwxyz0123", 30, 160.0, 16.0), 0.0 - 89.0)
+assert_eq(fieldOrigin(m, "abcdefghijklmnopqrstuvwxyz0123", 30, 160.0, 16.0), 0.0 - fieldScroll(240.0, 160.0))
+assert_eq(fieldOrigin(m, "abcdefghijklmnopqrstuvwxyz0123", 0, 160.0, 16.0), 0.0)
+
+# right to left: the text sits against the right edge (152 - width), whatever the caret
+assert_eq(fieldOrigin(m, "Rxyz", 0, 160.0, 16.0), 120.0)
+assert_eq(fieldOrigin(m, "Rxyz", 4, 160.0, 16.0), 120.0)
+assert_eq(fieldOrigin(m, "Rxyz", 2, 160.0, 16.0), 120.0)
+
+# right to left and longer than the field: the right edge shows first (caret at the start), the caret drags the text right as
+# it moves toward the end (it is at x = width - 8 i in that string)
+let long = "Rabcdefghijklmnopqrstuvwxyz0123"
+assert_eq(fieldOrigin(m, long, 0, 160.0, 16.0), 152.0 - 248.0)
+assert_eq(fieldOrigin(m, long, 31, 160.0, 16.0), 0.0)
+assert(fieldOrigin(m, long, 15, 160.0, 16.0) <= 0.0)
+print "field origin ok"

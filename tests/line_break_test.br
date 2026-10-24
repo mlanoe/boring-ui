@@ -1,0 +1,38 @@
+# Line breaking (src/layout.br): break opportunities after spaces and hyphens and between wide graphemes, closing
+# punctuation kept off the start of a line, explicit newlines, overlong words overflow, spaces collapsed.
+# Fixture font: 8 px a cell, a wide grapheme two cells. Run: boring run tests/line_break_test.br
+
+use ui.layout.*
+
+# spaces and the limit: "aa bb cc" needs 64 px, so 40 px puts two words on a line; trailing spaces never count
+assert_eq(shownLines("aa bb cc", 40.0, nil), ["aa bb", "cc"])
+assert_eq(shownLines("aa  bb   cc", 40.0, nil), ["aa bb", "cc"])
+assert_eq(shownLines("  aa bb  ", 40.0, nil), ["aa bb"])
+assert_eq(shownLines("", 40.0, nil), [""])
+# no limit: one line per paragraph, spaces collapsed
+assert_eq(shownLines("aa   bb", nil, nil), ["aa bb"])
+
+# explicit newlines are mandatory breaks, with or without a limit
+assert_eq(shownLines("aa\nbb", nil, nil), ["aa", "bb"])
+assert_eq(shownLines("aa bb\ncc", 100.0, nil), ["aa bb", "cc"])
+assert_eq(shownLines("aa\n\nbb", 100.0, nil), ["aa", "", "bb"])
+
+# a word wider than the line overflows (never split inside), the neighbours still wrap around it
+assert_eq(shownLines("abcdefgh", 24.0, nil), ["abcdefgh"])
+assert_eq(shownLines("xx abcdefgh yy", 24.0, nil), ["xx", "abcdefgh", "yy"])
+# ... and a line limit truncates it with the ellipsis
+assert_eq(shownLines("abcdefgh", 40.0, 1), ["abcdefgh"])
+assert_eq(shownLines("abcdefgh ij", 40.0, 1), ["ab..."])
+
+# a hyphen allows a break after it (not before a digit)
+assert_eq(shownLines("ab-cd", 24.0, nil), ["ab-", "cd"])
+assert_eq(shownLines("a-12", 24.0, nil), ["a-12"])
+
+# CJK breaks between graphemes (a wide one is 16 px): 3 per 48 px; closing punctuation never starts a line
+assert_eq(shownLines("日本語日本語", 48.0, nil), ["日本語", "日本語"])
+# (the 。 cannot start the second line, so 語 goes down with it)
+assert_eq(shownLines("日本語。日本", 48.0, nil), ["日本", "語。日", "本"])
+
+# the line limit truncates the last visible line (fixture ellipsis: "...")
+assert_eq(shownLines("aa bb cc dd ee", 40.0, 2), ["aa bb", "cc..."])
+print "line break ok"

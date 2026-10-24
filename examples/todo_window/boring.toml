@@ -14,6 +14,7 @@ text   = "../../text"
 # The real font: swash is called from Boring source (text/), so the window needs the crate and its borrow forms.
 [dependencies]
 swash = "0.2.10"
+unicode-bidi = "0.3.18"
 
 [external_fns]
 "FontRef::fromIndex" = ["&", ""]

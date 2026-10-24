@@ -1,0 +1,52 @@
+# The window's fling pacing (pace.br `touchStart` / `touchDrag` / `touchEnd` / `paceMomentum`): a drag scrolls, releasing a
+# moving finger keeps the content rolling frame after frame (`pacePending` stays true), and it settles. Run from this
+# directory: boring run fling_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use pace
+
+view Page:
+    body():
+        Scroll(axis = .Vertical):
+            Column(alignment = .Leading, spacing = 0.0):
+                for i in 0..<30:
+                    Text("line {i}")
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def float offsetOf(Runtime rt):
+    let s = placedOf(rt, 100, 48).children[0]
+    (s.props["scroll"] else ("0")).parseFloat() else (0.0)
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+mut pace = Motion()
+
+touchStart(rt, host, 100, 48, 10, 40, 1.0)
+touchDrag(pace, rt, host, 100, 48, 10, 30, 1.016)
+touchDrag(pace, rt, host, 100, 48, 10, 15, 1.033)
+touchDrag(pace, rt, host, 100, 48, 10, 0, 1.050)
+assert(offsetOf(rt) > 30.0)
+touchEnd(pace, rt, host, 100, 48, 10, 0, 1.051)
+assert(momentumActive(rt))
+
+# frames pass: the content keeps going, the loop keeps asking for frames, and it ends on its own
+let start = offsetOf(rt)
+var seconds = 1.066
+paceMomentum(pace, rt, host, 100, 48, seconds)
+assert(offsetOf(rt) > start)
+assert(pacePending(pace, seconds))
+var frames = 0
+while pace.rolling and frames < 600:
+    seconds += 0.016
+    paceMomentum(pace, rt, host, 100, 48, seconds)
+    frames += 1
+assert(frames > 5 and frames < 600)
+assert(!momentumActive(rt))
+assert(offsetOf(rt) > start + 30.0)
+print "fling ok"
