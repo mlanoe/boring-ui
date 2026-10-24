@@ -188,8 +188,8 @@ def [string] flattenKeys(Mounted n):
 
 # The fixture font: a cell is `size / 2` wide and `size` tall, so `Body` (16) is the 8 x 16 cell of
 # `charWidth` x `lineHeight`.
-def float textWidthAt(TextMeasurer m, string s, float cell):
-    m.width(s, cell * 2.0)
+def float textWidthAt(TextMeasurer m, string s, float cell, int style):
+    m.widthStyled(s, cell * 2.0, style)
 
 # The grapheme index nearest to an x offset (in cells of the fixture font) inside `s`: a click on the left
 # half of a cluster puts the caret before it, on the right half after it.
@@ -224,11 +224,21 @@ pub def float fieldScroll(float caretOffset, float fieldWidth):
     maxOf(0.0, caretOffset + 1.0 - (fieldWidth - 8.0))
 
 def float textWidth(string s):
-    textWidthAt(FixtureMeasurer(), s, charWidth)
+    textWidthAt(FixtureMeasurer(), s, charWidth, 0)
 
 # The text size of a node's `font` role under its theme.
 def float fontSizeOf(Mounted n):
     n.theme.fontSizeNamed(n.props["font"] else ("Body"))
+
+# The style of a text node: 1 bold, 2 italic (3 both). A font role can be bold by theme (headings); the node's own
+# `bold` / `italic` props add to it.
+def int styleOf(Mounted n):
+    var style = 0
+    if (n.props["bold"] else ("false")) == "true" or n.theme.fontBoldNamed(n.props["font"] else ("Body")):
+        style += 1
+    if (n.props["italic"] else ("false")) == "true":
+        style += 2
+    style
 
 def float cellOf(Mounted n):
     fontSizeOf(n) / 2.0
@@ -241,7 +251,7 @@ def [string] words(string s):
     out
 
 # Greedy word wrap under `limit` (nil = no wrapping). A word longer than the limit overflows.
-def [string] wrapAt(TextMeasurer m, string content, float? limit, float cell):
+def [string] wrapAt(TextMeasurer m, string content, float? limit, float cell, int style):
     let ws = words(content)
     if ws.length == 0:
         return [""]
@@ -253,7 +263,7 @@ def [string] wrapAt(TextMeasurer m, string content, float? limit, float cell):
     for w in ws:
         if current == "":
             current = w
-        elif textWidthAt(m, "{current} {w}", cell) <= max:
+        elif textWidthAt(m, "{current} {w}", cell, style) <= max:
             current = "{current} {w}"
         else:
             lines.push(current)
@@ -263,8 +273,8 @@ def [string] wrapAt(TextMeasurer m, string content, float? limit, float cell):
 
 # The visible lines of a text under a width limit and an optional line limit: it wraps first, then
 # the last visible line is truncated with an ellipsis ("..." in the fixture font).
-pub def [string] shownLinesAt(TextMeasurer m, string content, float? limit, int? maxLines, float cell):
-    let lines = wrapAt(m, content, limit, cell)
+pub def [string] shownLinesAt(TextMeasurer m, string content, float? limit, int? maxLines, float cell, int style):
+    let lines = wrapAt(m, content, limit, cell, style)
     if let cap = maxLines:
         if cap >= 1 and lines.length > cap:
             mut [string] visible = []
@@ -274,7 +284,7 @@ pub def [string] shownLinesAt(TextMeasurer m, string content, float? limit, int?
             if let room = limit:
                 # The fixture ellipsis is the ASCII "..." (3 cells): a real font engine substitutes the
                 # ellipsis glyph. Truncation drops whole grapheme clusters, measured by display width.
-                while last.graphemeCount > 0 and textWidthAt(m, last, cell) + textWidthAt(m, "...", cell) > room:
+                while last.graphemeCount > 0 and textWidthAt(m, last, cell, style) + textWidthAt(m, "...", cell, style) > room:
                     last = last.graphemeSlice(0, last.graphemeCount - 1)
             visible[cap - 1] = "{last}..."
             return visible
@@ -282,7 +292,7 @@ pub def [string] shownLinesAt(TextMeasurer m, string content, float? limit, int?
 
 # The Body-font form (the 8 x 16 cell), kept for callers without a node.
 pub def [string] shownLines(string content, float? limit, int? maxLines):
-    shownLinesAt(FixtureMeasurer(), content, limit, maxLines, charWidth)
+    shownLinesAt(FixtureMeasurer(), content, limit, maxLines, charWidth, 0)
 
 def int? lineLimitOf(Mounted n):
     if let s = n.props["lineLimit"]:
@@ -292,10 +302,11 @@ def int? lineLimitOf(Mounted n):
 def Size measureText(Mounted n, Prop p):
     let content = n.props["content"] else ("")
     let cell = cellOf(n)
-    let lines = shownLinesAt(n.theme.measurer, content, p.w, lineLimitOf(n), cell)
+    let style = styleOf(n)
+    let lines = shownLinesAt(n.theme.measurer, content, p.w, lineLimitOf(n), cell, style)
     var widest = 0.0
     for l in lines:
-        widest = maxOf(widest, textWidthAt(n.theme.measurer, l, cell))
+        widest = maxOf(widest, textWidthAt(n.theme.measurer, l, cell, style))
     let count = lines.length
     Size(w = widest, h = (count as float) * fontSizeOf(n))
 
@@ -323,21 +334,21 @@ def Size controlSize(Mounted n):
     let floorSize = t.metric(MetricRole.MinimumHitSize)
     if n.kind == "Button":
         let pad = buttonPadding(n)
-        return Size(w = maxOf(textWidthAt(t.measurer, label, body / 2.0) + 2.0 * pad, floorSize), h = maxOf(body + 2.0 * pad, floorSize))
+        return Size(w = maxOf(textWidthAt(t.measurer, label, body / 2.0, 0) + 2.0 * pad, floorSize), h = maxOf(body + 2.0 * pad, floorSize))
     if n.kind == "TextField":
         return Size(w = t.metric(MetricRole.TextFieldWidth), h = t.metric(MetricRole.TextFieldHeight))
     if n.kind == "Slider":
         return Size(w = t.metric(MetricRole.TextFieldWidth), h = maxOf(t.metric(MetricRole.ToggleSize), floorSize))
     let box = t.metric(MetricRole.ToggleSize)
-    Size(w = maxOf(box + t.metric(MetricRole.ControlPadding) + textWidthAt(t.measurer, label, body / 2.0), floorSize), h = maxOf(maxOf(box, body), floorSize))
+    Size(w = maxOf(box + t.metric(MetricRole.ControlPadding) + textWidthAt(t.measurer, label, body / 2.0, 0), floorSize), h = maxOf(maxOf(box, body), floorSize))
 
 def bool isControl(Mounted n):
     n.kind == "Button" or n.kind == "Toggle" or n.kind == "TextField" or n.kind == "Slider"
 
-def float longestWordAt(TextMeasurer m, string content, float cell):
+def float longestWordAt(TextMeasurer m, string content, float cell, int style):
     var widest = 0.0
     for w in words(content):
-        widest = maxOf(widest, textWidthAt(m, w, cell))
+        widest = maxOf(widest, textWidthAt(m, w, cell, style))
     widest
 
 # ── spans (min / ideal / max on one axis) ─────────────────────────────────────────────────────
@@ -356,8 +367,9 @@ def Span span(Mounted n, bool horiz, float? cross):
         if horiz:
             let cell = cellOf(n)
             let m = n.theme.measurer
-            let oneLine = textWidthAt(m, wrapAt(m, content, nil, cell)[0], cell)
-            return Span(min = longestWordAt(m, content, cell), ideal = oneLine, max = oneLine)
+            let style = styleOf(n)
+            let oneLine = textWidthAt(m, wrapAt(m, content, nil, cell, style)[0], cell, style)
+            return Span(min = longestWordAt(m, content, cell, style), ideal = oneLine, max = oneLine)
         let h = measureText(n, Prop(w = cross, h = nil)).h
         return fixedSpan(h)
     if isControl(n):
@@ -709,7 +721,7 @@ pub def Placed place(Mounted n, float x, float y, Size size):
     if n.kind == "Text":
         # A line-limited text shows its truncated lines (the full content stays in `content`).
         if let cap = lineLimitOf(n):
-            node.props["shown"] = shownLinesAt(n.theme.measurer, n.props["content"] else (""), size.w, cap, cellOf(n)).join("\n")
+            node.props["shown"] = shownLinesAt(n.theme.measurer, n.props["content"] else (""), size.w, cap, cellOf(n), styleOf(n)).join("\n")
     if n.kind == "Offset":
         # A paint/hit-test translation: this node and its subtree move, sizes and siblings do not.
         let dx = numProp(n, "x") else (0.0)

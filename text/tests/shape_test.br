@@ -4,6 +4,7 @@ use text.engine.*
 use render.display_list.*
 use render.raster.*
 use text.glyph_run.*
+use text.fonts.*
 use text.measurer.*
 use ui.theme.*
 use ui.layout.*
@@ -116,3 +117,46 @@ assert_eq(atWhole[0].x, 3.0)
 assert_eq(atHalf[0].x, 3.0)
 assert(atHalf[0].x == atWhole[0].x)
 print "subpixel ok"
+
+# fonts found on this machine, not at a hard-coded path
+assert(readFirst([]) == nil)
+assert(readFirst(["/definitely/not/a/font.ttf"]) == nil)
+let found = systemSansFont([])
+assert(found != nil)
+# the application's own path wins when it exists, and a missing one is skipped
+let viaFirst = systemSansFont(["/definitely/not/a/font.ttf"])
+assert(viaFirst != nil)
+if let a = found:
+    if let b = viaFirst:
+        assert_eq(a.length, b.length)
+print "fonts ok"
+
+# bold and italic cuts: a styled measurer widens bold text, a styled cache rasterizes the bold cut (not the regular glyphs)
+let cuts = systemSansStyles()
+assert_eq(cuts.length, 3)
+if cuts[0].length > 0:
+    let styledTheme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty(), styled = cuts))
+    let regularWidth = styledTheme.measurer.widthStyled("Hello world", 16.0, 0)
+    let boldWidth = styledTheme.measurer.widthStyled("Hello world", 16.0, 1)
+    assert(boldWidth > regularWidth)
+    assert_eq(styledTheme.measurer.width("Hello world", 16.0), regularWidth)
+    # without cuts a style falls back to the regular font
+    let plainTheme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty()))
+    assert_eq(plainTheme.measurer.widthStyled("Hello world", 16.0, 1), regularWidth)
+    mut styledCache = GlyphCache(font = systemSansFontOrEmpty(), styled = cuts)
+    let regularRun = styledCache.drawStyled("Hello", 20.0, 0, 0.0, 18.0, "#000000")
+    let boldRun = styledCache.drawStyled("Hello", 20.0, 1, 0.0, 18.0, "#000000")
+    assert_eq(regularRun.length, boldRun.length)
+    # the bold glyphs are other masks, with more ink
+    var regularInk = 0
+    var boldInk = 0
+    for c in regularRun:
+        let at = c.glyph
+        for i in 0..<(styledCache.atlas.width[at] * styledCache.atlas.height[at]):
+            regularInk += styledCache.atlas.alpha[styledCache.atlas.offset[at] + i] as int
+    for c in boldRun:
+        let at = c.glyph
+        for i in 0..<(styledCache.atlas.width[at] * styledCache.atlas.height[at]):
+            boldInk += styledCache.atlas.alpha[styledCache.atlas.offset[at] + i] as int
+    assert(boldInk > regularInk)
+print "styles ok"

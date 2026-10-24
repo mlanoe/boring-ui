@@ -9,10 +9,10 @@ use ui.theme.*
 use render.raster.*
 use text.glyph_run.*
 use text.measurer.*
+use text.fonts.*
 use todo.todo.*
 
-let fontPath = "/System/Library/Fonts/Supplemental/Arial.ttf"
-let theme = Theme(measurer = EngineMeasurer(font = fs.readBytes(fontPath)))
+let theme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty(), styled = systemSansStyles()))
 
 struct AppRoot as ViewBuilder:
     Theme theme
@@ -22,6 +22,6 @@ struct AppRoot as ViewBuilder:
 mut rt = Runtime()
 rt.start(ViewRoot(inner = AppRoot(theme = theme)))
 let placed = layout(rt, 600.0, 400.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
-mut cache = GlyphCache(font = fs.readBytes(fontPath))
+mut cache = GlyphCache(font = systemSansFontOrEmpty(), styled = systemSansStyles())
 let commands = glyphify(displayList(placed), cache)
 print toPpm(rasterizeWith(commands, [], cache.atlas, 600, 400))

@@ -29,6 +29,7 @@ use ui.events.*
 use ui.anim.*
 use ui.animator.*
 use render.display_list.*
+use render.scale.*
 use render.raster.*
 use render.raster_font.*
 use render.raster_gpu.*
@@ -41,6 +42,7 @@ use window_app
 use ui.theme.*
 use text.glyph_run.*
 use text.measurer.*
+use text.fonts.*
 
 # The decoded files the window's `Image` views refer to. The program runs from the generated crate (main_wgpu/), so
 # the path is relative to that. A file that is missing or not a PNG / JPEG / binary PPM is simply not drawn.
@@ -59,10 +61,11 @@ def [Bitmap] loadImages():
 
 # Encode the display list of the layout `placed` (the animator's presentation) for a `w` x `h` window; `images` are the decoded files its
 # `Image` views name by `source`.
-def Encoded encodeFrame(Placed placed, [Bitmap] images, mut GlyphCache cache, int w, int h):
-    # the Todo paints no window background of its own: put the theme's under it (opaque pixels, not transparent)
+def Encoded encodeFrame(Placed placed, [Bitmap] images, mut GlyphCache cache, float scale, int w, int h):
+    # the Todo paints no window background of its own: put the theme's under it (opaque pixels, not transparent), over
+    # the whole window in physical pixels; the layout itself is in points, so its list is multiplied by the scale
     mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = w as float, h = h as float, hex = placed.theme.colorNamed("WindowBackground"))]
-    for c in displayList(placed):
+    for c in scaled(displayList(placed), scale):
         list.push(c)
     # the text is shaped with the real font: every DrawText becomes glyphs from the cache's atlas
     let glyphs = glyphify(list, cache)
@@ -88,7 +91,7 @@ def Runtime startedRuntime(Builder host):
 # with the live runtime's frame, so a throwaway runtime is enough here (a read-only `rt` argument in the setup code
 # is not borrowed by the Screen lowering yet).
 def Encoded firstFrame(Builder host, [Bitmap] images, mut GlyphCache cache, int w, int h):
-    encodeFrame(placedOf(startedRuntime(host), w, h), images, cache, w, h)
+    encodeFrame(placedOf(startedRuntime(host), w, h), images, cache, 1.0, w, h)
 
 # ── input, as the runtime understands it ─────────────────────────────────────────────────────────
 
@@ -179,26 +182,19 @@ def int caretY(Runtime rt, int w, int h):
 # ── setup, run once before the window opens ──────────────────────────────────────────────────────
 
 # The window's text is measured and drawn with a real font (swash): the theme carries its measurer, the cache its glyphs.
-# Arial has no CJK: the graphemes it lacks (an IME composing Chinese or Japanese) fall back to Hiragino Sans GB, when present.
-let fontPath = "/System/Library/Fonts/Supplemental/Arial.ttf"
-
-def [[uint8]] readFallbacks() throws:
-    mut fonts = []
-    if fs.exists("/System/Library/Fonts/Hiragino Sans GB.ttc"):
-        fonts.push(fs.readBytes("/System/Library/Fonts/Hiragino Sans GB.ttc"))
-    fonts
-
-def [[uint8]] fallbackFonts():
-    readFallbacks() else ([])
-
-let theme = Theme(measurer = EngineMeasurer(font = fs.readBytes(fontPath), fallbacks = fallbackFonts()))
+# The fonts are whatever this machine has (text/src/fonts.br): a sans UI font, and a CJK one the graphemes the first
+# lacks (an IME composing Chinese or Japanese) fall back to.
+let sansFont = systemSansFontOrEmpty()
+if sansFont.length == 0:
+    print "no sans font found on this machine (see text/src/fonts.br): text will not be drawn"
+let theme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty(), styled = systemSansStyles(), fallbacks = systemFallbackFonts()))
 
 struct ThemedRoot as ViewBuilder:
     Theme theme
     req View buildView(mut Runtime rt):
         Provide(value = theme, children = [WindowApp()])
 
-mut cache = GlyphCache(font = fs.readBytes(fontPath), fallbacks = fallbackFonts())
+mut cache = GlyphCache(font = systemSansFontOrEmpty(), styled = systemSansStyles(), fallbacks = systemFallbackFonts())
 let host = ViewRoot(inner = ThemedRoot(theme = theme))
 mut rt = Runtime()
 rt.start(host)
@@ -212,20 +208,26 @@ let bins = bin(frame, width, height)
 mut pace = Motion()
 begin(pace, placedOf(rt, width, height))
 
-let screen = Screen(Dimension(width, height), title = "boring-ui Todo", redraw = "demand")
+let screen = Screen(Dimension(width, height), title = "boring-ui Todo", redraw = "demand", hidpi = true)
 mut k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins.list, bins.across, frame.count, width, height)
 
 kernel:
     loop:
+        # the window is in physical pixels (`screen.width`), the UI in points: layout, hit testing and scrolling use points
+        let scale = screen.scale as float
+        let pw = (screen.width as float / scale) as int
+        let ph = (screen.height as float / scale) as int
+        let mx = (screen.mouse.x as float / scale) as int
+        let my = (screen.mouse.y as float / scale) as int
         if screen.resized:
             k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins.list, bins.across, frame.count, screen.width, screen.height)
-        motion(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y)
+        motion(rt, host, pw, ph, mx, my)
         if screen.mouse_pressed("left"):
-            pressWith(pace, rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y, screen.time, screen.shift)
+            pressWith(pace, rt, host, pw, ph, mx, my, screen.time, screen.shift)
         if screen.mouse_released("left"):
-            release(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y)
+            release(rt, host, pw, ph, mx, my)
         if screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0:
-            wheel(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y, screen.mouse.scroll_x as float, screen.mouse.scroll_y as float)
+            wheel(rt, host, pw, ph, mx, my, screen.mouse.scroll_x as float / scale, screen.mouse.scroll_y as float / scale)
         for name in screen.key_events:
             if (screen.meta or screen.ctrl) and name == "v":
                 rt.clipboard = screen.clipboard
@@ -236,8 +238,8 @@ kernel:
         for name in screen.key_events:
             touch(pace)
         let eventful = screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
-        let shown = paceFrame(pace, rt, host, eventful, screen.mouse.x, screen.mouse.y, screen.width, screen.height, screen.time)
-        let next = encodeFrame(shown, images, cache, screen.width, screen.height)
+        let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)
+        let next = encodeFrame(shown, images, cache, scale, screen.width, screen.height)
         let nextBins = bin(next, screen.width, screen.height)
         k.f = next.f
         k.u = next.u
@@ -250,6 +252,6 @@ kernel:
         screen.present(k.out)
         if pacePending(pace, screen.time):
             screen.requestRedraw()
-        screen.setImeArea(caretX(rt, screen.width, screen.height), caretY(rt, screen.width, screen.height), 2, 16)
+        screen.setImeArea((caretX(rt, pw, ph) as float * scale) as int, (caretY(rt, pw, ph) as float * scale) as int, (2.0 * scale) as int, (16.0 * scale) as int)
         if screen.meta and screen.key("q"):
             break

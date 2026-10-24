@@ -13,7 +13,7 @@ pub def [Command] scaled([Command] list, float scale):
         return list
     mut [Command] out = []
     for c in list:
-        mut copy = Command(kind = c.kind, x = c.x * scale, y = c.y * scale, w = c.w * scale, h = c.h * scale, text = c.text, color = c.color, node = c.node, glyph = c.glyph)
+        mut copy = Command(kind = c.kind, x = c.x * scale, y = c.y * scale, w = c.w * scale, h = c.h * scale, text = c.text, color = c.color, node = c.node, glyph = c.glyph, style = c.style)
         copy.hex = c.hex
         copy.value = c.value
         copy.dx = c.dx

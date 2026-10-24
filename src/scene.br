@@ -57,6 +57,15 @@ pub def paint(Placed p, mut [Command] out):
         unfade.value = p.alpha
         out.push(unfade)
 
+# The style of a `Text` node (layout.br `styleOf`, on the placed node): 1 bold (by theme for a heading role, or `bold`), 2 italic.
+def int textStyleOf(Placed p):
+    var style = 0
+    if (p.props["bold"] else ("false")) == "true" or p.theme.fontBoldNamed(p.props["font"] else ("Body")):
+        style += 1
+    if (p.props["italic"] else ("false")) == "true":
+        style += 2
+    style
+
 def paintNode(Placed p, mut [Command] out):
     # A presented sheet paints in the presentation layer, after everything else (see `displayList`).
     if p.kind == "Sheet":
@@ -80,6 +89,7 @@ def paintNode(Placed p, mut [Command] out):
     if p.kind == "Text":
         mut text = cmd("DrawText", p, p.props["shown"] else (p.props["content"] else ("")), "")
         text.hex = p.theme.color(ColorRole.PrimaryText)
+        text.style = textStyleOf(p)
         out.push(text)
     if p.kind == "Button":
         let spec = buttonSpec(buttonStyleOf(p.theme, p.props))

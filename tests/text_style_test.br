@@ -1,0 +1,61 @@
+# Text styles: a heading role is bold by theme, `bold` / `italic` add to it; layout measures the styled cut and the painter
+# tags the DrawText with it (src/layout.br styleOf, scene.br textStyleOf, theme.br TextMeasurer.widthStyled).
+# Run: boring run tests/text_style_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.theme.*
+use ui.layout.*
+use ui.scene.*
+use render.display_list.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed lay(View root, float w, float h):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    layout(rt, w, h) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+# A measurer whose bold cut is twice as wide and whose italic cut is a quarter wider than the regular one.
+struct StyledMeasurer as TextMeasurer:
+    pub req float width(string s, float size):
+        (s.displayWidth as float) * (size / 2.0)
+
+    pub req float widthStyled(string s, float size, int style):
+        var w = (s.displayWidth as float) * (size / 2.0)
+        if style == 1 or style == 3:
+            w = w * 2.0
+        if style == 2 or style == 3:
+            w = w * 1.25
+        w
+
+def float widthOf(View text):
+    lay(Provide(value = Theme(measurer = StyledMeasurer()), children = [text]), 400.0, 100.0).w
+
+def int styleOfFirstText(View text):
+    var found = 0 - 1
+    for c in displayList(lay(Provide(value = Theme(measurer = StyledMeasurer()), children = [text]), 400.0, 100.0)):
+        if c.kind == "DrawText" and found < 0:
+            found = c.style
+    found
+
+# Body text: regular. 4 cells of 8 px.
+assert_eq(widthOf(Text(content = "abcd")), 32.0)
+assert_eq(styleOfFirstText(Text(content = "abcd")), 0)
+# explicit bold doubles the measured width, italic adds a quarter, both multiply
+assert_eq(widthOf(Text(content = "abcd", bold = true)), 64.0)
+assert_eq(widthOf(Text(content = "abcd", italic = true)), 40.0)
+assert_eq(widthOf(Text(content = "abcd", bold = true, italic = true)), 80.0)
+assert_eq(styleOfFirstText(Text(content = "abcd", bold = true)), 1)
+assert_eq(styleOfFirstText(Text(content = "abcd", italic = true)), 2)
+assert_eq(styleOfFirstText(Text(content = "abcd", bold = true, italic = true)), 3)
+# a heading role is bold by theme (Title is 24 px: cells of 12, 4 cells, bold doubles it)
+assert_eq(widthOf(Text(content = "abcd", font = .Title)), 96.0)
+assert_eq(styleOfFirstText(Text(content = "abcd", font = .Title)), 1)
+assert_eq(styleOfFirstText(Text(content = "abcd", font = .Title, italic = true)), 3)
+# the fixture measurer ignores styles: widths do not change
+let plain = lay(Text(content = "abcd", bold = true), 400.0, 100.0)
+assert_eq(plain.w, 32.0)
+print "text style ok"

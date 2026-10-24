@@ -112,8 +112,14 @@ assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1))), [6,
 # ── double click: the word under the pointer; triple click: everything ────────────────────────────
 
 assert(pointerDownClicks(rt, host, lay(rt), left + 60.0, mid, "", 2))     # inside "world" (cells 3..8)
-_ = pointerUp(rt, host, lay(rt), left + 60.0, mid)
 assert_eq(selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1))), [9, 4])
+assert_eq(selectedText(rt), "world")
+# the button is still down: the window reports the pointer every frame, and a few pixels of jitter must not move the
+# caret away from the selected word (a drag would shrink it to "the part left of the pointer")
+_ = pointerMove(rt, host, lay(rt), left + 60.0, mid)
+_ = pointerMove(rt, host, lay(rt), left + 44.0, mid)
+assert_eq(selectedText(rt), "world")
+_ = pointerUp(rt, host, lay(rt), left + 44.0, mid)
 assert_eq(selectedText(rt), "world")
 assert(pointerDownClicks(rt, host, lay(rt), left + 4.0, mid, "", 2))      # inside "heJ"
 _ = pointerUp(rt, host, lay(rt), left + 4.0, mid)

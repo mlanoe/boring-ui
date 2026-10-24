@@ -447,6 +447,7 @@ pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float 
                     if let at = findPlaced(placed, id):
                         let caret = caretAtPointer(rt, h, at, node, x)
                         # Shift (mods "Range") extends the selection from where it was anchored; a plain press places the caret
+                        rt.dragSelect = true
                         if mods == "Range":
                             moveCaret(rt, h, caret, anchorOf(rt, h, propOf(node, "value").graphemeCount, caretOf(rt, h, propOf(node, "value").graphemeCount)))
                         else:
@@ -564,7 +565,7 @@ pub def bool pointerMove(mut Runtime rt, Builder host, Placed placed, float x, f
                     if let at = findPlaced(placed, cap.id):
                         if setSliderFromPointer(rt, host, cap, at, x):
                             changed = true
-                if node.kind == "TextField":
+                if node.kind == "TextField" and rt.dragSelect:
                     # a drag from the press selects: the anchor stays, the caret follows the pointer
                     if let at = findPlaced(placed, cap.id):
                         let sel = selectionOf(rt, cap)
@@ -590,6 +591,7 @@ pub def bool pointerLeave(mut Runtime rt, Builder host):
 pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, float y):
     let held = rt.capture
     rt.capture = nil
+    rt.dragSelect = false
     if held == nil:
         return false
     let h = held else (Handle(id = -1, generation = -1))
@@ -613,6 +615,7 @@ pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, flo
 # The platform cancelled the pointer (window lost, modal opened): the capture ends, nothing happens.
 pub def void pointerCancel(mut Runtime rt):
     rt.capture = nil
+    rt.dragSelect = false
 
 # Characters that end a word for double-click selection; everything else (letters, digits, CJK...) belongs to one.
 def bool isSeparator(string g):
@@ -622,6 +625,8 @@ def bool isSeparator(string g):
 pub def bool pointerDownClicks(mut Runtime rt, Builder host, Placed placed, float x, float y, string mods, int clicks):
     let handled = pointerDownWith(rt, host, placed, x, y, mods)
     if handled and clicks >= 2:
+        # the word (or text) is selected: holding the button and moving must not move the caret away from it
+        rt.dragSelect = false
         if let f = focusedField(rt):
             let node = rt.find(f.id) else (Mounted(id = -1, generation = -1, kind = "", site = 0, key = ""))
             let text = propOf(node, "value")

@@ -361,6 +361,8 @@ pub struct Runtime:
     pub var Momentum? momentum = nil
     # The internal clipboard (see events.br, `copySelection` / `pasteClipboard`).
     pub var string clipboard = ""
+    # A press in a text field is still dragging a selection (a double or triple click is not: it already selected).
+    pub var bool dragSelect = false
     # Per-TextField undo/redo history, keyed by mounted id (generation-checked; dropped when the node unmounts).
     pub var mut {int=EditHistory} histories = {=}
     pub var mut [KeyObserver] keyObservers = []

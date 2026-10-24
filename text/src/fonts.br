@@ -1,0 +1,116 @@
+# Finding fonts on the machine: no font file travels with boring-ui, so the first of a list of well-known paths per
+# platform that exists is read. macOS, Linux (DejaVu, Liberation, Noto) and Windows candidates; the application can put its
+# own paths first (`systemSansFont(["assets/MyFont.ttf"])`). A font the platform does not have simply is not found: callers
+# get `nil` (primary) or a shorter list (fallbacks), and text drawn with no font is skipped, not a crash.
+
+# The first existing, readable file of `paths`, or `nil`.
+pub def [uint8]? readFirst([string] paths):
+    for p in paths:
+        if fs.exists(p):
+            let bytes = try? fs.readBytes(p)
+            if let b = bytes:
+                return b
+    nil
+
+# Where a sans-serif UI font usually lives.
+pub def [string] sansCandidates():
+    [
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arial.ttf"
+    ]
+
+# Where a font with Chinese / Japanese / Korean usually lives (the fallback for what the sans font lacks).
+pub def [string] cjkCandidates():
+    [
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/YuGothR.ttc",
+        "C:/Windows/Fonts/malgun.ttf"
+    ]
+
+# The primary UI font: `first` (the application's own paths) before the platform's, `nil` when nothing was found.
+pub def [uint8]? systemSansFont([string] first):
+    var paths = [] as [string]
+    for p in first:
+        paths.push(p)
+    for p in sansCandidates():
+        paths.push(p)
+    readFirst(paths)
+
+# The fallback fonts present on this machine, in order of preference (currently the CJK one).
+pub def [[uint8]] systemFallbackFonts():
+    var fonts = [] as [[uint8]]
+    if let cjk = readFirst(cjkCandidates()):
+        fonts.push(cjk)
+    fonts
+
+# `systemSansFont` with an empty file in place of `nil`: it measures nothing and draws nothing, so a program can build its
+# theme without a branch (check `.length == 0` to warn).
+pub def [uint8] systemSansFontOrEmpty():
+    systemSansFont([]) else ([])
+
+# Where the bold, italic and bold italic cuts of the sans family usually live (the same order as `sansCandidates`).
+pub def [[string]] sansStyleCandidates():
+    [
+        [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/Library/Fonts/Arial Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            "C:/Windows/Fonts/segoeuib.ttf",
+            "C:/Windows/Fonts/arialbd.ttf"
+        ],
+        [
+            "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+            "/Library/Fonts/Arial Italic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Oblique.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Italic.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Italic.ttf",
+            "C:/Windows/Fonts/segoeuii.ttf",
+            "C:/Windows/Fonts/ariali.ttf"
+        ],
+        [
+            "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf",
+            "/Library/Fonts/Arial Bold Italic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-BoldOblique.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-BoldOblique.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-BoldItalic.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-BoldItalic.ttf",
+            "C:/Windows/Fonts/segoeuiz.ttf",
+            "C:/Windows/Fonts/arialbi.ttf"
+        ]
+    ]
+
+# The bold, italic and bold italic cuts found on this machine, always three entries (an empty one where a cut is missing:
+# `GlyphCache.styled` / `EngineMeasurer.styled` then use the regular font for it).
+pub def [[uint8]] systemSansStyles():
+    var cuts = [] as [[uint8]]
+    for paths in sansStyleCandidates():
+        let cut = readFirst(paths) else ([])
+        cuts.push(cut)
+    cuts

@@ -256,10 +256,16 @@ pub def ButtonSpec buttonSpec(string style):
 pub trait TextMeasurer:
     # The advance of `s` set at `size` pixels per em, on one line.
     req float width(string s, float size)
+    # The same with a style: 0 regular, 1 bold, 2 italic, 3 bold italic. A measurer without styled cuts ignores it.
+    req float widthStyled(string s, float size, int style)
 
 # The fixture font: every display cell is half the size wide (a wide cluster two cells, a combining mark none).
 pub struct FixtureMeasurer as TextMeasurer:
     pub req float width(string s, float size):
+        (s.displayWidth as float) * (size / 2.0)
+
+    # (the fixture font has one cut: every style measures like the regular one)
+    pub req float widthStyled(string s, float size, int style):
         (s.displayWidth as float) * (size / 2.0)
 
 pub struct Theme as EnvValue:
@@ -321,6 +327,10 @@ pub struct Theme as EnvValue:
             return darkColor(key)
         lightColor(key)
 
+    # Whether the font role is set bold by default (the headings); a `Text`'s own `bold` adds to it.
+    pub req bool fontBoldNamed(string key):
+        key == "LargeTitle" or key == "Title" or key == "Headline"
+
     pub req float fontSizeNamed(string key):
         for e in fontSizes:
             if e.role == key:
@@ -353,7 +363,7 @@ pub struct Theme as EnvValue:
             if e.role != key or e.scheme != scheme:
                 next.push(e)
         next.push(ColorEntry(role = key, hex = hex, scheme = scheme))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = next, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = next, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, measurer = measurer)
 
     pub req Theme withMetric(MetricRole role, float value):
         let key = "{role}"
@@ -362,7 +372,7 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(MetricEntry(role = key, value = value))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = next, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = next, fontSizes = fontSizes, buttonStyles = buttonStyles, measurer = measurer)
 
     pub req Theme withFontSize(FontRole role, float size):
         let key = "{role}"
@@ -371,7 +381,7 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(MetricEntry(role = key, value = size))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = next, buttonStyles = buttonStyles)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = next, buttonStyles = buttonStyles, measurer = measurer)
 
     pub req Theme withButtonStyle(ButtonRole role, string style):
         let key = "{role}"
@@ -380,19 +390,19 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(StyleEntry(role = key, style = style))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = next)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = next, measurer = measurer)
 
     # The built-in dark base with the same overrides.
     pub req Theme asDark():
-        Theme(name = "{name}.dark", dark = true, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        Theme(name = "{name}.dark", dark = true, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, measurer = measurer)
 
     # Increased contrast on or off, keeping the overrides.
     pub req Theme withContrast(bool on):
-        Theme(name = name, dark = dark, contrast = on, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        Theme(name = name, dark = dark, contrast = on, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, measurer = measurer)
 
     # The accessibility text scale (1.0 = none): every font size, hence every text measurement, is multiplied.
     pub req Theme withTextScale(float scale):
-        Theme(name = name, dark = dark, contrast = contrast, textScale = scale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = scale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, measurer = measurer)
 
     # Validation (run once when a theme is installed): colors are `#RRGGBB` / `#RRGGBBAA`, metrics are
     # finite and non-negative, font sizes are positive, style names are built in. Empty = valid.

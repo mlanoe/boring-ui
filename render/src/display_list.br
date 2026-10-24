@@ -19,6 +19,8 @@ pub struct Command:
     pub int node = -1
     # `DrawGlyph`: the index of the glyph in the atlas.
     pub int glyph = -1
+    # `DrawText`: 0 regular, 1 bold, 2 italic, 3 bold italic (which cut of the font the text engine sets it in).
+    pub var int style = 0
     # Border width / opacity / shadow radius, and a shadow's offset.
     # The color token resolved against the node's theme (`#RRGGBB[AA]`); `color` keeps the semantic token.
     pub var string hex = ""
