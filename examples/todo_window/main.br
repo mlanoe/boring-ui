@@ -227,7 +227,11 @@ kernel:
         if screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0:
             wheel(rt, host, screen.width, screen.height, screen.mouse.x, screen.mouse.y, screen.mouse.scroll_x as float, screen.mouse.scroll_y as float)
         for name in screen.key_events:
+            if (screen.meta or screen.ctrl) and name == "v":
+                rt.clipboard = screen.clipboard
             keyDown(rt, host, name, screen.shift, screen.meta or screen.ctrl)
+            if (screen.meta or screen.ctrl) and (name == "c" or name == "x"):
+                screen.setClipboard(rt.clipboard)
         textInput(rt, host, screen.marked, screen.marked_end, screen.text)
         for name in screen.key_events:
             touch(pace)
