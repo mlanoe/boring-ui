@@ -161,8 +161,9 @@ def Placed? nodeOf(Placed p, int id):
 
 # The focused text field's caret as [x, y] in window pixels (the window's corner when none).
 def [int] caretAt(Runtime rt, int w, int h):
-    let placed = placedOf(rt, w, h)
     if let f = rt.focus:
+        # (laid out only for a focused field: most frames have none)
+        let placed = placedOf(rt, w, h)
         if let node = nodeOf(placed, f.id):
             if node.kind == "TextField":
                 let body = placed.theme.fontSizeNamed("Body")
@@ -179,11 +180,13 @@ def [int] caretAt(Runtime rt, int w, int h):
                 return [(node.x + 4.0 + origin + offset) as int, (node.y + 4.0) as int]
     [0, 0]
 
-def int caretX(Runtime rt, int w, int h):
-    caretAt(rt, w, h)[0]
 
-def int caretY(Runtime rt, int w, int h):
-    caretAt(rt, w, h)[1]
+# Remembers where the caret is for the quiet frames that follow.
+def void trackCaret(mut Motion m, Runtime rt, int w, int h):
+    let caret = caretAt(rt, w, h)
+    m.caretX = caret[0]
+    m.caretY = caret[1]
+    m.caretKnown = true
 
 # ── setup, run once before the window opens ──────────────────────────────────────────────────────
 
@@ -229,7 +232,11 @@ kernel:
         let ty = (screen.touch.y as float / scale) as int
         if screen.resized:
             k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins.list, bins.across, frame.count, screen.width, screen.height)
-        motion(rt, host, pw, ph, mx, my)
+        # a quiet frame (a redraw asked for by an animation, no input since the last one) leaves the runtime as it was:
+        # nothing to hit-test, and the caret has not moved, so neither lays the window out again
+        let quiet = !screen.resized and !screen.mouse_pressed("left") and !screen.mouse_released("left") and !screen.mouse_pressed("right") and !screen.mouse_released("right") and !screen.mouse.right and screen.mouse.scroll_x == 0.0 and screen.mouse.scroll_y == 0.0 and !screen.touchStarted and !screen.touching and !screen.touchEnded and !screen.touchCancelled and screen.key_events.length == 0 and screen.text == "" and screen.marked == "" and !pace.rolling and !pace.dirty and mx == pace.lastX and my == pace.lastY and pace.caretKnown
+        if !quiet:
+            motion(rt, host, pw, ph, mx, my)
         if screen.mouse_pressed("left"):
             pressWith(pace, rt, host, pw, ph, mx, my, screen.time, screen.shift)
         if screen.mouse_released("left"):
@@ -277,6 +284,8 @@ kernel:
         screen.present(k.out)
         if pacePending(pace, screen.time):
             screen.requestRedraw()
-        screen.setImeArea((caretX(rt, pw, ph) as float * scale) as int, (caretY(rt, pw, ph) as float * scale) as int, (2.0 * scale) as int, (16.0 * scale) as int)
+        if !quiet:
+            trackCaret(pace, rt, pw, ph)
+        screen.setImeArea((pace.caretX as float * scale) as int, (pace.caretY as float * scale) as int, (2.0 * scale) as int, (16.0 * scale) as int)
         if screen.meta and screen.key("q"):
             break

@@ -26,6 +26,10 @@ struct Motion:
     # the time of the previous frame (for inertia) and whether a fling is still running
     var float32 lastSeconds = 0.0
     var bool rolling = false
+    # the caret last reported to the input method (window points), and whether one has been
+    var int caretX = 0
+    var int caretY = 0
+    var bool caretKnown = false
 
 def void begin(mut Motion m, Placed first):
     commit(m.an, first, nil, [], 0.0)
