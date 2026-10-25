@@ -297,7 +297,7 @@ pub def bool paragraphIsRtl(string text):
         return false
     let info = BidiInfo.new(text, nil)
     let para = info.paragraphs[0]
-    para.level.is_rtl()
+    para.level.isRtl()
 
 # The embedding level of every grapheme of `text` (UAX #9, `unicode-bidi`): 0 for left-to-right text, 1 for right-to-left,
 # higher for nested runs (a number inside right-to-left text). The paragraph's base direction is its first strong letter.
