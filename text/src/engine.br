@@ -104,7 +104,7 @@ pub def [PlacedGlyph] shapeDir([uint8] fontBytes, string text, float size, bool 
     # the grapheme each UTF-8 byte of the text belongs to (the shaper reports a cluster's source as byte offsets)
     var mut graphemeOfByte = [] as [int]
     for gi in 0..<text.graphemeCount:
-        for b in 0..<graphemeUtf8Bytes(text.graphemeSlice(gi, gi + 1)):
+        for b in 0..<utf8Length(text.graphemeSlice(gi, gi + 1)):
             graphemeOfByte.push(gi)
     graphemeOfByte.push(text.graphemeCount)
     # the glyphs in logical order, and where each cluster starts in that list (a cluster's glyphs stay together)
@@ -276,7 +276,7 @@ pub def [PlacedGlyph] shapeRuns([[uint8]] fonts, string text, float size):
 # ── bidirectional text ────────────────────────────────────────────────────────────────────────────
 
 # The length of `g` in UTF-8 bytes (`length` counts characters).
-def int graphemeUtf8Bytes(string g):
+def int utf8Length(string g):
     var n = 0
     for ch in g.chars():
         let code = ord(ch)
@@ -309,7 +309,7 @@ pub def [int] bidiLevels(string text):
         let cluster = text.graphemeSlice(i, i + 1)
         let lvl = info.levels[byte]
         levels.push(lvl.number() as int)
-        byte += graphemeUtf8Bytes(cluster)
+        byte += utf8Length(cluster)
     levels
 
 # The visual order of items with embedding `levels` (UAX #9 L2): from the highest level down to the lowest odd one, every
