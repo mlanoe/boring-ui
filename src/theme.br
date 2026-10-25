@@ -251,6 +251,45 @@ pub def ButtonSpec buttonSpec(string style):
 
 # ── the theme value ──────────────────────────────────────────────────────────────────────────────
 
+# ── line break opportunities by rule (the fixture font's, and a fallback for any measurer) ────────────────────────────
+# A small version of the Unicode line-break rules (UAX #14): a break is allowed after a run of spaces, after a hyphen (not
+# before a digit), and next to a wide (CJK) grapheme, except that a line never starts with closing punctuation nor ends
+# with opening punctuation.
+
+pub def bool isSpaceGrapheme(string g):
+    g == " " or g == "\t"
+
+# Characters a line may not start with (closing punctuation, CJK and Latin).
+pub def bool noBreakBefore(string g):
+    "、。，．）」』】》〉！？：；,.!?;:)]}}".contains(g)
+
+# Characters a line may not end with (opening punctuation).
+pub def bool noBreakAfter(string g):
+    "（「『【《〈([{{".contains(g)
+
+# Whether a line may break between the graphemes `prev` and `cur`.
+pub def bool breakBetween(string prev, string cur):
+    if isSpaceGrapheme(prev):
+        return !isSpaceGrapheme(cur)
+    if isSpaceGrapheme(cur):
+        return false
+    if prev == "-" and cur != "-" and !"0123456789".contains(cur):
+        return true
+    if (prev.displayWidth == 2 or cur.displayWidth == 2) and !noBreakBefore(cur) and !noBreakAfter(prev):
+        return true
+    false
+
+# The break opportunities of `s` by the rules above: indices i (0 < i < length) where a break is allowed before grapheme i.
+pub def [int] ruleBreakPoints(string s):
+    mut [int] points = []
+    var prev = ""
+    for i in 0..<s.graphemeCount:
+        let g = s.graphemeSlice(i, i + 1)
+        if i > 0 and breakBetween(prev, g):
+            points.push(i)
+        prev = "{g}"
+    points
+
 # How wide a text is. Layout (wrapping, truncation, intrinsic sizes), the caret and the click-to-caret mapping all ask the
 # theme's measurer, so a text engine (text/) can replace the fixture font without layout knowing which one is in use.
 pub trait TextMeasurer:
@@ -269,6 +308,9 @@ pub trait TextMeasurer:
     req [float] selectionSpans(string s, int lo, int hi, float size, int style)
     # Whether `s` is a right-to-left paragraph (set against the right edge of its box).
     req bool isRtl(string s)
+    # Where a line may break in `s` (a paragraph without newlines): the grapheme indices i, 0 < i < length, such that a break
+    # is allowed before grapheme i.
+    req [int] breakPoints(string s)
 
 # The fixture font: every display cell is half the size wide (a wide cluster two cells, a combining mark none).
 pub struct FixtureMeasurer as TextMeasurer:
@@ -287,6 +329,9 @@ pub struct FixtureMeasurer as TextMeasurer:
 
     pub req bool isRtl(string s):
         false
+
+    pub req [int] breakPoints(string s):
+        ruleBreakPoints(s)
 
     pub req [float] selectionSpans(string s, int lo, int hi, float size, int style):
         let cell = size / 2.0

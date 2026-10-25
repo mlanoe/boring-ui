@@ -131,6 +131,24 @@ if let a = found:
         assert_eq(a.length, b.length)
 print "fonts ok"
 
+# the bundled Inter (DejaVu Sans behind it for Hebrew and Arabic; the test runs from tests/shape_test_rust/): found, styled cuts differ, a missing directory falls back
+let bundled = bundledSans("../../fonts")
+assert(bundled.length > 0)
+let bundledCuts = bundledSansStyles("../../fonts")
+assert_eq(bundledCuts.length, 3)
+for cut in bundledCuts:
+    assert(cut.length > 0)
+let dejavu = Theme(measurer = EngineMeasurer(font = bundled, styled = bundledCuts))
+assert(dejavu.measurer.widthStyled("Hello world", 16.0, 1) > dejavu.measurer.width("Hello world", 16.0))
+assert_eq(bundledSans("/no/such/dir").length, 0)
+assert_eq(sansFontFrom("/no/such/dir").length, systemSansFontOrEmpty().length)
+assert_eq(sansFontFrom("../../fonts").length, bundled.length)
+assert_eq(bundled.length, 407056)
+assert_eq(fallbackFontsFrom("../../fonts")[0].length, 756072)
+assert(fallbackFontsFrom("../../fonts").length >= 1)
+assert_eq(fallbackFontsFrom("/no/such/dir").length, systemFallbackFonts().length)
+print "bundled fonts ok"
+
 # bold and italic cuts: a styled measurer widens bold text, a styled cache rasterizes the bold cut (not the regular glyphs)
 let cuts = systemSansStyles()
 assert_eq(cuts.length, 3)
@@ -322,5 +340,29 @@ assert_eq(phraseIds[1], openGlyph)
 assert_eq(phraseIds[2], betId)
 assert_eq(phraseIds[3], closeGlyph)
 assert_eq(phraseIds[4], alefId)
+# ── line breaking by the engine (UAX #14, swash) ──────────────────────────────────────────────────
+assert_eq(lineBreakPoints("ab cd"), [3])
+assert_eq(lineBreakPoints("ab cd-ef gh"), [3, 6, 9])
+assert_eq(lineBreakPoints("日本語"), [1, 2])
+# closing punctuation never starts a line (no break before the 。), a break follows it
+assert_eq(lineBreakPoints("日本語。日"), [1, 2, 4])
+# no break inside a number or around a dot between letters; a slash and an em dash are break opportunities
+assert_eq(lineBreakPoints("1,000"), [])
+assert_eq(lineBreakPoints("foo.bar"), [])
+assert_eq(lineBreakPoints("a/b"), [2])
+assert_eq(lineBreakPoints("e—f"), [1, 2])
+assert_eq(lineBreakPoints(""), [])
+assert_eq(lineBreakPoints("abc"), [])
+# the measurer exposes them, and the fixture font keeps its own simpler rules
+let breakMeasurer = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty())).measurer
+assert_eq(breakMeasurer.breakPoints("http://x.com/p"), [7, 13])
+assert_eq(Theme().measurer.breakPoints("ab cd"), [3])
+assert_eq(Theme().measurer.breakPoints("http://x.com/p"), [])
+# a URL wraps at its slashes with the real breaker, and every line fits when its pieces do
+let urlLines = shownLinesAt(breakMeasurer, "http://example.com/some/long/path/segment", 130.0, nil, 8.0, 0)
+assert(urlLines.length >= 3)
+for l in urlLines:
+    assert(breakMeasurer.widthStyled(l, 16.0, 0) <= 130.0)
+assert_eq(urlLines.join(""), "http://example.com/some/long/path/segment")
 print "bidi ok"
 print "styles ok"

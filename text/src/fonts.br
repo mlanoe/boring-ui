@@ -114,3 +114,54 @@ pub def [[uint8]] systemSansStyles():
         let cut = readFirst(paths) else ([])
         cuts.push(cut)
     cuts
+
+# ── bundled fonts ─────────────────────────────────────────────────────────────────────────────────
+# `text/fonts/` carries Inter (regular, bold, italic, bold italic; SIL OFL, see fonts/Inter-LICENSE.txt) as the UI font and
+# DejaVu Sans (free licence, see fonts/LICENSE) behind it: Inter has no Hebrew or Arabic, DejaVu does, and it is the sans
+# font when the Inter files are missing. So the picture does not depend on which fonts the machine has. Boring has no way
+# to embed a file in the binary yet: the application passes the directory (relative to where it runs, or absolute) and
+# gets the system's font when the files are not there.
+
+# The Inter regular file of `dir`, or an empty file when it is missing.
+def [uint8] bundledInter(string dir):
+    readFirst(["{dir}/Inter-Regular.ttf"]) else ([])
+
+# The regular bundled font of `dir` (Inter, else DejaVu Sans), or an empty file when both are missing.
+pub def [uint8] bundledSans(string dir):
+    let inter = bundledInter(dir)
+    if inter.length > 0:
+        return inter
+    readFirst(["{dir}/DejaVuSans.ttf"]) else ([])
+
+# The bold, italic and bold italic bundled cuts of `dir`, of the family `bundledSans` picked (always three entries, empty
+# where a file is missing).
+pub def [[uint8]] bundledSansStyles(string dir):
+    var names = ["DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf"]
+    if bundledInter(dir).length > 0:
+        names = ["Inter-Bold.ttf", "Inter-Italic.ttf", "Inter-BoldItalic.ttf"]
+    var cuts = [] as [[uint8]]
+    for name in names:
+        cuts.push(readFirst(["{dir}/{name}"]) else ([]))
+    cuts
+
+# The fallback fonts: the bundled DejaVu Sans (Hebrew, Arabic, more Greek and Cyrillic than most) then the system's CJK one.
+pub def [[uint8]] fallbackFontsFrom(string dir):
+    var fonts = [] as [[uint8]]
+    if let dejavu = readFirst(["{dir}/DejaVuSans.ttf"]):
+        fonts.push(dejavu)
+    for font in systemFallbackFonts():
+        fonts.push(font)
+    fonts
+
+# The bundled sans font of `dir` when present, else the platform's (`systemSansFontOrEmpty`).
+pub def [uint8] sansFontFrom(string dir):
+    let own = bundledSans(dir)
+    if own.length > 0:
+        return own
+    systemSansFontOrEmpty()
+
+# The bundled styled cuts of `dir` when the regular file is there (the cuts must match the regular font), else the platform's.
+pub def [[uint8]] sansStylesFrom(string dir):
+    if bundledSans(dir).length > 0:
+        return bundledSansStyles(dir)
+    systemSansStyles()

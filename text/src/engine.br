@@ -12,6 +12,8 @@ use swash.FontRef
 use swash.Charmap
 use swash.shape.Direction
 use swash.text.Script
+use swash.text.analyze
+use swash.text.cluster.Boundary
 use unicode_bidi.BidiInfo
 use swash.shape.ShapeContext
 use swash.scale.ScaleContext
@@ -112,11 +114,8 @@ pub def [PlacedGlyph] shapeDir([uint8] fontBytes, string text, float size, bool 
     var mut starts = [] as [int]
     shaper.shapeWith((cluster):
         starts.push(logical.length)
-        # (typed locals: indexing straight by a cast external field is emitted with an `isize` index)
-        let int startByte = cluster.source.start as int
-        let int endByte = cluster.source.end as int
-        let first = graphemeOfByte[startByte]
-        var last = graphemeOfByte[endByte]
+        let first = graphemeOfByte[cluster.source.start as int]
+        var last = graphemeOfByte[cluster.source.end as int]
         if last <= first:
             last = first + 1
         for g in cluster.glyphs:
@@ -162,11 +161,7 @@ pub def GlyphImage? rasterizeAt([uint8] fontBytes, uint glyph, float size, float
         return nil
     mut ctx = ScaleContext.new()
     mut scaler = ctx.builder(font).size(size as float32).hint(false).build()
-    let sources = [Source.Outline]
-    mut r = Render.new(sources)
-    Render.format(r, Format.Alpha)
-    Render.offset(r, Vector.new(offsetX as float32, 0.0))
-    let imgOpt = Render.render(r, scaler, glyph as uint16)
+    let imgOpt = Render.new([Source.Outline]).format(Format.Alpha).offset(Vector.new(offsetX as float32, 0.0)).render(scaler, glyph as uint16)
     guard let img = imgOpt else:
         return nil
     let place = img.placement
@@ -189,10 +184,10 @@ pub def bool covers([uint8] fontBytes, string text):
     let fontOpt = FontRef.fromIndex(fontBytes, 0)
     guard let font = fontOpt else:
         return false
-    let cm = font.charmap()
+    let Charmap cm = font.charmap()
     for ch in text.chars():
         let uint32 code = ord(ch) as uint32
-        let uint16 gid = Charmap.map(cm, code)
+        let uint16 gid = cm.map(code)
         if gid == 0:
             return false
     true
@@ -501,3 +496,32 @@ pub def [float] selectionSpansIn([uint8] primary, [[uint8]] fallbacks, string te
     spans.push(start)
     spans.push(end)
     spans
+
+# ── line breaking ─────────────────────────────────────────────────────────────────────────────────
+
+# For each character of `text`: 0 no break is allowed before it, 1 a break is allowed before it (UAX #14, swash's analysis),
+# 2 a break is mandatory before it.
+pub def [int] lineBreakKinds(string text):
+    var mut kinds = [] as [int]
+    for item in analyze(text.chars()):
+        let b = item.1
+        var kind = 0
+        if b == Boundary.Line:
+            kind = 1
+        if b == Boundary.Mandatory:
+            kind = 2
+        kinds.push(kind)
+    kinds
+
+# The grapheme indices i (0 < i < length) where a line may break before grapheme i: the character-level analysis above, mapped
+# to graphemes (a break is allowed or mandatory before a grapheme's first character).
+pub def [int] lineBreakPoints(string text):
+    let kinds = lineBreakKinds(text)
+    var mut points = [] as [int]
+    var charAt = 0
+    for i in 0..<text.graphemeCount:
+        if i > 0 and charAt < kinds.length and kinds[charAt] >= 1:
+            points.push(i)
+        for ch in text.graphemeSlice(i, i + 1).chars():
+            charAt += 1
+    points

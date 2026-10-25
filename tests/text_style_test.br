@@ -26,6 +26,9 @@ struct StyledMeasurer as TextMeasurer:
     pub req string ellipsis():
         "..."
 
+    pub req [int] breakPoints(string s):
+        ruleBreakPoints(s)
+
     pub req bool isRtl(string s):
         false
 

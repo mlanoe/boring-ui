@@ -1,0 +1,90 @@
+# A long List measures and places only the rows near its viewport (src/layout.br, "Windowed lists"): the other rows keep
+# their identity and position but no content. Uniform rows give exact positions and scroll extent; rows of different heights
+# line up with the viewport once the end has been reached.
+# Run: boring run tests/list_window_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+
+view Rows:
+    int count
+    bool tall
+    state string selection = ""
+
+    body():
+        List(selection = selection):
+            for i in 0..<count with i:
+                if tall and i % 2 == 0:
+                    Frame(height = 40.0):
+                        Text("row {i}")
+                else:
+                    Text("row {i}")
+
+struct RowsRoot as ViewBuilder:
+    int count
+    bool tall
+    req View buildView(mut Runtime rt): Rows(count = count, tall = tall)
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def bool isVirtual(Placed c):
+    (c.props["virtual"] else ("false")) == "true"
+
+def int virtualCount(Placed list):
+    var n = 0
+    for c in list.children:
+        if isVirtual(c):
+            n += 1
+    n
+
+def bool near(float a, float b):
+    a - b < 0.01 and b - a < 0.01
+
+# uniform rows (16 high): exact
+let host = ViewRoot(inner = RowsRoot(count = 500, tall = false))
+mut rt = Runtime()
+rt.start(host)
+let placed = must(layout(rt, 200.0, 100.0))
+let list = placed.children[0]
+assert_eq(list.children.length, 500)
+assert(virtualCount(list) > 400)
+assert(!isVirtual(list.children[0]))
+assert(isVirtual(list.children[499]))
+assert(near(list.children[499].y, 499.0 * 16.0))
+assert(near(list.children[250].h, 16.0))
+assert_eq(list.props["scrollMax"] else (""), "{500.0 * 16.0 - 100.0}")
+
+# the windowed layout agrees with the exact one on every row in the window
+if let root = rt.root:
+    let exact = place(root, 0.0, 0.0, Size(w = 200.0, h = 100.0))
+    for i in 0..<6:
+        assert(near(list.children[i].y, exact.children[0].children[i].y))
+
+# scrolled to the end, the last rows are in full and the first are not
+_ = scrollBy(rt, host, placed, 10.0, 10.0, 0.0, 100000.0)
+let end = must(layout(rt, 200.0, 100.0)).children[0]
+assert(!isVirtual(end.children[499]))
+assert(isVirtual(end.children[0]))
+assert(near(end.children[499].y + 16.0, end.y + 100.0))
+
+# rows of different heights: the extent is an estimate, but the end of the list lines up with the viewport
+let tallHost = ViewRoot(inner = RowsRoot(count = 400, tall = true))
+mut trt = Runtime()
+trt.start(tallHost)
+let first = must(layout(trt, 200.0, 100.0))
+_ = scrollBy(trt, tallHost, first, 10.0, 10.0, 0.0, 100000.0)
+var latest = must(layout(trt, 200.0, 100.0))
+for round in 0..<4:
+    _ = scrollBy(trt, tallHost, latest, 10.0, 10.0, 0.0, 100000.0)
+    latest = must(layout(trt, 200.0, 100.0))
+let tallList = latest.children[0]
+let lastRow = tallList.children[399]
+assert(!isVirtual(lastRow))
+assert(near(lastRow.y + lastRow.h, tallList.y + 100.0))
+# the rows never seen are estimated from those seen: the extent is between the all-short and the all-tall totals
+let most = (tallList.props["scrollMax"] else ("0")).parseFloat() else (0.0)
+assert(most > 400.0 * 16.0 - 100.0 and most < 400.0 * 40.0 - 100.0)
+print "list window ok"

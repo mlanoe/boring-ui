@@ -354,6 +354,27 @@ pub struct EditHistory:
     pub var string lastKind = ""
     pub var int expectCaret = -1
 
+# What layout remembers between frames about the rows of long `List`s (layout.br, "Windowed lists"): the height each row last
+# measured, by list id and row key, and the width those heights were measured under, by list id.
+pub struct LayoutMemory:
+    var mut {string=float} rows = {=}
+    var mut {int=float} widths = {=}
+
+    def float? row(string key):
+        rows[key]
+
+    def void setRow(string key, float h):
+        rows[key] = h
+
+    def void forgetRow(string key):
+        rows.remove(key)
+
+    def float widthOf(int list):
+        widths[list] else (-1.0)
+
+    def void setWidth(int list, float w):
+        widths[list] = w
+
 pub struct Runtime:
     pub var Mounted? root = nil
     pub var mut [string] events = []
@@ -361,6 +382,8 @@ pub struct Runtime:
     # The same problems, structured (see `ErrorReport`); `errors` keeps the bare messages.
     pub var mut [ErrorReport] reports = []
     pub var mut {int} dirty = {}
+    # Layout's memory of the rows of long `List`s (an actor: `layout` reads the runtime, it does not borrow it mutably).
+    pub mut LayoutMemory'actor layoutMemory = LayoutMemory()
     # Where composites' callbacks report that they are about to change their own `state` (see
     # `StateOwner` in boring.ui): drained into `dirty` (only the reporting identities) before every pass.
     pub var mut DirtySink'actor sink = DirtySink()
@@ -1284,17 +1307,31 @@ pub struct Runtime:
     def void runMountHooks():
         let ids = self.pendingMount
         self.pendingMount = []
+        if ids.length == 0:
+            return
+        # One walk for every pending id: a `find` per id is a full-tree walk each (quadratic in the tree size).
+        mut {int} wanted = {}
         for id in ids:
-            self.runMountHook(id)
+            _ = wanted.add(id)
+        mut {int=Mounted} hooks = {=}
+        if let r = root:
+            self.collectMountHooks(r, wanted, hooks)
+        for id in ids:
+            if let node = hooks[id]:
+                self.runMountHook(node, id)
 
-    def void runMountHook(int id):
-        if let node = self.find(id):
-            if node.kind == "OnMount":
-                if let control = node.control:
-                    events.push("hook mount {node.kind}#{id}")
-                    let before = sink.reports
-                    self.dispatch(node, "mount", "")
-                    self.settle(before)
+    def void collectMountHooks(Mounted n, {int} wanted, mut {int=Mounted} hooks):
+        if n.kind == "OnMount" and wanted.contains(n.id):
+            hooks[n.id] = n
+        for c in n.children:
+            self.collectMountHooks(c, wanted, hooks)
+
+    def void runMountHook(Mounted node, int id):
+        if let control = node.control:
+            events.push("hook mount {node.kind}#{id}")
+            let before = sink.reports
+            self.dispatch(node, "mount", "")
+            self.settle(before)
 
     # Starts a run for every `OnTask` node that has none yet, or whose `id` changed since its run
     # started (the old run is cancelled: its generation goes stale first). Preorder; stops as soon as

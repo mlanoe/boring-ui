@@ -18,8 +18,7 @@ unicode-bidi = "0.3.18"
 
 [external_fns]
 "FontRef::fromIndex" = ["&", ""]
-"Charmap::map" = ["&", ""]
 "Render::new" = ["&"]
-"Render::render" = ["&", "&mut", ""]
-"Render::format" = ["&mut", ""]
-"Render::offset" = ["&mut", ""]
+"Render::render" = ["&mut", ""]
+"Render::format" = [""]
+"Render::offset" = [""]

@@ -1,0 +1,93 @@
+# The platform-facing side of the accessibility tree (src/semantics.br is the backend-neutral tree). A platform adapter
+# (AccessKit on the desktop hosts) wants a FLAT list of nodes with parent links and ids that stay the same from one frame
+# to the next, and sends back (node id, action, argument) requests. This file converts both ways; it knows no platform API.
+#
+# Ids are the mounted node ids; the window itself is node 0, the parent of the tree's roots.
+
+use ui.core.*
+use ui.events.*
+use ui.layout.*
+use ui.semantics.*
+
+# One node of the flat tree, in document order (a parent comes before its children).
+pub struct AxNode:
+    pub int id
+    # the parent's id (0 = the window)
+    pub int parent
+    pub string role
+    pub string name
+    pub string value
+    pub string hint
+    pub string marked
+    pub int level
+    pub float x
+    pub float y
+    pub float w
+    pub float h
+    pub bool focused
+    pub bool disabled
+    # the actions the node accepts, comma separated ("focus,activate")
+    pub string actions
+    # the ids of the children, in order
+    pub [int] children
+
+def void flattenInto([SemNode] nodes, int parent, mut [AxNode] out):
+    for n in nodes:
+        var kids = [] as [int]
+        for c in n.children:
+            kids.push(c.id)
+        out.push(AxNode(id = n.id, parent = parent, role = n.role, name = n.name, value = n.value, hint = n.hint, marked = n.marked, level = n.level, x = n.x, y = n.y, w = n.w, h = n.h, focused = n.focused, disabled = n.disabled, actions = n.actions.join(","), children = kids))
+        flattenInto(n.children, n.id, out)
+
+# The flat tree of a semantic tree whose focus was marked (`markFocus`); `[]` for an empty window.
+pub def [AxNode] axNodes(Semantics s):
+    mut out = [] as [AxNode]
+    flattenInto(s.roots, 0, out)
+    out
+
+# The ids of the window's top-level nodes.
+pub def [int] axRoots(Semantics s):
+    var ids = [] as [int]
+    for r in s.roots:
+        ids.push(r.id)
+    ids
+
+# The whole thing for one frame: the semantics of `placed`, with the runtime's keyboard focus marked, flattened.
+pub def [AxNode] axFrame(Runtime rt, Placed placed):
+    mut s = semantics(placed)
+    if let f = rt.focus:
+        markFocus(s.roots, f.id)
+    axNodes(s)
+
+# Whether a control of this kind offers `action` to assistive technology (the same lists as semantics.br's `actions`).
+def bool offers(string kind, string action):
+    if action == "focus":
+        return kind == "Button" or kind == "Toggle" or kind == "TextField" or kind == "Slider"
+    if kind == "Button":
+        return action == "activate"
+    if kind == "Toggle":
+        return action == "toggle"
+    if kind == "TextField":
+        return action == "setValue"
+    if kind == "Slider":
+        return action == "increment" or action == "decrement"
+    false
+
+# A request from an assistive technology: `action` on node `id` with an optional argument (the text for "setValue", the
+# step count for "increment"/"decrement" is carried by the action itself). Platform names are mapped to the controls'
+# own: setValue → setText. Returns false for a stale node, a disabled one or an action it does not offer.
+pub def bool axPerform(mut Runtime rt, Builder host, int id, string action, string arg):
+    if let h = rt.handle(id):
+        let kind = (rt.find(id)?.kind) else ("")
+        if !offers(kind, action):
+            return false
+        if action == "focus":
+            if isDisabled(rt, id):
+                return false
+            focusControl(rt, host, h)
+            return true
+        var wanted = action
+        if action == "setValue":
+            wanted = "setText"
+        return act(rt, host, h, wanted, arg)
+    false

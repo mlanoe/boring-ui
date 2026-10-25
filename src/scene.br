@@ -46,6 +46,9 @@ def float num(Placed p, string key, float fallback):
     text.parseFloat() else (fallback)
 
 # Appends `p`'s commands (and its subtree's) to `out` in paint order.
+# How far beyond a list's viewport a row may lie and still be painted (shadows and focus rings reach outside a row).
+let rowCullMargin = 48.0
+
 pub def paint(Placed p, mut [Command] out):
     # A subtree with a group-opacity multiplier (a transition in flight) is composited as one.
     if p.alpha < 1.0:
@@ -246,7 +249,11 @@ def paintNode(Placed p, mut [Command] out):
                 mut band = cmd("FillRect", c, "", "selected")
                 band.hex = p.theme.color(ColorRole.Selection)
                 out.push(band)
+    let isList = p.kind == "List" or p.kind == "MultiList"
     for c in p.children:
+        # a row of a list entirely above or below its viewport (by more than a shadow's reach) paints nothing the clip would show
+        if isList and (c.y + c.h < p.y - rowCullMargin or c.y > p.y + p.h + rowCullMargin):
+            continue
         paint(c, out)
     if p.kind == "Clip" or p.kind == "Scroll" or (p.kind == "List" or p.kind == "MultiList"):
         out.push(cmd("PopClip", p, "", ""))

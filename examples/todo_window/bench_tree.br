@@ -1,0 +1,99 @@
+# Frame cost of a big tree: the Todo's row view repeated `rows` times in a List, measured stage by stage on the same
+# path the window takes (layout, display list, glyphs, encode, bin, tiled kernel). Build for the real kernel target:
+#   boring build --target wgpu bench_tree.br   (see bench_tree.sh)
+
+use std.time.Instant
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use ui.events.*
+use render.display_list.*
+use render.scale.*
+use render.raster_tile.*
+use todo.todo.*
+use pace
+use text.glyph_run.*
+use text.measurer.*
+use text.fonts.*
+
+view BenchApp:
+    int rows
+    state string selection = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            Text(content = "Todos", font = .Title)
+            List(selection = selection):
+                for i in 0..<rows with i:
+                    TodoRow(item = newTodo(i, "Todo item number {i}"), onCommand = (name):
+                        print name)
+
+def int ms(Instant start):
+    start.elapsed().asMillis() as int
+
+def float msf(Instant start):
+    start.elapsed().asMicros() as float / 1000.0
+
+struct BenchRoot as ViewBuilder:
+    Theme theme
+    int rows
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [BenchApp(rows = rows)])
+
+def void run(int rows, int w, int h) throws:
+    let theme = Theme(measurer = EngineMeasurer(font = systemSansFontOrEmpty(), styled = systemSansStyles(), fallbacks = systemFallbackFonts()))
+    mut cache = GlyphCache(font = systemSansFontOrEmpty(), styled = systemSansStyles(), fallbacks = systemFallbackFonts())
+    let host = ViewRoot(inner = BenchRoot(theme = theme, rows = rows))
+    mut rt = Runtime()
+    let t0 = Instant.now()
+    rt.start(host)
+    let startMs = msf(t0)
+    # a first layout also builds the views of the rows
+    let t1 = Instant.now()
+    let placed = placedOf(rt, w, h)
+    let layoutFirst = msf(t1)
+    let tr = Instant.now()
+    let probe = rt.root
+    let rootMs = msf(tr)
+    let t2 = Instant.now()
+    let again = placedOf(rt, w, h)
+    let layoutAgain = msf(t2)
+    let t3 = Instant.now()
+    let cmds = displayList(again)
+    let listMs = msf(t3)
+    let t4 = Instant.now()
+    let scaledList = scaled(cmds, 2.0)
+    let scaleMs = msf(t4)
+    let t5 = Instant.now()
+    let glyphs = glyphify(scaledList, cache)
+    let glyphMs = msf(t5)
+    let t6 = Instant.now()
+    let glyphs2 = glyphify(scaledList, cache)
+    let glyphWarm = msf(t6)
+    let t7 = Instant.now()
+    let enc = encodeWith(glyphs2, [], cache.atlas, w * 2, h * 2)
+    let encodeMs = msf(t7)
+    let t8 = Instant.now()
+    let bins = bin(enc, w * 2, h * 2)
+    let binMs = msf(t8)
+    let t9 = Instant.now()
+    let pic = rasterizeTiledWith(glyphs2, [] as [Bitmap], cache.atlas, w * 2, h * 2)
+    let kernelMs = msf(t9)
+    let t10 = Instant.now()
+    let pic2 = rasterizeTiledWith(glyphs2, [] as [Bitmap], cache.atlas, w * 2, h * 2)
+    let kernelWarm = msf(t10)
+    print "rows={rows} nodes={countNodes(placed)} commands={cmds.length} glyph commands={glyphs2.length}"
+    print "  start {startMs} ms, layout first {layoutFirst} ms, layout again {layoutAgain} ms, rt.root read {rootMs} ms"
+    print "  displayList {listMs} ms, scaled {scaleMs} ms, glyphify cold {glyphMs} ms warm {glyphWarm} ms"
+    print "  encode {encodeMs} ms, bin {binMs} ms, kernel (with upload) first {kernelMs} ms, second {kernelWarm} ms"
+
+def int countNodes(Placed p):
+    var n = 1
+    for c in p.children:
+        n += countNodes(c)
+    n
+
+for rows in [10, 100, 1000, 4000]:
+    _ = try? run(rows, 640, 720)

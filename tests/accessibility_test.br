@@ -1,0 +1,73 @@
+# The flat accessibility tree and the platform's requests (src/accessibility.br). Run: boring run tests/accessibility_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.accessibility.*
+
+view Panel:
+    state int taps = 0
+    state bool on = false
+    state string text = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Button(label = "+", onActivate = ():
+                taps += 1)
+            Toggle(value = on, label = "on")
+            TextField(value = text, label = "name", placeholder = "")
+            Text("{taps}:{text}")
+
+struct PanelRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def AxNode? byRole([AxNode] nodes, string role):
+    for n in nodes:
+        if n.role == role:
+            return n
+    nil
+
+def AxNode must1(AxNode? n):
+    n else (AxNode(id = -1, parent = -1, role = "", name = "", value = "", hint = "", marked = "", level = 0, x = 0.0, y = 0.0, w = 0.0, h = 0.0, focused = false, disabled = false, actions = "", children = []))
+
+let host = ViewRoot(inner = PanelRoot())
+mut rt = Runtime()
+rt.start(host)
+
+# the window's top-level nodes have parent 0, ids are the mounted ids
+let nodes = axFrame(rt, must(layout(rt, 200.0, 200.0)))
+assert_eq(nodes.length, 4)
+for n in nodes:
+    assert_eq(n.parent, 0)
+let button = must1(byRole(nodes, "button"))
+let toggle = must1(byRole(nodes, "toggle"))
+let field = must1(byRole(nodes, "textField"))
+assert_eq(button.name, "+")
+assert_eq(button.actions, "focus,activate")
+assert_eq(toggle.value, "false")
+assert_eq(field.actions, "focus,setValue")
+assert_eq(field.focused, false)
+
+# a request from the platform: activate, toggle, setValue go through the same path as a click or a key
+assert(axPerform(rt, host, button.id, "activate", ""))
+assert(axPerform(rt, host, toggle.id, "toggle", ""))
+assert(axPerform(rt, host, field.id, "setValue", "hi"))
+let after = axFrame(rt, must(layout(rt, 200.0, 200.0)))
+assert_eq(must1(byRole(after, "toggle")).value, "true")
+assert_eq(must1(byRole(after, "textField")).value, "hi")
+assert_eq(must1(byRole(after, "staticText")).name, "1:hi")
+
+# focus moves the keyboard focus, and the next frame marks it
+assert(axPerform(rt, host, field.id, "focus", ""))
+let focused = axFrame(rt, must(layout(rt, 200.0, 200.0)))
+assert(must1(byRole(focused, "textField")).focused)
+assert(!must1(byRole(focused, "button")).focused)
+
+# a stale or unknown node, and an action the control does not offer, are refused
+assert(!axPerform(rt, host, 987654, "activate", ""))
+assert(!axPerform(rt, host, field.id, "activate", ""))
+print "accessibility ok"

@@ -77,6 +77,26 @@ pub struct Placed:
     pub var bool ghost = false
     pub var [PropValue] live = []
 
+# What one layout pass has already worked out, by node id and proposal: a stack asks its children for their spans, then for
+# their sizes, and placing asks again, so without this a node is negotiated once per question per level (the cost grows with
+# the depth of the tree). A pass never outlives its tree: a fresh `Memo` per `layout`, `measure` or `place` call.
+struct Memo:
+    var mut {string=Size} sizes = {=}
+    var mut {string=Span} spans = {=}
+    var mut {string=Neg} negs = {=}
+    # Windowed lists (see "Windowed lists"): only `layout` over a runtime turns this on, `measure` and `place` stay exact.
+    var bool windowed = false
+    var mut LayoutMemory'actor memory = LayoutMemory()
+    # A windowed list's rows and their keys, flattened once per pass (flattening clones every row's subtree), and the heights
+    # `rowHeights` worked out for it by list id and width.
+    var mut {int=Slots} listSlots = {=}
+    var mut {string=[float]} listHeights = {=}
+
+def string axisKey(float? v):
+    if let x = v:
+        return "{x}"
+    "-"
+
 struct Neg:
     var mut [Mounted] items = []
     var mut [float] mains = []
@@ -273,49 +293,22 @@ def [string] words(string s):
     out
 
 # ── line breaking ─────────────────────────────────────────────────────────────────────────────────
-# A small version of the Unicode line-break rules (UAX #14), independent of the measurer: a break is allowed after a run of
-# spaces, after a hyphen (not before a digit), and next to a wide (CJK) grapheme, except that a line never starts with closing
-# punctuation nor ends with opening punctuation. "\n" always breaks. A word wider than the line overflows (it is never split
-# inside: `lineLimit` truncates it with an ellipsis) — the usual `overflow-wrap: normal`.
-
-def bool isSpaceGrapheme(string g):
-    g == " " or g == "\t"
-
-# Characters a line may not start with (closing punctuation, CJK and Latin).
-def bool noBreakBefore(string g):
-    "、。，．）」』】》〉！？：；,.!?;:)]}}".contains(g)
-
-# Characters a line may not end with (opening punctuation).
-def bool noBreakAfter(string g):
-    "（「『【《〈([{{".contains(g)
-
-# Whether a line may break between the graphemes `prev` and `cur`.
-def bool breakBetween(string prev, string cur):
-    if isSpaceGrapheme(prev):
-        return !isSpaceGrapheme(cur)
-    if isSpaceGrapheme(cur):
-        return false
-    if prev == "-" and cur != "-" and !"0123456789".contains(cur):
-        return true
-    if (prev.displayWidth == 2 or cur.displayWidth == 2) and !noBreakBefore(cur) and !noBreakAfter(prev):
-        return true
-    false
+# Where a line may break comes from the measurer (`TextMeasurer.breakPoints`): the text engine answers with the Unicode
+# line-break rules (UAX #14), the fixture font with a small rule set (theme.br `ruleBreakPoints`). "\n" always breaks. A word
+# wider than the line overflows (it is never split inside: `lineLimit` truncates it with an ellipsis) — the usual
+# `overflow-wrap: normal`.
 
 # The pieces of a paragraph between break opportunities, spaces kept at the end of the piece they follow.
-def [string] segmentsOf(string para):
+def [string] segmentsOf(TextMeasurer m, string para):
     mut [string] out = []
     let count = para.graphemeCount
-    var current = ""
-    var prev = ""
-    for i in 0..<count:
-        let g = para.graphemeSlice(i, i + 1)
-        if i > 0 and breakBetween(prev, g):
-            out.push(current)
-            current = ""
-        current = "{current}{g}"
-        prev = "{g}"
-    if current != "":
-        out.push(current)
+    var start = 0
+    for p in m.breakPoints(para):
+        if p > start and p < count:
+            out.push(para.graphemeSlice(start, p))
+            start = p
+    if start < count:
+        out.push(para.graphemeSlice(start, count))
     out
 
 # `s` without its trailing spaces.
@@ -344,7 +337,7 @@ def string collapseSpaces(string s):
 def [string] wrapParagraph(TextMeasurer m, string paragraph, float limit, float cell, int style):
     mut [string] lines = []
     var current = ""
-    for seg in segmentsOf(collapseSpaces(paragraph)):
+    for seg in segmentsOf(m, collapseSpaces(paragraph)):
         if current == "":
             current = seg
         elif textWidthAt(m, trimEnd("{current}{seg}"), cell, style) <= limit:
@@ -452,11 +445,19 @@ def float longestWordAt(TextMeasurer m, string content, float cell, int style):
 def Span fixedSpan(float v):
     Span(min = v, ideal = v, max = v)
 
-def Span span(Mounted n, bool horiz, float? cross):
+def Span span(Mounted n, bool horiz, float? cross, mut Memo memo):
+    let key = "{n.id}|{horiz}|{axisKey(cross)}"
+    if let hit = memo.spans[key]:
+        return hit
+    let found = spanUncached(n, horiz, cross, memo)
+    memo.spans[key] = found
+    found
+
+def Span spanUncached(Mounted n, bool horiz, float? cross, mut Memo memo):
     if isTransparent(n):
         if !hasChild(n):
             return fixedSpan(0.0)
-        return span(n.children[0], horiz, cross)
+        return span(n.children[0], horiz, cross, memo)
     let k = n.kind
     if k == "Text":
         let content = n.props["content"] else ("")
@@ -478,12 +479,12 @@ def Span span(Mounted n, bool horiz, float? cross):
         return Span(min = m, ideal = m, max = unbounded)
     if k == "Padding":
         let i = numProp(n, "insets") else (0.0)
-        let s = span(n.children[0], horiz, shrink(cross, 2.0 * i))
+        let s = span(n.children[0], horiz, shrink(cross, 2.0 * i), memo)
         return Span(min = s.min + 2.0 * i, ideal = s.ideal + 2.0 * i, max = minOf(s.max + 2.0 * i, unbounded))
     if k == "Frame":
-        return frameSpan(n, horiz, cross)
+        return frameSpan(n, horiz, cross, memo)
     if k == "Row" or k == "Column":
-        return stackSpan(n, k == "Row", horiz, cross)
+        return stackSpan(n, k == "Row", horiz, cross, memo)
     if k == "Image":
         let imageW = numProp(n, "width") else (0.0)
         let imageH = numProp(n, "height") else (0.0)
@@ -495,13 +496,13 @@ def Span span(Mounted n, bool horiz, float? cross):
         var id = 0.0
         var hi = 0.0
         for c in flatten(n):
-            let s = span(c, horiz, cross)
+            let s = span(c, horiz, cross, memo)
             lo = maxOf(lo, s.min)
             id = maxOf(id, s.ideal)
             hi = maxOf(hi, s.max)
         return Span(min = lo, ideal = id, max = hi)
     if k == "Fill":
-        let s = span(n.children[0], horiz, cross)
+        let s = span(n.children[0], horiz, cross, memo)
         var grows = flag(n, "width")
         if !horiz:
             grows = flag(n, "height")
@@ -509,8 +510,15 @@ def Span span(Mounted n, bool horiz, float? cross):
             return Span(min = s.min, ideal = s.ideal, max = unbounded)
         return s
     if (k == "List" or k == "MultiList"):
+        if windows(n, memo):
+            if horiz:
+                # the widest row is not known without measuring them all: the first row stands for them
+                let first = span(rowAt(n, slotsOf(n, memo), 0), true, nil, memo)
+                return Span(min = first.min, ideal = first.ideal, max = unbounded)
+            if let w = cross:
+                return Span(min = 0.0, ideal = sumOf(rowHeights(n, w, memo)), max = unbounded)
         # A scroll viewport over a vertical stack of its rows.
-        let s = stackSpan(n, false, horiz, cross)
+        let s = stackSpan(n, false, horiz, cross, memo)
         if !horiz:
             return Span(min = 0.0, ideal = s.ideal, max = unbounded)
         return Span(min = s.min, ideal = s.ideal, max = unbounded)
@@ -520,13 +528,13 @@ def Span span(Mounted n, bool horiz, float? cross):
         var contentCross = cross
         if scrollsThisAxis:
             contentCross = cross
-        let s = span(n.children[0], horiz, contentCross)
+        let s = span(n.children[0], horiz, contentCross, memo)
         if scrollsThisAxis:
             return Span(min = 0.0, ideal = s.ideal, max = unbounded)
         return Span(min = s.min, ideal = s.ideal, max = unbounded)
     fixedSpan(0.0)
 
-def Span frameSpan(Mounted n, bool horiz, float? cross):
+def Span frameSpan(Mounted n, bool horiz, float? cross, mut Memo memo):
     var fixed = "width"
     var lo = "minWidth"
     var hi = "maxWidth"
@@ -536,21 +544,21 @@ def Span frameSpan(Mounted n, bool horiz, float? cross):
         hi = "maxHeight"
     if let f = numProp(n, fixed):
         return fixedSpan(f)
-    let s = span(n.children[0], horiz, cross)
+    let s = span(n.children[0], horiz, cross, memo)
     let low = numProp(n, lo) else (0.0)
     let high = numProp(n, hi) else (unbounded)
     Span(min = clampTo(s.min, low, high), ideal = clampTo(s.ideal, low, high), max = clampTo(s.max, low, high))
 
 # A child's interval on one axis as seen by a stack: a `Separator` is a thin line ON THE STACK'S MAIN AXIS and
 # contributes nothing across it (it is stretched over the stack's cross extent when placed).
-def Span spanIn(Mounted c, bool parentIsRow, bool horiz, float? cross):
+def Span spanIn(Mounted c, bool parentIsRow, bool horiz, float? cross, mut Memo memo):
     if c.kind == "Separator":
         if parentIsRow == horiz:
             return fixedSpan(c.theme.metric(MetricRole.SeparatorThickness))
         return fixedSpan(0.0)
-    span(c, horiz, cross)
+    span(c, horiz, cross, memo)
 
-def Span stackSpan(Mounted n, bool isRow, bool horiz, float? cross):
+def Span stackSpan(Mounted n, bool isRow, bool horiz, float? cross, mut Memo memo):
     if isRow == horiz:
         # Along the stack's own main axis: children's intervals add up, gaps included.
         let items = flatten(n)
@@ -559,14 +567,14 @@ def Span stackSpan(Mounted n, bool isRow, bool horiz, float? cross):
         var id = 0.0
         var hi = 0.0
         for c in items:
-            let s = spanIn(c, isRow, horiz, cross)
+            let s = spanIn(c, isRow, horiz, cross, memo)
             lo += s.min
             id += s.ideal
             hi += s.max
         let gaps = g * nonNeg((items.length - 1) as float)
         return Span(min = lo + gaps, ideal = id + gaps, max = minOf(hi + gaps, unbounded))
     # Across: negotiate the main axis under the given proposal, then report the resulting extent.
-    let neg = negotiate(n, isRow, cross, nil)
+    let neg = negotiate(n, isRow, cross, nil, memo)
     fixedSpan(neg.cross)
 
 # ── stack negotiation ─────────────────────────────────────────────────────────────────────────
@@ -630,17 +638,26 @@ def [float] distinctPrioritiesDesc([Mounted] items):
             ps.push(p)
     sortDescending(ps)
 
-def Neg negotiate(Mounted n, bool isRow, float? mainProp, float? crossProp):
+# (`items` of the result is left empty: the children are `flatten(n)`, which callers that place them ask for themselves.)
+def Neg negotiate(Mounted n, bool isRow, float? mainProp, float? crossProp, mut Memo memo):
+    let key = "{n.id}|{isRow}|{axisKey(mainProp)}|{axisKey(crossProp)}"
+    if let hit = memo.negs[key]:
+        return hit
+    let found = negotiateUncached(n, isRow, mainProp, crossProp, memo)
+    memo.negs[key] = found
+    found
+
+def Neg negotiateUncached(Mounted n, bool isRow, float? mainProp, float? crossProp, mut Memo memo):
     mut neg = Neg()
-    neg.items = flatten(n)
+    let items = flatten(n)
     neg.gap = gapOf(n)
-    let count = neg.items.length
+    let count = items.length
     let gaps = neg.gap * nonNeg((count - 1) as float)
     mut [float] mins = []
     mut [float] ideals = []
     mut [float] maxs = []
-    for c in neg.items:
-        let s = spanIn(c, isRow, isRow, crossProp)
+    for c in items:
+        let s = spanIn(c, isRow, isRow, crossProp, memo)
         mins.push(s.min)
         ideals.push(s.ideal)
         maxs.push(s.max)
@@ -649,7 +666,7 @@ def Neg negotiate(Mounted n, bool isRow, float? mainProp, float? crossProp):
         cur.push(m)
     if let avail = mainProp:
         var remaining = nonNeg(avail - gaps - sumOf(mins))
-        let prios = distinctPrioritiesDesc(neg.items)
+        let prios = distinctPrioritiesDesc(items)
         # toward each ideal, then toward each maximum, highest priority group first
         for round in 0..<2:
             var target = ideals.clone()
@@ -658,7 +675,7 @@ def Neg negotiate(Mounted n, bool isRow, float? mainProp, float? crossProp):
             for pr in prios:
                 mut [int] group = []
                 for i in 0..<count:
-                    if priorityOf(neg.items[i]) == pr:
+                    if priorityOf(items[i]) == pr:
                         group.push(i)
                 remaining = fill(cur, target, group, remaining)
     else:
@@ -667,8 +684,8 @@ def Neg negotiate(Mounted n, bool isRow, float? mainProp, float? crossProp):
     var main = 0.0
     var crossMax = 0.0
     for i in 0..<count:
-        let c = neg.items[i]
-        var sz = measure(c, proposal(isRow, cur[i], crossProp))
+        let c = items[i]
+        var sz = sizeOf(c, proposal(isRow, cur[i], crossProp), memo)
         if c.kind == "Spacer":
             sz = Size(w = cur[i], h = 0.0)
             if !isRow:
@@ -697,13 +714,202 @@ def float sumOf([float] xs):
         t += x
     t
 
+# Where the rows of a windowed list sit in its mounted children, without copying them: row `i` is child `outer[i]`, or
+# (inside a `KeyedGroup`) child `inner[i]` of that child. `nested` is a `KeyedGroup` inside a `KeyedGroup`, which a list
+# never lays out by window.
+struct Slots:
+    var mut [int] outer = []
+    var mut [int] inner = []
+    var mut [int] ids = []
+    var mut [string] kinds = []
+    var mut [string] keys = []
+    var bool nested = false
+
+# ── windowed lists ────────────────────────────────────────────────────────────────────────────
+# A `List` of more than `windowedRows` rows measures and places only the rows near its viewport (± `windowMargin`): the other
+# rows keep their identity, key and a position and size but no content (`Placed.props["virtual"] = "true"`, no children), so
+# keyboard navigation, selection and hit testing of the rows in view are unchanged and a frame no longer costs one
+# negotiation per row. The height of a row that is not measured is the one it last measured (kept by the runtime, per list and
+# row key, valid for one width) or, for a row never seen, the mean of the list's known rows; a row that comes into the window is
+# measured at once and corrects the offsets below it, so the scroll extent is exact for the rows seen and an estimate for the
+# rest. Only `layout` (a runtime in hand) windows; `measure` and `place` stay exact.
+
+pub let int windowedRows = 64
+# How far beyond the viewport a row is still measured and placed in full.
+pub let float windowMargin = 96.0
+
+def string rowCacheKey(int list, string key, int i):
+    if key == "":
+        return "{list}|#{i}"
+    "{list}|{key}"
+
+def Slots slotsOf(Mounted n, mut Memo memo):
+    if let hit = memo.listSlots[n.id]:
+        return hit
+    mut found = Slots()
+    var ci = 0
+    for c in n.children:
+        if c.kind == "KeyedGroup":
+            var si = 0
+            for g in c.children:
+                if g.kind == "KeyedGroup":
+                    found.nested = true
+                found.outer.push(ci)
+                found.inner.push(si)
+                found.ids.push(g.id)
+                found.kinds.push(g.kind)
+                found.keys.push(c.key)
+                si += 1
+        else:
+            found.outer.push(ci)
+            found.inner.push(-1)
+            found.ids.push(c.id)
+            found.kinds.push(c.kind)
+            found.keys.push("")
+        ci += 1
+    memo.listSlots[n.id] = found
+    found
+
+# Row `i` of a windowed list (a copy of that one row's subtree).
+def Mounted rowAt(Mounted n, Slots slots, int i):
+    if slots.inner[i] < 0:
+        return n.children[slots.outer[i]]
+    n.children[slots.outer[i]].children[slots.inner[i]]
+
+# Whether this list is laid out by window (a long list under a runtime-backed pass).
+def bool windows(Mounted n, mut Memo memo):
+    if !memo.windowed or !(n.kind == "List" or n.kind == "MultiList"):
+        return false
+    let slots = slotsOf(n, memo)
+    slots.keys.length > windowedRows and !slots.nested
+
+# One row as a vertical list gives it room: the height it ideally takes under the list's width.
+def Size rowSize(Mounted c, float w, mut Memo memo):
+    if c.kind == "Separator":
+        return Size(w = 0.0, h = c.theme.metric(MetricRole.SeparatorThickness))
+    let s = span(c, false, w, memo)
+    if c.kind == "Spacer":
+        return Size(w = 0.0, h = s.ideal)
+    sizeOf(c, Prop(w = w, h = s.ideal), memo)
+
+# The height of every row of a windowed list under width `w`: the last measured one, else the list's mean (the first row is
+# measured when nothing is known yet).
+def [float] rowHeights(Mounted n, float w, mut Memo memo):
+    let cacheKey = "{n.id}|{w}"
+    if let hit = memo.listHeights[cacheKey]:
+        return hit
+    let found = rowHeightsUncached(n, slotsOf(n, memo), w, memo)
+    memo.listHeights[cacheKey] = found
+    found
+
+def [float] rowHeightsUncached(Mounted n, Slots slots, float w, mut Memo memo):
+    let keys = slots.keys
+    let count = keys.length
+    if memo.memory.widthOf(n.id) != w:
+        for i in 0..<count:
+            memo.memory.forgetRow(rowCacheKey(n.id, keys[i], i))
+        memo.memory.setWidth(n.id, w)
+    mut hs = [] as [float]
+    mut missing = [] as [int]
+    var sum = 0.0
+    var seen = 0
+    for i in 0..<count:
+        if let h = memo.memory.row(rowCacheKey(n.id, keys[i], i)):
+            hs.push(h)
+            sum += h
+            seen += 1
+        else:
+            hs.push(0.0)
+            missing.push(i)
+    var estimate = 0.0
+    if seen > 0:
+        estimate = sum / (seen as float)
+    elif count > 0:
+        estimate = rowSize(rowAt(n, slots, 0), w, memo).h
+    for i in missing:
+        hs[i] = estimate
+    hs
+
+def void placeWindowed(Mounted n, mut Placed node, float x, float y, Size size, mut Memo memo):
+    let slots = slotsOf(n, memo)
+    let keys = slots.keys
+    let count = keys.length
+    let w = size.w
+    mut hs = rowHeights(n, w, memo).clone()
+    mut fresh = [] as [bool]
+    mut sizes = [] as [Size]
+    for i in 0..<count:
+        fresh.push(false)
+        sizes.push(Size(w = w, h = hs[i]))
+    var total = 0.0
+    var offset = 0.0
+    var settled = false
+    var rounds = 0
+    while !settled and rounds < 8:
+        rounds += 1
+        total = sumOf(hs)
+        offset = clampTo(n.scroll, 0.0, nonNeg(total - size.h))
+        var first = count
+        var last = count
+        var top = 0.0
+        var i = 0
+        var found = false
+        var closed = false
+        while i < count and !closed:
+            if !found and top + hs[i] >= offset - windowMargin:
+                first = i
+                found = true
+            if found and top > offset + size.h + windowMargin:
+                last = i
+                closed = true
+            top += hs[i]
+            i += 1
+        settled = true
+        if last > first:
+            for j in first..<last:
+                if !fresh[j]:
+                    let measured = rowSize(rowAt(n, slots, j), w, memo)
+                    sizes[j] = measured
+                    fresh[j] = true
+                    memo.memory.setRow(rowCacheKey(n.id, keys[j], j), measured.h)
+                    if measured.h != hs[j]:
+                        hs[j] = measured.h
+                        settled = false
+    let most = nonNeg(total - size.h)
+    node.props["scroll"] = "{offset}"
+    node.props["scrollMax"] = "{most}"
+    var rowTop = 0.0
+    for i in 0..<count:
+        let rowY = y - offset + rowTop
+        if fresh[i]:
+            mut row = placeIn(rowAt(n, slots, i), x, rowY, sizes[i], memo)
+            row.key = keys[i]
+            node.children.push(row)
+        else:
+            mut stub = Placed(id = slots.ids[i], kind = slots.kinds[i], x = x, y = rowY, w = w, h = hs[i], key = keys[i])
+            stub.props["virtual"] = "true"
+            node.children.push(stub)
+        rowTop += hs[i]
+
 # ── measure ───────────────────────────────────────────────────────────────────────────────────
 
 pub def Size measure(Mounted n, Prop p):
+    mut memo = Memo()
+    sizeOf(n, p, memo)
+
+def Size sizeOf(Mounted n, Prop p, mut Memo memo):
+    let key = "{n.id}|{axisKey(p.w)}|{axisKey(p.h)}"
+    if let hit = memo.sizes[key]:
+        return hit
+    let size = sizeUncached(n, p, memo)
+    memo.sizes[key] = size
+    size
+
+def Size sizeUncached(Mounted n, Prop p, mut Memo memo):
     if isTransparent(n):
         if !hasChild(n):
             return Size(w = 0.0, h = 0.0)
-        return measure(n.children[0], p)
+        return sizeOf(n.children[0], p, memo)
     let k = n.kind
     if k == "Text":
         return measureText(n, p)
@@ -714,10 +920,10 @@ pub def Size measure(Mounted n, Prop p):
         return Size(w = maxOf(m, p.w else (m)), h = maxOf(m, p.h else (m)))
     if k == "Padding":
         let i = numProp(n, "insets") else (0.0)
-        let cs = measure(n.children[0], Prop(w = shrink(p.w, 2.0 * i), h = shrink(p.h, 2.0 * i)))
+        let cs = sizeOf(n.children[0], Prop(w = shrink(p.w, 2.0 * i), h = shrink(p.h, 2.0 * i)), memo)
         return Size(w = cs.w + 2.0 * i, h = cs.h + 2.0 * i)
     if k == "Frame":
-        return measureFrame(n, p)
+        return measureFrame(n, p, memo)
     if k == "Separator":
         # Outside a stack: its own axis (horizontal unless `axis = .Vertical`).
         let thick = n.theme.metric(MetricRole.SeparatorThickness)
@@ -734,12 +940,12 @@ pub def Size measure(Mounted n, Prop p):
         var w = 0.0
         var h = 0.0
         for c in flatten(n):
-            let cs = measure(c, p)
+            let cs = sizeOf(c, p, memo)
             w = maxOf(w, cs.w)
             h = maxOf(h, cs.h)
         return Size(w = w, h = h)
     if k == "Fill":
-        let cs = measure(n.children[0], p)
+        let cs = sizeOf(n.children[0], p, memo)
         var w = cs.w
         var h = cs.h
         let offeredW = p.w else (cs.w)
@@ -750,7 +956,15 @@ pub def Size measure(Mounted n, Prop p):
             h = maxOf(cs.h, offeredH)
         return Size(w = w, h = h)
     if (k == "List" or k == "MultiList"):
-        let neg = negotiate(n, false, nil, p.w)
+        if let w = p.w:
+            if windows(n, memo):
+                var listH = 0.0
+                if let given = p.h:
+                    listH = given
+                else:
+                    listH = sumOf(rowHeights(n, w, memo))
+                return Size(w = w, h = listH)
+        let neg = negotiate(n, false, nil, p.w, memo)
         let listW = p.w else (neg.cross)
         let listH = p.h else (neg.total)
         return Size(w = listW, h = listH)
@@ -760,7 +974,7 @@ pub def Size measure(Mounted n, Prop p):
         var contentProp = Prop(w = p.w, h = nil)
         if !isVerticalScroll(n):
             contentProp = Prop(w = nil, h = p.h)
-        let cs = measure(n.children[0], contentProp)
+        let cs = sizeOf(n.children[0], contentProp, memo)
         let viewW = p.w else (cs.w)
         let viewH = p.h else (cs.h)
         return Size(w = viewW, h = viewH)
@@ -771,7 +985,7 @@ pub def Size measure(Mounted n, Prop p):
         if isRow:
             mainP = p.w
             crossP = p.h
-        let neg = negotiate(n, isRow, mainP, crossP)
+        let neg = negotiate(n, isRow, mainP, crossP, memo)
         if isRow:
             return Size(w = neg.total, h = neg.cross)
         return Size(w = neg.cross, h = neg.total)
@@ -790,13 +1004,13 @@ def float? frameProposal(float? incoming, float? fixed, float? lo, float? hi):
         return clampTo(x, lo else (0.0), hi else (unbounded))
     nil
 
-def Size measureFrame(Mounted n, Prop p):
+def Size measureFrame(Mounted n, Prop p, mut Memo memo):
     let child = n.children[0]
     let fw = numProp(n, "width")
     let fh = numProp(n, "height")
-    let cs = measure(child, Prop(
+    let cs = sizeOf(child, Prop(
         w = frameProposal(p.w, fw, numProp(n, "minWidth"), numProp(n, "maxWidth")),
-        h = frameProposal(p.h, fh, numProp(n, "minHeight"), numProp(n, "maxHeight"))))
+        h = frameProposal(p.h, fh, numProp(n, "minHeight"), numProp(n, "maxHeight"))), memo)
     var w = clampTo(cs.w, numProp(n, "minWidth") else (0.0), numProp(n, "maxWidth") else (unbounded))
     var h = clampTo(cs.h, numProp(n, "minHeight") else (0.0), numProp(n, "maxHeight") else (unbounded))
     if let f = fw:
@@ -807,11 +1021,15 @@ def Size measureFrame(Mounted n, Prop p):
 
 # ── place ─────────────────────────────────────────────────────────────────────────────────────
 
-def Placed placeChild(Mounted c, float x, float y, Size within):
-    let cs = measure(c, Prop(w = within.w, h = within.h))
-    place(c, x + (within.w - cs.w) / 2.0, y + (within.h - cs.h) / 2.0, cs)
+def Placed placeChild(Mounted c, float x, float y, Size within, mut Memo memo):
+    let cs = sizeOf(c, Prop(w = within.w, h = within.h), memo)
+    placeIn(c, x + (within.w - cs.w) / 2.0, y + (within.h - cs.h) / 2.0, cs, memo)
 
 pub def Placed place(Mounted n, float x, float y, Size size):
+    mut memo = Memo()
+    placeIn(n, x, y, size, memo)
+
+def Placed placeIn(Mounted n, float x, float y, Size size, mut Memo memo):
     mut node = Placed(id = n.id, kind = n.kind, x = x, y = y, w = size.w, h = size.h, theme = n.theme)
     node.props = n.props
     if n.kind == "Text":
@@ -825,44 +1043,47 @@ pub def Placed place(Mounted n, float x, float y, Size size):
         node.x = x + dx
         node.y = y + dy
         if hasChild(n):
-            let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
-            node.children.push(place(n.children[0], x + dx, y + dy, cs))
+            let cs = sizeOf(n.children[0], Prop(w = size.w, h = size.h), memo)
+            node.children.push(placeIn(n.children[0], x + dx, y + dy, cs, memo))
         return node
     if isTransparent(n):
         if hasChild(n):
-            let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
-            node.children.push(place(n.children[0], x, y, cs))
+            let cs = sizeOf(n.children[0], Prop(w = size.w, h = size.h), memo)
+            node.children.push(placeIn(n.children[0], x, y, cs, memo))
         return node
     let k = n.kind
     if k == "Padding":
         let i = numProp(n, "insets") else (0.0)
-        let cs = measure(n.children[0], Prop(w = nonNeg(size.w - 2.0 * i), h = nonNeg(size.h - 2.0 * i)))
-        node.children.push(place(n.children[0], x + i, y + i, cs))
+        let cs = sizeOf(n.children[0], Prop(w = nonNeg(size.w - 2.0 * i), h = nonNeg(size.h - 2.0 * i)), memo)
+        node.children.push(placeIn(n.children[0], x + i, y + i, cs, memo))
     elif k == "Sheet":
         # Contributes no bounds: its content is placed at its own size (centered in the window later).
         for c in n.children:
-            let cs = measure(c, Prop(w = nil, h = nil))
-            node.children.push(place(c, x, y, cs))
+            let cs = sizeOf(c, Prop(w = nil, h = nil), memo)
+            node.children.push(placeIn(c, x, y, cs, memo))
     elif k == "Layer":
         let a = alignmentOf(n)
         for c in flatten(n):
-            let cs = measure(c, Prop(w = size.w, h = size.h))
-            node.children.push(place(c, x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs))
+            let cs = sizeOf(c, Prop(w = size.w, h = size.h), memo)
+            node.children.push(placeIn(c, x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs, memo))
     elif k == "Fill":
         let a = alignmentOf(n)
-        let cs = measure(n.children[0], Prop(w = size.w, h = size.h))
-        node.children.push(place(n.children[0], x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs))
+        let cs = sizeOf(n.children[0], Prop(w = size.w, h = size.h), memo)
+        node.children.push(placeIn(n.children[0], x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs, memo))
+    elif windows(n, memo):
+        placeWindowed(n, node, x, y, size, memo)
     elif (k == "List" or k == "MultiList"):
-        let neg = negotiate(n, false, nil, size.w)
+        let neg = negotiate(n, false, nil, size.w, memo)
+        let items = flatten(n)
         let keys = flattenKeys(n)
         let most = nonNeg(neg.total - size.h)
         let offset = clampTo(n.scroll, 0.0, most)
         node.props["scroll"] = "{offset}"
         node.props["scrollMax"] = "{most}"
         var rowY = y - offset
-        for i in 0..<neg.items.length:
+        for i in 0..<items.length:
             let sz = neg.sizes[i]
-            mut row = place(neg.items[i], x, rowY, sz)
+            mut row = placeIn(items[i], x, rowY, sz, memo)
             row.key = keys[i]
             node.children.push(row)
             rowY += neg.mains[i] + neg.gap
@@ -871,7 +1092,7 @@ pub def Placed place(Mounted n, float x, float y, Size size):
         var contentProp = Prop(w = size.w, h = nil)
         if !vertical:
             contentProp = Prop(w = nil, h = size.h)
-        let cs = measure(n.children[0], contentProp)
+        let cs = sizeOf(n.children[0], contentProp, memo)
         var extent = cs.h - size.h
         if !vertical:
             extent = cs.w - size.w
@@ -880,11 +1101,11 @@ pub def Placed place(Mounted n, float x, float y, Size size):
         node.props["scroll"] = "{offset}"
         node.props["scrollMax"] = "{most}"
         if vertical:
-            node.children.push(place(n.children[0], x, y - offset, cs))
+            node.children.push(placeIn(n.children[0], x, y - offset, cs, memo))
         else:
-            node.children.push(place(n.children[0], x - offset, y, cs))
+            node.children.push(placeIn(n.children[0], x - offset, y, cs, memo))
     elif k == "Frame":
-        node.children.push(placeChild(n.children[0], x, y, size))
+        node.children.push(placeChild(n.children[0], x, y, size, memo))
     elif k == "Row" or k == "Column":
         let isRow = k == "Row"
         var mainP = size.h
@@ -894,12 +1115,13 @@ pub def Placed place(Mounted n, float x, float y, Size size):
             mainP = size.w
             crossP = size.h
             crossExtent = size.h
-        let neg = negotiate(n, isRow, mainP, crossP)
+        let neg = negotiate(n, isRow, mainP, crossP, memo)
         let frac = alignFraction(n)
+        let items = flatten(n)
         var offset = 0.0
-        for i in 0..<neg.items.length:
+        for i in 0..<items.length:
             var sz = neg.sizes[i]
-            if neg.items[i].kind == "Separator":
+            if items[i].kind == "Separator":
                 # A separator spans the stack's whole cross extent.
                 if isRow:
                     sz = Size(w = sz.w, h = crossExtent)
@@ -910,9 +1132,9 @@ pub def Placed place(Mounted n, float x, float y, Size size):
                 crossSize = sz.h
             let crossPos = (crossExtent - crossSize) * frac
             if isRow:
-                node.children.push(place(neg.items[i], x + offset, y + crossPos, sz))
+                node.children.push(placeIn(items[i], x + offset, y + crossPos, sz, memo))
             else:
-                node.children.push(place(neg.items[i], x + crossPos, y + offset, sz))
+                node.children.push(placeIn(items[i], x + crossPos, y + offset, sz, memo))
             offset += neg.mains[i] + neg.gap
     node
 
@@ -947,69 +1169,42 @@ pub def Placed? topSheet(Placed p):
             found = deeper
     found
 
-# The marked text of an input-method composition, attached to its TextField as live prop overrides: the text, where
-# it is inserted (the caret) and its cursor.
-def Placed withComposition(Placed p, int node, string marked, int at, int cursor):
-    mut [Placed] kids = []
-    for c in p.children:
-        kids.push(withComposition(c, node, marked, at, cursor))
-    var live = p.live
+# Marks `node` (by id, there is one) with `marks` as its first live props, in place: only the nodes on the way down to it are
+# visited, nothing is rebuilt. `p` is the freshly laid out tree of this frame, nobody else holds it. True once found.
+def bool markLive(mut Placed p, int node, [PropValue] marks):
     if p.id == node:
-        # the composition's props come first; the field keeps its other live props (focus, caret)
-        mut composing = [PropValue(key = "marked", value = marked), PropValue(key = "markedAt", value = "{at}"), PropValue(key = "markedCursor", value = "{cursor}")]
+        mut live = [] as [PropValue]
+        for v in marks:
+            live.push(v)
         for v in p.live:
-            composing.push(v)
-        live = composing
-    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
+            live.push(v)
+        p.live = live
+        return true
+    for i in 0..<p.children.length:
+        if markLive(p.children[i], node, marks):
+            return true
+    false
 
-# The focused text field's caret and selection anchor (grapheme indices of its value), as live props `caret` and
-# `anchor`, so the painter can draw them.
-def Placed withCaret(Placed p, int node, int caret, int anchor):
-    mut kids = []
+# Whether any `Sheet` of the tree is presented (has content): the only case `withSheets` has anything to do.
+def bool hasPresentedSheet(Placed p):
+    if p.kind == "Sheet" and p.children.length > 0:
+        return true
     for c in p.children:
-        kids.push(withCaret(c, node, caret, anchor))
-    var live = p.live
-    if p.id == node:
-        mut shown = [PropValue(key = "caret", value = "{caret}"), PropValue(key = "anchor", value = "{anchor}")]
-        for v in p.live:
-            shown.push(v)
-        live = shown
-    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
-
-# The keyboard-focused control, marked with a live `focused` prop so the painter draws its focus ring.
-def Placed withFocus(Placed p, int node):
-    mut [Placed] kids = []
-    for c in p.children:
-        kids.push(withFocus(c, node))
-    var live = p.live
-    if p.id == node:
-        mut marked = [PropValue(key = "focused", value = "true")]
-        for v in p.live:
-            marked.push(v)
-        live = marked
-    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
-
-# The control under the pointer, marked with a live `hovered` prop so the painter shades it.
-def Placed withHover(Placed p, int node):
-    mut kids = []
-    for c in p.children:
-        kids.push(withHover(c, node))
-    var live = p.live
-    if p.id == node:
-        mut marked = [PropValue(key = "hovered", value = "true")]
-        for v in p.live:
-            marked.push(v)
-        live = marked
-    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = live)
+        if hasPresentedSheet(c):
+            return true
+    false
 
 # Lays out the whole window: the root gets the window as its proposal.
 pub def Placed? layout(Runtime rt, float width, float height):
     if let r = rt.root:
-        let size = measure(r, Prop(w = width, h = height))
-        var placed = withSheets(place(r, 0.0, 0.0, size), width, height)
+        mut memo = Memo(windowed = true, memory = rt.layoutMemory)
+        let size = sizeOf(r, Prop(w = width, h = height), memo)
+        var placed = placeIn(r, 0.0, 0.0, size, memo)
+        if hasPresentedSheet(placed):
+            placed = withSheets(placed, width, height)
         if let f = rt.focus:
             if rt.valid(f):
-                placed = withFocus(placed, f.id)
+                _ = markLive(placed, f.id, [PropValue(key = "focused", value = "true")])
                 if let field = rt.find(f.id):
                     if field.kind == "TextField":
                         let valueLen = (field.props["value"] else ("")).graphemeCount
@@ -1019,10 +1214,10 @@ pub def Placed? layout(Runtime rt, float width, float height):
                         var anchor = rt.read(f, "anchor") else (-1)
                         if anchor < 0 or anchor > valueLen:
                             anchor = caret
-                        placed = withCaret(placed, f.id, caret, anchor)
+                        _ = markLive(placed, f.id, [PropValue(key = "caret", value = "{caret}"), PropValue(key = "anchor", value = "{anchor}")])
         if let hv = rt.hover:
             if rt.valid(hv):
-                placed = withHover(placed, hv.id)
+                _ = markLive(placed, hv.id, [PropValue(key = "hovered", value = "true")])
         if let c = rt.composition:
             var at = 0
             if let field = rt.find(c.node):
@@ -1032,6 +1227,6 @@ pub def Placed? layout(Runtime rt, float width, float height):
                     let stored = rt.read(h, "caret") else (-1)
                     if stored >= 0 and stored <= valueLen:
                         at = stored
-            return withComposition(placed, c.node, c.text, at, c.cursor)
+            _ = markLive(placed, c.node, [PropValue(key = "marked", value = c.text), PropValue(key = "markedAt", value = "{at}"), PropValue(key = "markedCursor", value = "{c.cursor}")])
         return placed
     nil

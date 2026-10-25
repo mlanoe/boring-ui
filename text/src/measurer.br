@@ -37,6 +37,10 @@ pub struct EngineMeasurer as TextMeasurer:
     pub req bool isRtl(string s):
         paragraphIsRtl(s)
 
+    # Where a line may break: swash's UAX #14 analysis.
+    pub req [int] breakPoints(string s):
+        lineBreakPoints(s)
+
     # (the caret and selection are placed with the real shaping: right-to-left and mixed text have a visual order)
     pub req float caretX(string s, int index, float size, int style):
         if self.hasCut(style):

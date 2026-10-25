@@ -70,7 +70,7 @@ def string summary(Runtime rt):
     Form().summary(state(rt))
 
 def [int] sel(Runtime rt):
-    selectionOf(rt.focus else (Handle(id = -1, generation = -1)), rt)
+    selectionOf(rt, rt.focus else (Handle(id = -1, generation = -1)))
 
 let host = ViewRoot(inner = FormBuilder())
 mut rt = Runtime()

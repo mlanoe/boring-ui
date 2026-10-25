@@ -16,6 +16,9 @@ struct StubMeasurer as TextMeasurer:
     pub req string ellipsis():
         "..."
 
+    pub req [int] breakPoints(string s):
+        ruleBreakPoints(s)
+
     pub req bool isRtl(string s):
         s.graphemeCount > 0 and s.graphemeSlice(0, 1) == "R"
 

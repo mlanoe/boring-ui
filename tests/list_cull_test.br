@@ -1,0 +1,53 @@
+# A long List paints only the rows near its viewport (src/scene.br, rowCullMargin); scrolling brings the others in.
+# Run: boring run tests/list_cull_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+
+view Rows:
+    int count
+    state string selection = ""
+
+    body():
+        List(selection = selection):
+            for i in 0..<count with i:
+                Text("row {i}")
+
+struct RowsRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Rows(count = 200)
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [string] texts([Command] list):
+    mut out = [] as [string]
+    for c in list:
+        if c.kind == "DrawText":
+            out.push(c.text)
+    out
+
+let host = ViewRoot(inner = RowsRoot())
+mut rt = Runtime()
+rt.start(host)
+
+# every row is laid out (the scroll extent needs them), but only those in view (plus the margin) are painted
+let placed = must(layout(rt, 200.0, 100.0))
+let list = placed.children[0]
+assert_eq(list.children.length, 200)
+let shown = texts(displayList(placed))
+assert(shown.length > 3)
+assert(shown.length < 20)
+assert_eq(shown[0], "row 0")
+assert(!shown.contains("row 150"))
+
+# scrolled to the end, the last rows are painted and the first are not
+_ = scrollBy(rt, host, placed, 10.0, 10.0, 0.0, 100000.0)
+let after = must(layout(rt, 200.0, 100.0))
+let later = texts(displayList(after))
+assert(later.contains("row 199"))
+assert(!later.contains("row 0"))
+assert(later.length < 20)
+print "list cull ok"
