@@ -399,24 +399,6 @@ pub struct LayoutMemory:
             widths[list] = w
             epoch += 1
 
-    def PlacedEntry? cachedPlaced(string key):
-        if let hit = placed[key]:
-            placedHits += 1
-            return hit
-        nil
-
-    def void storePlaced(string key, PlacedEntry e):
-        placed[key] = e
-
-    def Size? cachedSize(string key):
-        if let hit = sizes[key]:
-            sizeHits += 1
-            return hit
-        nil
-
-    def void storeSize(string key, Size s):
-        sizes[key] = s
-
     # Drops everything cached (a text measurer swapped, say).
     def void bump():
         epoch += 1

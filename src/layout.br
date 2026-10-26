@@ -806,24 +806,26 @@ def Placed placeCached(Mounted n, float x, float y, Size size, mut Memo memo):
         return placeIn(n, x, y, size, memo)
     let key = "{versionKey(n, memo)}|{size.w}|{size.h}"
     let epoch = memo.memory.epoch
-    if let hit = memo.memory.cachedPlaced(key):
+    if let hit = memo.memory.placed[key]:
+        memo.memory.placedHits += 1
         if hit.x == x and hit.y == y:
             return hit.placed.clone()
         return translated(hit.placed, x - hit.x, y - hit.y)
     let found = placeIn(n, x, y, size, memo)
     if memo.memory.epoch == epoch:
-        memo.memory.storePlaced(key, PlacedEntry(placed = found.clone(), x = x, y = y))
+        memo.memory.placed[key] = PlacedEntry(placed = found.clone(), x = x, y = y)
     found
 
 # The size of the window root under the window proposal, from the cache when the tree and the row memory are as they were.
 def Size rootSize(Mounted r, float width, float height, mut Memo memo):
     let key = "{versionKey(r, memo)}|root|{width}|{height}"
     let epoch = memo.memory.epoch
-    if let hit = memo.memory.cachedSize(key):
+    if let hit = memo.memory.sizes[key]:
+        memo.memory.sizeHits += 1
         return hit
     let found = sizeOf(r, Prop(w = width, h = height), memo)
     if memo.memory.epoch == epoch:
-        memo.memory.storeSize(key, found)
+        memo.memory.sizes[key] = found
     found
 
 # One row as a vertical list gives it room: the height it ideally takes under the list's width.
@@ -832,11 +834,12 @@ def Size rowSize(Mounted c, float w, mut Memo memo):
         return rowSizeUncached(c, w, memo)
     let key = "{versionKey(c, memo)}|{w}"
     let epoch = memo.memory.epoch
-    if let hit = memo.memory.cachedSize(key):
+    if let hit = memo.memory.sizes[key]:
+        memo.memory.sizeHits += 1
         return hit
     let found = rowSizeUncached(c, w, memo)
     if memo.memory.epoch == epoch:
-        memo.memory.storeSize(key, found)
+        memo.memory.sizes[key] = found
     found
 
 def Size rowSizeUncached(Mounted c, float w, mut Memo memo):
