@@ -156,7 +156,10 @@ def void textInput(mut Runtime rt, Builder host, string marked, int markedEnd, s
 
 # A request from the screen reader (`screen.accessibilityRequests`). The host reports a click as "activate" whatever
 # the control: a toggle takes it as its own "toggle". True when the runtime acted on it (the window must be drawn again).
-def bool serveRequest(mut Runtime rt, Builder host, int id, string action, string arg):
+# `placed` is the last frame laid out: the one the screen reader saw, which "scrollIntoView" measures against.
+def bool serveRequest(mut Runtime rt, Builder host, Placed placed, int id, string action, string arg):
+    if action == "scrollIntoView":
+        return axScrollIntoView(rt, placed, id)
     var wanted = action
     if action == "activate":
         if let node = rt.find(id):
@@ -235,6 +238,7 @@ let bins = bin(frame, width, height)
 
 mut pace = Motion()
 begin(pace, placedOf(rt, width, height))
+var lastShown = placedOf(rt, width, height)
 
 let screen = Screen(Dimension(width, height), title = "boring-ui Todo", redraw = "demand", hidpi = true)
 mut k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins.list, bins.across, frame.count, width, height)
@@ -257,7 +261,7 @@ kernel:
         # what a screen reader asked for (focus, press, toggle, set the text, step a slider) acts like the same input would
         var served = false
         for r in screen.accessibilityRequests:
-            served = serveRequest(rt, host, r.id, r.action, r.arg) or served
+            served = serveRequest(rt, host, lastShown, r.id, r.action, r.arg) or served
         # a quiet frame (a redraw asked for by an animation, no input since the last one) leaves the runtime as it was:
         # nothing to hit-test, and the caret has not moved, so neither lays the window out again
         let quiet = !screen.resized and !screen.mouse_pressed("left") and !screen.mouse_released("left") and !screen.mouse_pressed("right") and !screen.mouse_released("right") and !screen.mouse.right and screen.mouse.scroll_x == 0.0 and screen.mouse.scroll_y == 0.0 and !screen.touchStarted and !screen.touching and !screen.touchEnded and !screen.touchCancelled and screen.key_events.length == 0 and screen.text == "" and screen.marked == "" and !served and !pace.rolling and !pace.dirty and mx == pace.lastX and my == pace.lastY and pace.caretKnown
@@ -300,6 +304,7 @@ kernel:
         # the accessibility tree (laid out only while an assistive technology is connected)
         screen.setAccessibility(axFrame(rt, shown))
         let next = encodeFrame(shown, images, cache, scale, screen.width, screen.height)
+        lastShown = shown
         let nextBins = bin(next, screen.width, screen.height)
         k.f = next.f
         k.u = next.u
