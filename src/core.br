@@ -1,6 +1,7 @@
 use boring.ui.*
 use ui.theme.*
 use ui.anim.*
+use ui.layout.*
 
 # boring-ui headless reactive core (docs/design-notes/boring-ui-draft.md, "Runtime architecture",
 # "Mounted tree and update pass", "Identity & lifecycle", "UI events and batched refresh").
@@ -59,6 +60,14 @@ pub struct Mounted:
     # core while it reconciles so layout and painting read tokens off the node itself (draft: "Nearest
     # provider wins").
     pub var Theme theme = Theme()
+    # Bumped whenever anything layout reads changes in this node or below it (props, theme, scroll, the child list or a
+    # child's own `rev`): with `id` and `generation` it names one version of the subtree, the key of layout's cross-frame
+    # cache (see `LayoutMemory`).
+    pub var int rev = 0
+
+# Whether two themes lay out and paint the same (the text measurer aside: swapping that is `layoutMemory.bump()`).
+pub def bool sameTheme(Theme a, Theme b):
+    a.name == b.name and a.dark == b.dark and a.contrast == b.contrast and a.textScale == b.textScale and a.colors == b.colors and a.metrics == b.metrics and a.fontSizes == b.fontSizes and a.buttonStyles == b.buttonStyles
 
 # The runtime's view of a tree of lowered `View`s: native views become `Desc`s eagerly, a
 # composite view stays a leaf carrying its `View` until it is expanded against its mounted state.
@@ -359,21 +368,65 @@ pub struct EditHistory:
 pub struct LayoutMemory:
     var mut {string=float} rows = {=}
     var mut {int=float} widths = {=}
+    # Bumped whenever the rows/widths above change: what layout worked out under one epoch is only valid under that epoch.
+    var int epoch = 0
+    # The cross-frame cache (see "Layout cache" in layout.br): the placed subtree of a node version under a size, and the
+    # measured height of a list row, both keyed by `id.generation.rev.epoch`. Trimmed when it grows past a few frames' worth.
+    var mut {string=PlacedEntry} placed = {=}
+    var mut {string=Size} sizes = {=}
+    # How many cached subtrees / row sizes were reused since the runtime started (tests and benchmarks read these).
+    var int placedHits = 0
+    var int sizeHits = 0
 
     def float? row(string key):
         rows[key]
 
     def void setRow(string key, float h):
-        rows[key] = h
+        if (rows[key] else (-1.0)) != h:
+            rows[key] = h
+            epoch += 1
 
     def void forgetRow(string key):
-        rows.remove(key)
+        if rows[key] != nil:
+            rows.remove(key)
+            epoch += 1
 
     def float widthOf(int list):
         widths[list] else (-1.0)
 
     def void setWidth(int list, float w):
-        widths[list] = w
+        if self.widthOf(list) != w:
+            widths[list] = w
+            epoch += 1
+
+    def PlacedEntry? cachedPlaced(string key):
+        if let hit = placed[key]:
+            placedHits += 1
+            return hit
+        nil
+
+    def void storePlaced(string key, PlacedEntry e):
+        placed[key] = e
+
+    def Size? cachedSize(string key):
+        if let hit = sizes[key]:
+            sizeHits += 1
+            return hit
+        nil
+
+    def void storeSize(string key, Size s):
+        sizes[key] = s
+
+    # Drops everything cached (a text measurer swapped, say).
+    def void bump():
+        epoch += 1
+        placed = {=}
+        sizes = {=}
+
+    def void trim():
+        if placed.length > 600 or sizes.length > 6000:
+            placed = {=}
+            sizes = {=}
 
 pub struct Runtime:
     pub var Mounted? root = nil
@@ -540,10 +593,16 @@ pub struct Runtime:
             return
         let below = self.scopeBelow(lastBuilt(n), scope)
         mut [Mounted] next = []
+        var changed = false
         for c in n.children:
+            let oldRev = c.rev
             mut kept = c
             self.partialIn(kept, ids, ctx, below)
+            if kept.rev != oldRev:
+                changed = true
             next.push(kept)
+        if changed:
+            n.rev += 1
         n.children = next
 
     # True when the next pass must rebuild the whole window: nothing mounted yet, or the root itself is dirty.
@@ -686,9 +745,11 @@ pub struct Runtime:
         var fired = false
         if node.kind == "AnimationScope":
             fired = (node.props["value"] else ("")) != (d.props["value"] else (""))
+        let nextTheme = themeIn(scope)
+        var changed = node.props != d.props or !sameTheme(node.theme, nextTheme)
         node.props = d.props
         node.control = d.control
-        node.theme = themeIn(scope)
+        node.theme = nextTheme
         if let v = d.view:
             node.view = v
         let kids = self.childrenOf(node.id, d, scope)
@@ -709,23 +770,38 @@ pub struct Runtime:
             if let old = byIdentity[identity]:
                 _ = used.add(identity)
                 if old.kind == child.kind:
+                    let oldRev = old.rev
                     mut kept = old
                     self.reconcileNode(kept, child, ctx, below)
+                    if kept.rev != oldRev:
+                        changed = true
                     next.push(kept)
                 else:
                     self.retire(old, node.id, ctx)
                     next.push(self.create(child, site, ctx, below))
+                    changed = true
             else:
                 if let back = self.takeRetired(node.id, identity, child.kind):
                     # The identity returns before its removal finished: the same mounted node, no second mount.
                     mut revived = back
                     self.reconcileNode(revived, child, ctx, below)
                     next.push(revived)
+                    changed = true
                 else:
                     next.push(self.create(child, site, ctx, below))
+                    changed = true
         for old in node.children:
             if !used.contains("{old.site}|{old.key}"):
                 self.retire(old, node.id, ctx)
+                changed = true
+        if next.length != node.children.length:
+            changed = true
+        else:
+            for i in 0..<next.length:
+                if next[i].id != node.children[i].id or next[i].generation != node.children[i].generation:
+                    changed = true
+        if changed:
+            node.rev += 1
         node.children = next
         if fired:
             animatingScopes -= 1
@@ -1275,9 +1351,14 @@ pub struct Runtime:
         for c in n.children:
             kids.push(self.withScroll(c, id, offset))
         var next = n.scroll
-        if n.id == id:
+        var rev = n.rev
+        if n.id == id and offset != n.scroll:
             next = offset
-        Mounted(id = n.id, generation = n.generation, kind = n.kind, site = n.site, key = n.key, children = kids, props = n.props, view = n.view, control = n.control, scroll = next, theme = n.theme)
+            rev += 1
+        for i in 0..<kids.length:
+            if kids[i].rev != n.children[i].rev:
+                rev += 1
+        Mounted(id = n.id, generation = n.generation, kind = n.kind, site = n.site, key = n.key, children = kids, props = n.props, view = n.view, control = n.control, scroll = next, theme = n.theme, rev = rev)
 
     # ── bind projections ──────────────────────────────────────────────────────
 

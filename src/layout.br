@@ -77,6 +77,12 @@ pub struct Placed:
     pub var bool ghost = false
     pub var [PropValue] live = []
 
+# A placed subtree kept across frames, with the origin it was placed at (translation moves it).
+pub struct PlacedEntry:
+    pub Placed placed
+    pub float x
+    pub float y
+
 # What one layout pass has already worked out, by node id and proposal: a stack asks its children for their spans, then for
 # their sizes, and placing asks again, so without this a node is negotiated once per question per level (the cost grows with
 # the depth of the tree). A pass never outlives its tree: a fresh `Memo` per `layout`, `measure` or `place` call.
@@ -783,8 +789,57 @@ def bool windows(Mounted n, mut Memo memo):
     let slots = slotsOf(n, memo)
     slots.keys.length > windowedRows and !slots.nested
 
+# ── layout cache ──────────────────────────────────────────────────────────────────────────────
+# A frame that changed little re-lays-out only what changed. `Mounted.rev` names one version of a subtree (id, generation, rev:
+# the runtime bumps `rev` on a node and its ancestors when props, theme, scroll or children change) and the runtime's
+# `LayoutMemory.epoch` names the state of the remembered row heights, so (id, generation, rev, epoch, size) fixes a placed
+# subtree. Only runtime-backed passes (`layout`) use it, and only at the window root and at the rows of a windowed list: a
+# cache entry per node would hold every subtree once per ancestor. Placement does not depend on the absolute position, so a
+# hit moves by translation; an entry is stored only when the epoch did not change while it was computed (what it holds then
+# came from a memory that no longer exists).
+
+def string versionKey(Mounted n, mut Memo memo):
+    "{n.id}.{n.generation}.{n.rev}.{memo.memory.epoch}"
+
+def Placed placeCached(Mounted n, float x, float y, Size size, mut Memo memo):
+    if !memo.windowed:
+        return placeIn(n, x, y, size, memo)
+    let key = "{versionKey(n, memo)}|{size.w}|{size.h}"
+    let epoch = memo.memory.epoch
+    if let hit = memo.memory.cachedPlaced(key):
+        if hit.x == x and hit.y == y:
+            return hit.placed.clone()
+        return translated(hit.placed, x - hit.x, y - hit.y)
+    let found = placeIn(n, x, y, size, memo)
+    if memo.memory.epoch == epoch:
+        memo.memory.storePlaced(key, PlacedEntry(placed = found.clone(), x = x, y = y))
+    found
+
+# The size of the window root under the window proposal, from the cache when the tree and the row memory are as they were.
+def Size rootSize(Mounted r, float width, float height, mut Memo memo):
+    let key = "{versionKey(r, memo)}|root|{width}|{height}"
+    let epoch = memo.memory.epoch
+    if let hit = memo.memory.cachedSize(key):
+        return hit
+    let found = sizeOf(r, Prop(w = width, h = height), memo)
+    if memo.memory.epoch == epoch:
+        memo.memory.storeSize(key, found)
+    found
+
 # One row as a vertical list gives it room: the height it ideally takes under the list's width.
 def Size rowSize(Mounted c, float w, mut Memo memo):
+    if !memo.windowed:
+        return rowSizeUncached(c, w, memo)
+    let key = "{versionKey(c, memo)}|{w}"
+    let epoch = memo.memory.epoch
+    if let hit = memo.memory.cachedSize(key):
+        return hit
+    let found = rowSizeUncached(c, w, memo)
+    if memo.memory.epoch == epoch:
+        memo.memory.storeSize(key, found)
+    found
+
+def Size rowSizeUncached(Mounted c, float w, mut Memo memo):
     if c.kind == "Separator":
         return Size(w = 0.0, h = c.theme.metric(MetricRole.SeparatorThickness))
     let s = span(c, false, w, memo)
@@ -882,7 +937,7 @@ def void placeWindowed(Mounted n, mut Placed node, float x, float y, Size size, 
     for i in 0..<count:
         let rowY = y - offset + rowTop
         if fresh[i]:
-            mut row = placeIn(rowAt(n, slots, i), x, rowY, sizes[i], memo)
+            mut row = placeCached(rowAt(n, slots, i), x, rowY, sizes[i], memo)
             row.key = keys[i]
             node.children.push(row)
         else:
@@ -1198,8 +1253,9 @@ def bool hasPresentedSheet(Placed p):
 pub def Placed? layout(Runtime rt, float width, float height):
     if let r = rt.root:
         mut memo = Memo(windowed = true, memory = rt.layoutMemory)
-        let size = sizeOf(r, Prop(w = width, h = height), memo)
-        var placed = placeIn(r, 0.0, 0.0, size, memo)
+        let size = rootSize(r, width, height, memo)
+        var placed = placeCached(r, 0.0, 0.0, size, memo)
+        memo.memory.trim()
         if hasPresentedSheet(placed):
             placed = withSheets(placed, width, height)
         if let f = rt.focus:

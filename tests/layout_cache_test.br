@@ -1,0 +1,96 @@
+# The layout cache (src/layout.br, "Layout cache"): a frame that changed little reuses the placed subtrees of what did not
+# change (the window root, the rows of a windowed list), and what it reuses is exactly what a cold layout would produce.
+# Run: boring run tests/layout_cache_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+
+view Rows:
+    int count
+    string mark
+    state string selection = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            Text("header {mark}")
+            List(selection = selection):
+                for i in 0..<count with i:
+                    if i == 3:
+                        Text("row {i} {mark}")
+                    else:
+                        Text("row {i}")
+
+struct RowsRoot as ViewBuilder:
+    int count
+    string mark
+    req View buildView(mut Runtime rt): Rows(count = count, mark = mark)
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def bool near(float a, float b):
+    a - b < 0.01 and b - a < 0.01
+
+def bool same(Placed a, Placed b):
+    if a.id != b.id or a.kind != b.kind or !near(a.x, b.x) or !near(a.y, b.y) or !near(a.w, b.w) or !near(a.h, b.h):
+        return false
+    if a.key != b.key or a.props != b.props or a.children.length != b.children.length:
+        return false
+    for i in 0..<a.children.length:
+        if !same(a.children[i], b.children[i]):
+            return false
+    true
+
+# what a cold layout gives: the cache emptied first (the row heights stay)
+def Placed cold(mut Runtime rt, float w, float h):
+    rt.layoutMemory.bump()
+    must(layout(rt, w, h))
+
+let host = ViewRoot(inner = RowsRoot(count = 500, mark = "a"))
+mut rt = Runtime()
+rt.start(host)
+# the first frames measure rows and settle the remembered heights
+var frame = must(layout(rt, 200.0, 100.0))
+frame = must(layout(rt, 200.0, 100.0))
+frame = must(layout(rt, 200.0, 100.0))
+
+# unchanged tree: the whole window comes from the cache and is the cold layout
+let hitsBefore = rt.layoutMemory.placedHits
+let warm = must(layout(rt, 200.0, 100.0))
+assert(rt.layoutMemory.placedHits > hitsBefore)
+assert(same(warm, cold(rt, 200.0, 100.0)))
+
+# hover/focus marks are applied on a copy: the cache never keeps them
+frame = must(layout(rt, 200.0, 100.0))
+assert(same(frame, warm))
+
+# scrolled: the rows come from the cache, moved
+_ = scrollBy(rt, host, warm, 10.0, 40.0, 0.0, 40.0)
+frame = must(layout(rt, 200.0, 100.0))
+frame = must(layout(rt, 200.0, 100.0))
+let rowHitsBefore = rt.layoutMemory.placedHits
+let scrolled = must(layout(rt, 200.0, 100.0))
+assert(scrolled.children[0].children[1].props["scroll"] != nil)
+assert(same(scrolled, cold(rt, 200.0, 100.0)))
+frame = must(layout(rt, 200.0, 100.0))
+_ = scrollBy(rt, host, frame, 10.0, 40.0, 0.0, 17.0)
+let moved = must(layout(rt, 200.0, 100.0))
+assert(rt.layoutMemory.placedHits > rowHitsBefore)
+assert(same(moved, cold(rt, 200.0, 100.0)))
+
+# one row changes: only it (and its ancestors) are laid out again, the others are reused
+let sizeHitsBefore = rt.layoutMemory.sizeHits
+let changed = ViewRoot(inner = RowsRoot(count = 500, mark = "b"))
+rt.start(changed)
+frame = must(layout(rt, 200.0, 100.0))
+frame = must(layout(rt, 200.0, 100.0))
+assert(rt.layoutMemory.sizeHits > sizeHitsBefore)
+assert(same(frame, cold(rt, 200.0, 100.0)))
+
+# a different window size is a different layout
+let narrow = must(layout(rt, 120.0, 60.0))
+assert(near(narrow.w, 120.0))
+assert(same(narrow, cold(rt, 120.0, 60.0)))
+print "layout cache ok"

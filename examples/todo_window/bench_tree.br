@@ -60,6 +60,11 @@ def void run(int rows, int w, int h) throws:
     let t2 = Instant.now()
     let again = placedOf(rt, w, h)
     let layoutAgain = msf(t2)
+    # the remembered row heights settled on the frames above: this one is served from the layout cache
+    _ = placedOf(rt, w, h)
+    let t2b = Instant.now()
+    _ = placedOf(rt, w, h)
+    let layoutCached = msf(t2b)
     let t3 = Instant.now()
     let cmds = displayList(again)
     let listMs = msf(t3)
@@ -85,7 +90,7 @@ def void run(int rows, int w, int h) throws:
     let pic2 = rasterizeTiledWith(glyphs2, [] as [Bitmap], cache.atlas, w * 2, h * 2)
     let kernelWarm = msf(t10)
     print "rows={rows} nodes={countNodes(placed)} commands={cmds.length} glyph commands={glyphs2.length}"
-    print "  start {startMs} ms, layout first {layoutFirst} ms, layout again {layoutAgain} ms, rt.root read {rootMs} ms"
+    print "  start {startMs} ms, layout first {layoutFirst} ms, layout again {layoutAgain} ms, layout cached {layoutCached} ms, rt.root read {rootMs} ms"
     print "  displayList {listMs} ms, scaled {scaleMs} ms, glyphify cold {glyphMs} ms warm {glyphWarm} ms"
     print "  encode {encodeMs} ms, bin {binMs} ms, kernel (with upload) first {kernelMs} ms, second {kernelWarm} ms"
 
