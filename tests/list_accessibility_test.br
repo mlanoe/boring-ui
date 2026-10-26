@@ -1,0 +1,75 @@
+# A windowed List in the accessibility tree: the list knows its row count, every row its position, and the rows that are not
+# laid out are placeholders (bounds only) that can be scrolled into view.
+# Run: boring run tests/list_accessibility_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.semantics.*
+use ui.accessibility.*
+
+view Rows:
+    int count
+    state string selection = ""
+
+    body():
+        List(selection = selection):
+            for i in 0..<count with i:
+                Text("row {i}")
+
+struct RowsRoot as ViewBuilder:
+    int count
+    req View buildView(mut Runtime rt): Rows(count = count)
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def AxNode? byId([AxNode] nodes, int id):
+    for n in nodes:
+        if n.id == id:
+            return n
+    nil
+
+def AxNode firstOfRole([AxNode] nodes, string role):
+    for n in nodes:
+        if n.role == role:
+            return n
+    nodes[0]
+
+def int count([AxNode] nodes, string role, bool placeholder):
+    var c = 0
+    for n in nodes:
+        if n.role == role and n.placeholder == placeholder:
+            c += 1
+    c
+
+let host = ViewRoot(inner = RowsRoot(count = 500))
+mut rt = Runtime()
+rt.start(host)
+var placed = must(layout(rt, 200.0, 100.0))
+placed = must(layout(rt, 200.0, 100.0))
+let nodes = axFrame(rt, placed)
+
+let list = firstOfRole(nodes, "list")
+assert_eq(list.setSize, 500)
+assert_eq(list.children.length, 500)
+# the rows in view carry their text, the others are placeholders; both know their position
+assert(count(nodes, "staticText", false) > 0 and count(nodes, "staticText", false) < 60)
+assert(count(nodes, "listItem", true) > 400)
+let firstRow = byId(nodes, list.children[0])
+assert_eq(firstRow?.posInSet else (-1), 1)
+assert_eq(firstRow?.placeholder else (true), false)
+let lastId = list.children[499]
+let last = byId(nodes, lastId)
+assert_eq(last?.posInSet else (-1), 500)
+assert_eq(last?.placeholder else (false), true)
+assert((last?.actions else ("")).contains("scrollIntoView"))
+
+# asking for the last row to be scrolled into view lays it out
+assert(axScrollIntoView(rt, placed, lastId))
+placed = must(layout(rt, 200.0, 100.0))
+placed = must(layout(rt, 200.0, 100.0))
+let after = axFrame(rt, placed)
+assert_eq(byId(after, lastId)?.placeholder else (true), false)
+assert(!axScrollIntoView(rt, placed, 987654))
+print "list accessibility ok"

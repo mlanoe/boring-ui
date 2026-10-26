@@ -32,6 +32,11 @@ pub struct SemNode:
     pub var bool focused = false
     # Inside a `Disabled` subtree: still in the tree and readable, but offers no actions.
     pub var bool disabled = false
+    # A row of a `List`: its 1-based position among the list's rows (0 elsewhere), and on the list itself the row count.
+    pub var int posInSet = 0
+    pub var int setSize = 0
+    # A row of a windowed list that is not laid out (no content yet): it exists, with its bounds, and offers "scrollIntoView".
+    pub var bool placeholder = false
     pub var mut [string] actions = []
     pub var mut [mut SemNode] children = []
 
@@ -44,6 +49,10 @@ pub struct Semantics:
 def mut SemNode node(Placed p, string role):
     mut n = SemNode(id = p.id, role = role, x = p.x, y = p.y, w = p.w, h = p.h)
     n
+
+# A list's separators and spacers are layout, not rows of the set.
+def bool countsAsRow(Placed c):
+    c.kind != "Separator" and c.kind != "Spacer"
 
 def bool isModifier(string kind):
     kind == "AccessibilityLabel" or kind == "AccessibilityHint" or kind == "AccessibilityHeading"
@@ -143,8 +152,32 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors, bool off):
     if (k == "List" or k == "MultiList"):
         mut l = node(p, "list")
         l.value = (p.props["selection"] else ("")).split("\n").join(",")
+        var rows = 0
         for c in p.children:
-            walk(c, l.children, errors, off)
+            if countsAsRow(c):
+                rows += 1
+        l.setSize = rows
+        var pos = 0
+        for c in p.children:
+            if !countsAsRow(c):
+                walk(c, l.children, errors, off)
+            elif (c.props["virtual"] else ("false")) == "true":
+                # Off-window rows keep their place in the set so assistive technology knows the list is longer than what is shown.
+                pos += 1
+                mut item = node(c, "listItem")
+                item.posInSet = pos
+                item.placeholder = true
+                if !off:
+                    item.actions = ["scrollIntoView"]
+                l.children.push(item)
+            else:
+                pos += 1
+                mut inner = []
+                walk(c, inner, errors, off)
+                for n in inner:
+                    mut m = n
+                    m.posInSet = pos
+                    l.children.push(m)
         out.push(l)
         return
     if k == "Sheet" and p.children.length > 0:
@@ -193,6 +226,12 @@ pub def [string] describeTree([SemNode] nodes, int depth):
             line = "{line} marked='{n.marked}'"
         if n.level > 0:
             line = "{line} level={n.level}"
+        if n.setSize > 0:
+            line = "{line} rows={n.setSize}"
+        if n.posInSet > 0:
+            line = "{line} row={n.posInSet}"
+        if n.placeholder:
+            line = "{line} placeholder"
         line = "{line} [{n.x},{n.y} {n.w}x{n.h}]"
         if n.focused:
             line = "{line} focused"

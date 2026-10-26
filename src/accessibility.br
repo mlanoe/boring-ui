@@ -26,6 +26,11 @@ pub struct AxNode:
     pub float h
     pub bool focused
     pub bool disabled
+    # A list row's 1-based position in its list (0 elsewhere), the list's row count, and whether the row is a placeholder
+    # for an off-window row of a windowed list (bounds only: ask "scrollIntoView" to have it laid out).
+    pub var int posInSet = 0
+    pub var int setSize = 0
+    pub var bool placeholder = false
     # the actions the node accepts, comma separated ("focus,activate")
     pub string actions
     # the ids of the children, in order
@@ -36,7 +41,7 @@ def void flattenInto([SemNode] nodes, int parent, mut [AxNode] out):
         var kids = [] as [int]
         for c in n.children:
             kids.push(c.id)
-        out.push(AxNode(id = n.id, parent = parent, role = n.role, name = n.name, value = n.value, hint = n.hint, marked = n.marked, level = n.level, x = n.x, y = n.y, w = n.w, h = n.h, focused = n.focused, disabled = n.disabled, actions = n.actions.join(","), children = kids))
+        out.push(AxNode(id = n.id, parent = parent, role = n.role, name = n.name, value = n.value, hint = n.hint, marked = n.marked, level = n.level, x = n.x, y = n.y, w = n.w, h = n.h, focused = n.focused, disabled = n.disabled, actions = n.actions.join(","), children = kids, posInSet = n.posInSet, setSize = n.setSize, placeholder = n.placeholder))
         flattenInto(n.children, n.id, out)
 
 # The flat tree of a semantic tree whose focus was marked (`markFocus`); `[]` for an empty window.
@@ -71,6 +76,28 @@ def bool offers(string kind, string action):
         return action == "setValue"
     if kind == "Slider":
         return action == "increment" or action == "decrement"
+    false
+
+# "scrollIntoView" on a row of a `List` (a placeholder of a windowed one, or any row partly out of view): scrolls the list
+# the least that brings the row into it, `placed` being the frame the assistive technology saw. False for an unknown node or
+# one that is not a list row.
+pub def bool axScrollIntoView(mut Runtime rt, Placed placed, int id):
+    scrollRowIn(rt, placed, id)
+
+def bool scrollRowIn(mut Runtime rt, Placed p, int id):
+    if p.kind == "List" or p.kind == "MultiList":
+        for c in p.children:
+            if c.id == id:
+                let scroll = (p.props["scroll"] else ("0")).parseFloat() else (0.0)
+                var target = scroll
+                if c.y < p.y:
+                    target = scroll + c.y - p.y
+                elif c.y + c.h > p.y + p.h:
+                    target = scroll + c.y + c.h - p.y - p.h
+                return rt.scrollTo(p.id, target)
+    for c in p.children:
+        if scrollRowIn(rt, c, id):
+            return true
     false
 
 # A request from an assistive technology: `action` on node `id` with an optional argument (the text for "setValue", the
