@@ -399,6 +399,13 @@ pub struct LayoutMemory:
             widths[list] = w
             epoch += 1
 
+    # A copy of the cached placed subtree under `key` (the lock is released on return: callers go on to read the memory).
+    def PlacedEntry? cachedPlaced(string key):
+        if let hit = placed[key]:
+            placedHits += 1
+            return hit
+        nil
+
     # Drops everything cached (a text measurer swapped, say).
     def void bump():
         epoch += 1
@@ -586,6 +593,13 @@ pub struct Runtime:
         if changed:
             n.rev += 1
         n.children = next
+
+    # Names the version of the mounted tree without reading it (reading `root` copies the whole tree): "" when nothing is
+    # mounted. Layout keys its window-level cache with it.
+    req string rootStamp():
+        if root == nil:
+            return ""
+        "{root?.id else (-1)}.{root?.generation else (-1)}.{root?.rev else (-1)}"
 
     # True when the next pass must rebuild the whole window: nothing mounted yet, or the root itself is dirty.
     def bool wholeWindowDirty():

@@ -1252,40 +1252,56 @@ def bool hasPresentedSheet(Placed p):
             return true
     false
 
-# Lays out the whole window: the root gets the window as its proposal.
+# Lays out the whole window: the root gets the window as its proposal. An unchanged tree (same version, same remembered row
+# heights, same window) is served from the cache without even reading the mounted tree.
 pub def Placed? layout(Runtime rt, float width, float height):
+    let stamp = rt.rootStamp()
+    if stamp == "":
+        return nil
+    mut memory = rt.layoutMemory
+    let key = "win|{stamp}|{memory.epoch}|{width}|{height}"
+    if let hit = memory.cachedPlaced(key):
+        return finishLayout(rt, hit.placed.clone(), width, height)
+    let epoch = memory.epoch
     if let r = rt.root:
         mut memo = Memo(windowed = true, memory = rt.layoutMemory)
         let size = rootSize(r, width, height, memo)
-        var placed = placeCached(r, 0.0, 0.0, size, memo)
+        let placed = placeCached(r, 0.0, 0.0, size, memo)
         memo.memory.trim()
-        if hasPresentedSheet(placed):
-            placed = withSheets(placed, width, height)
-        if let f = rt.focus:
-            if rt.valid(f):
-                _ = markLive(placed, f.id, [PropValue(key = "focused", value = "true")])
-                if let field = rt.find(f.id):
-                    if field.kind == "TextField":
-                        let valueLen = (field.props["value"] else ("")).graphemeCount
-                        var caret = rt.read(f, "caret") else (-1)
-                        if caret < 0 or caret > valueLen:
-                            caret = valueLen
-                        var anchor = rt.read(f, "anchor") else (-1)
-                        if anchor < 0 or anchor > valueLen:
-                            anchor = caret
-                        _ = markLive(placed, f.id, [PropValue(key = "caret", value = "{caret}"), PropValue(key = "anchor", value = "{anchor}")])
-        if let hv = rt.hover:
-            if rt.valid(hv):
-                _ = markLive(placed, hv.id, [PropValue(key = "hovered", value = "true")])
-        if let c = rt.composition:
-            var at = 0
-            if let field = rt.find(c.node):
-                let valueLen = (field.props["value"] else ("")).graphemeCount
-                at = valueLen
-                if let h = rt.handle(c.node):
-                    let stored = rt.read(h, "caret") else (-1)
-                    if stored >= 0 and stored <= valueLen:
-                        at = stored
-            _ = markLive(placed, c.node, [PropValue(key = "marked", value = c.text), PropValue(key = "markedAt", value = "{at}"), PropValue(key = "markedCursor", value = "{c.cursor}")])
-        return placed
+        if memo.memory.epoch == epoch:
+            memo.memory.placed[key] = PlacedEntry(placed = placed.clone(), x = 0.0, y = 0.0)
+        return finishLayout(rt, placed, width, height)
     nil
+
+# What the live state adds to a placed window: presented sheets, the focus ring and caret, hover, a composition in progress.
+def Placed finishLayout(Runtime rt, Placed laidOut, float width, float height):
+    var placed = laidOut
+    if hasPresentedSheet(placed):
+        placed = withSheets(placed, width, height)
+    if let f = rt.focus:
+        if rt.valid(f):
+            _ = markLive(placed, f.id, [PropValue(key = "focused", value = "true")])
+            if let field = rt.find(f.id):
+                if field.kind == "TextField":
+                    let valueLen = (field.props["value"] else ("")).graphemeCount
+                    var caret = rt.read(f, "caret") else (-1)
+                    if caret < 0 or caret > valueLen:
+                        caret = valueLen
+                    var anchor = rt.read(f, "anchor") else (-1)
+                    if anchor < 0 or anchor > valueLen:
+                        anchor = caret
+                    _ = markLive(placed, f.id, [PropValue(key = "caret", value = "{caret}"), PropValue(key = "anchor", value = "{anchor}")])
+    if let hv = rt.hover:
+        if rt.valid(hv):
+            _ = markLive(placed, hv.id, [PropValue(key = "hovered", value = "true")])
+    if let c = rt.composition:
+        var at = 0
+        if let field = rt.find(c.node):
+            let valueLen = (field.props["value"] else ("")).graphemeCount
+            at = valueLen
+            if let h = rt.handle(c.node):
+                let stored = rt.read(h, "caret") else (-1)
+                if stored >= 0 and stored <= valueLen:
+                    at = stored
+        _ = markLive(placed, c.node, [PropValue(key = "marked", value = c.text), PropValue(key = "markedAt", value = "{at}"), PropValue(key = "markedCursor", value = "{c.cursor}")])
+    placed
