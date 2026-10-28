@@ -38,21 +38,24 @@ view WindowApp:
                                 Image(source = "photo.jpg", width = 96.0, height = 64.0, label = "Landscape")
                     TodoApp()
                     DisclosureGroup(title = "Controls"):
-                        Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
-                            stepped = v)
-                        ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")
-                        SegmentedControl(selected = segment, options = ["Day", "Week", "Month"], onSelect = (i):
-                            segment = i)
-                        Picker(selected = pick, options = ["Red", "Green", "Blue"], onSelect = (i):
-                            pick = i)
-                        TabView(selected = tab, titles = ["Info", "Work"], onSelect = (i):
-                            tab = i):
-                            Text(content = "Nothing is running.")
-                            Column(alignment = .Leading, spacing = 4.0):
-                                Button(label = (if busy: "Stop" else "Start"), onActivate = ():
-                                    onBusy(!busy))
-                                if busy:
-                                    IndeterminateBar(phase = phase, width = 200.0)
+                        Frame(maxHeight = 150.0):
+                            Scroll:
+                                Column(alignment = .Leading, spacing = 8.0):
+                                    Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
+                                        stepped = v)
+                                    ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")
+                                    SegmentedControl(selected = segment, options = ["Day", "Week", "Month"], onSelect = (i):
+                                        segment = i)
+                                    Picker(selected = pick, options = ["Red", "Green", "Blue"], onSelect = (i):
+                                        pick = i)
+                                    TabView(selected = tab, titles = ["Info", "Work"], onSelect = (i):
+                                        tab = i):
+                                        Text(content = "Nothing is running.")
+                                        Column(alignment = .Leading, spacing = 4.0):
+                                            Button(label = (if busy: "Stop" else "Start"), onActivate = ():
+                                                onBusy(!busy))
+                                            if busy:
+                                                IndeterminateBar(phase = phase, width = 200.0)
 
 struct AppRoot as ViewBuilder:
     Slot<bool>'actor busy = Slot(value = false)

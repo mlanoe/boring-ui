@@ -1,0 +1,39 @@
+# Opening the "Controls" panel of the window must not push the window's content past its bottom edge: the panel's content scrolls
+# in a bounded region and the header stays visible. Run from this directory:
+#   boring run controls_panel_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use pace
+use window_app
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+let host = ViewRoot(inner = AppRoot())
+mut rt = Runtime()
+rt.start(host)
+let before = placedOf(rt, 640, 360)
+let buttons = ofKind(before, "Button")
+let header = buttons[buttons.length - 1]
+assert_eq(header.props["label"] else (""), "▸ Controls")
+assert(click(rt, host, before, header.x + 2.0, header.y + 2.0))
+
+let after = placedOf(rt, 640, 360)
+assert(after.h <= 360.001)
+let opened = ofKind(after, "Button")
+var found = false
+for b in opened:
+    if (b.props["label"] else ("")) == "▾ Controls":
+        found = true
+        assert(b.y + b.h <= 360.001)
+assert(found)
+print "controls_panel_test ok"
