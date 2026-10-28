@@ -55,8 +55,9 @@ pub view TabView:
                 if selected >= 0 and selected < children.length:
                     children[selected]
 
-# A drop-down choice: a button showing the selected option that unfolds the list of options below it (inline, pushing
-# the content after it down). Choosing an option calls `onSelect` and folds the list. The open flag is the picker's own state.
+# A drop-down choice: a button showing the selected option that opens the list of options in a `Popover` below it (above it when the
+# window has more room there). Choosing an option calls `onSelect` and closes it; a press outside or Escape closes it too. The open flag
+# is the picker's own state.
 pub view Picker:
     int selected
     [string] options
@@ -74,35 +75,14 @@ pub view Picker:
 
     body():
         let shown = if selected >= 0 and selected < options.length: options[selected] else "Choose"
-        Column(alignment = .Leading, spacing = 2.0):
-            Button(label = "{shown} ▾", style = .Secondary, onActivate = ():
+        Popover(isPresented = open):
+            Button(label = "{shown} ▾", style = ButtonStyle.Secondary, onActivate = ():
                 self.toggle())
-            if open:
-                for i in 0..<options.length with i:
-                    Button(label = options[i], style = (if selected == i: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
-                        self.choose(i))
-
-# An indeterminate progress bar: a segment (0.3 of the width) sweeps across the track as `phase` goes 0...1 (the host
-# advances it every frame and wraps it: the animation system is value-triggered, it has no free-running loop).
-pub view IndeterminateBar:
-    float phase
-    float width = 160.0
-    float height = 6.0
-    string label = "Working"
-
-    body():
-        let seg = width * 0.3
-        let x = (clamp01(phase) * 1.3 - 0.3) * width
-        AccessibilityLabel(label = label):
-            Frame(width = width, height = height):
-                Clip:
-                    Background(color = "#d0d0d8"):
-                        Row(spacing = 0.0):
-                            Offset(x = x):
-                                Frame(width = seg, height = height):
-                                    Background(color = "#3478f6"):
-                                        Spacer()
-                            Spacer()
+            Padding(insets = 4.0):
+                Column(alignment = .Leading, spacing = 2.0):
+                    for i in 0..<options.length with i:
+                        Button(label = options[i], style = (if selected == i: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
+                            self.choose(i))
 
 # An integer stepper: "-" and "+" buttons around the value, clamped to `min`...`max`; each activation calls `onChange`
 # with the new value (nothing is called when the bound is already reached, and the button is disabled there).

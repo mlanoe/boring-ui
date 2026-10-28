@@ -493,6 +493,14 @@ pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float 
     if pressScrollbar(rt, host, placed, x, y):
         return true
     let path = hitTest(placed, x, y)
+    # A press outside the topmost presented popover (its anchor and its panel) dismisses it and goes no further.
+    let popovers = rt.presentedPopovers()
+    if popovers.length > 0:
+        let top = popovers[popovers.length - 1]
+        if !path.contains(top):
+            if let h = rt.handle(top):
+                _ = act(rt, host, h, "dismiss", "")
+            return true
     var i = path.length - 1
     while i >= 0:
         let id = path[i]
@@ -1190,6 +1198,10 @@ def bool defaultKey(mut Runtime rt, Builder host, string name):
         # No Cancel button: the presented sheet performs its ordinary dismissal (writes `false`).
         if rt.openSheets.length > 0:
             if let h = rt.handle(rt.openSheets[rt.openSheets.length - 1]):
+                return act(rt, host, h, "dismiss", "")
+        let popovers = rt.presentedPopovers()
+        if popovers.length > 0:
+            if let h = rt.handle(popovers[popovers.length - 1]):
                 return act(rt, host, h, "dismiss", "")
         return false
     if let f = rt.focus:

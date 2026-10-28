@@ -969,6 +969,11 @@ def Size sizeUncached(Mounted n, Prop p, mut Memo memo):
             return Size(w = 0.0, h = 0.0)
         return sizeOf(n.children[0], p, memo)
     let k = n.kind
+    if k == "Popover":
+        # The anchor's size: the panel (second child) is floating, it takes no room.
+        if !hasChild(n):
+            return Size(w = 0.0, h = 0.0)
+        return sizeOf(n.children[0], p, memo)
     if k == "Text":
         return measureText(n, p)
     if isControl(n):
@@ -1119,6 +1124,18 @@ def Placed placeIn(Mounted n, float x, float y, Size size, mut Memo memo):
         for c in n.children:
             let cs = sizeOf(c, Prop(w = nil, h = nil), memo)
             node.children.push(placeIn(c, x, y, cs, memo))
+    elif k == "Popover":
+        # The anchor in place; the panel just below it (`withPopovers` moves it above when the window lacks room below).
+        var anchorH = 0.0
+        for i in 0..<n.children.length:
+            let c = n.children[i]
+            if i == 0:
+                let cs = sizeOf(c, Prop(w = size.w, h = size.h), memo)
+                anchorH = cs.h
+                node.children.push(placeIn(c, x, y, cs, memo))
+            else:
+                let cs = sizeOf(c, Prop(w = nil, h = nil), memo)
+                node.children.push(placeIn(c, x, y + anchorH, cs, memo))
     elif k == "Layer":
         let a = alignmentOf(n)
         for c in flatten(n):
@@ -1203,6 +1220,55 @@ def Placed translated(Placed t, float dx, float dy):
         kids.push(translated(c, dx, dy))
     Placed(id = t.id, kind = t.kind, x = t.x + dx, y = t.y + dy, w = t.w, h = t.h, props = t.props, children = kids, theme = t.theme, key = t.key, alpha = t.alpha, ghost = t.ghost, live = t.live)
 
+# Whether any `Popover` of the tree is presented (has its panel).
+def bool hasPresentedPopover(Placed p):
+    if p.kind == "Popover" and p.children.length > 1:
+        return true
+    for c in p.children:
+        if hasPresentedPopover(c):
+            return true
+    false
+
+# The panel of every presented popover, in preorder (a later one is on top).
+pub def void popupsIn(Placed p, mut [Placed] out):
+    if p.kind == "Popover" and p.children.length > 1:
+        out.push(p.children[1])
+    for c in p.children:
+        popupsIn(c, out)
+
+# Where a popover's panel goes: below its anchor, left edges aligned, unless it does not fit there and the window has more room
+# above (then its bottom edge meets the anchor's top); the panel is kept inside the window. `props["side"]` records the choice.
+def Placed popupAt(Placed anchor, Placed panel, float width, float height):
+    let below = anchor.y + anchor.h
+    var side = "below"
+    var ny = below
+    if panel.h > height - below and anchor.y > height - below:
+        side = "above"
+        ny = anchor.y - panel.h
+    if ny + panel.h > height:
+        ny = height - panel.h
+    if ny < 0.0:
+        ny = 0.0
+    var nx = anchor.x
+    if nx + panel.w > width:
+        nx = width - panel.w
+    if nx < 0.0:
+        nx = 0.0
+    mut moved = translated(panel, nx - panel.x, ny - panel.y)
+    moved.props["side"] = side
+    moved
+
+# The popover layer: every presented popover's panel is moved next to its anchor (see `popupAt`).
+def Placed withPopovers(Placed p, float width, float height):
+    mut kids = []
+    for i in 0..<p.children.length:
+        let c = withPopovers(p.children[i], width, height)
+        if p.kind == "Popover" and i >= 1:
+            kids.push(popupAt(p.children[0], c, width, height))
+        else:
+            kids.push(c)
+    Placed(id = p.id, kind = p.kind, x = p.x, y = p.y, w = p.w, h = p.h, props = p.props, children = kids, theme = p.theme, key = p.key, alpha = p.alpha, ghost = p.ghost, live = p.live)
+
 # The presentation layer: a presented `Sheet`'s bounds become the whole window and its content is centered
 # in it (the sheet itself took no room in its parent's layout).
 def Placed withSheets(Placed p, float width, float height):
@@ -1276,6 +1342,8 @@ pub def Placed? layout(Runtime rt, float width, float height):
 # What the live state adds to a placed window: presented sheets, the focus ring and caret, hover, a composition in progress.
 def Placed finishLayout(Runtime rt, Placed laidOut, float width, float height):
     var placed = laidOut
+    if hasPresentedPopover(placed):
+        placed = withPopovers(placed, width, height)
     if hasPresentedSheet(placed):
         placed = withSheets(placed, width, height)
     if let f = rt.focus:

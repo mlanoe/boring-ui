@@ -626,3 +626,13 @@ Controls written as ordinary `view`s over `boring.ui` primitives, so they need n
 `SegmentedControl(selected, options, onSelect)` and `TabView(selected, titles, onSelect):` + one child per tab (only the selected child is mounted, so a left tab loses its state). `Picker(selected, options, onSelect)` (inline drop-down, own open state) `Stepper(value, min, max, onChange)`, `DisclosureGroup(title):` + children (own open state; declare its `state` before `children`, otherwise the trailing-block sugar sees the seed field as the last parameter) and `IndeterminateBar(phase)` (a clipped segment sweeping as the host advances `phase` 0...1 each frame: the animation system has no free-running loop). Tests: `tests/controls_test.br`, `tests/tabs_test.br`, `tests/picker_test.br`, `tests/indeterminate_test.br`, `tests/stepper_test.br` (interpreter and `boring build`).
 Findings: a `bind` declared in a view of an imported module was not linked to the caller's `state` (fixed in `boring`'s `lower_view`, which now reads the imported files' view signatures); `selected` + `onSelect` stay as the API; `Background`/other wrappers need a child (`Spacer()` for a plain
 swatch), otherwise `viewChildren` returns nil at run time.
+
+## Popover — native view, layout/scene/events
+
+`Popover(isPresented):` + two children: the anchor (laid out in place, it gives the popover its size) and the panel (mounted only while `isPresented`,
+`core.br` `childrenOf`). `layout.br` places the panel just below the anchor, then `withPopovers` (run by `finishLayout`) moves it next to the
+anchor: **above** it when it does not fit below and the window has more room above, and inside the window horizontally (`props["side"]` records
+"below"/"above"). `scene.br` paints panels last (shadow + elevated surface) and `hitTest` tests them first, so a panel floats over its siblings
+and outside its parents' bounds. A press outside the topmost popover (anchor and panel) or Escape dismisses it (`events.br`, the generated
+`dismiss` action writes `false`); focus is not trapped (it is not a `Sheet`). `Picker` is built on it. Test: `tests/popover_test.br`.
+Not done: horizontal flipping, panels taller than the room on both sides (the panel is clamped to the window), `Popover` inside a `Sheet`.

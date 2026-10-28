@@ -656,6 +656,10 @@ pub struct Runtime:
         if d.kind == "Sheet":
             if (d.props["isPresented"] else ("false")) != "true":
                 return []
+        if d.kind == "Popover":
+            # the anchor always, the panel only while presented
+            if (d.props["isPresented"] else ("false")) != "true" and d.children.length > 1:
+                return [d.children[0]]
         d.children
 
     # One composite's body as a `Desc`. A view with `env` gets the providers in scope for it (nearest
@@ -1102,6 +1106,19 @@ pub struct Runtime:
             out.push(n.id)
         for c in n.children:
             self.sheetsIn(c, out)
+
+    # Presented popovers (preorder: a later one is on top): the nodes that have their panel mounted.
+    req [int] presentedPopovers():
+        mut out = []
+        if let r = root:
+            self.popoversIn(r, out)
+        out
+
+    req void popoversIn(Mounted n, mut [int] out):
+        if n.kind == "Popover" and (n.props["isPresented"] else ("false")) == "true" and n.children.length > 1:
+            out.push(n.id)
+        for c in n.children:
+            self.popoversIn(c, out)
 
     # After every update pass: when a sheet opened, remember the focus, drop any pointer capture and move
     # focus into it (a `DefaultFocus`, else its first enabled control); when one closed, give the focus

@@ -1,0 +1,105 @@
+# Popover (stdlib ui.br, layout.br `withPopovers`, scene.br, events.br): the panel opens below its anchor, or above it when
+# the window has more room there; it is hit first, painted last, and a press outside or Escape dismisses it.
+# Run: boring run tests/popover_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+
+view Panel:
+    float gap
+    state bool open = false
+
+    req bool isOpen():
+        open
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Frame(height = gap):
+                Spacer()
+            Popover(isPresented = open):
+                Button(label = "Anchor", onActivate = ():
+                    open = !open)
+                Column(alignment = .Leading, spacing = 0.0):
+                    Text(content = "one")
+                    Text(content = "two")
+                    Text(content = "three")
+                    Text(content = "four")
+            Text(content = "after")
+
+struct PanelBuilder as ViewBuilder:
+    float gap
+    req View buildView(mut Runtime rt): Panel(gap = gap)
+
+def Placed lay(Runtime rt, float h):
+    let p = layout(rt, 200.0, h)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Panel__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+def bool isOpen(Runtime rt):
+    Panel(gap = 0.0).isOpen(state(rt))
+
+def string side(Runtime rt, float height):
+    ofKind(lay(rt, height), "Popover")[0].children[1].props["side"] else ("none")
+
+# Room below (anchor near the top of a tall window): the panel is under the anchor.
+let hostTop = ViewRoot(inner = PanelBuilder(gap = 0.0))
+mut rtTop = Runtime()
+rtTop.start(hostTop)
+let anchorTop = ofKind(lay(rtTop, 300.0), "Button")[0]
+assert(click(rtTop, hostTop, lay(rtTop, 300.0), anchorTop.x + 2.0, anchorTop.y + 2.0))
+assert(isOpen(rtTop))
+assert_eq(side(rtTop, 300.0), "below")
+let popTop = ofKind(lay(rtTop, 300.0), "Popover")[0]
+assert(popTop.children[1].y >= popTop.children[0].y + popTop.children[0].h - 0.001)
+
+# No room below (anchor near the bottom of a short window): the panel opens upward, inside the window.
+let hostBottom = ViewRoot(inner = PanelBuilder(gap = 100.0))
+mut rtBottom = Runtime()
+rtBottom.start(hostBottom)
+let anchorBottom = ofKind(lay(rtBottom, 140.0), "Button")[0]
+assert(click(rtBottom, hostBottom, lay(rtBottom, 140.0), anchorBottom.x + 2.0, anchorBottom.y + 2.0))
+assert(isOpen(rtBottom))
+assert_eq(side(rtBottom, 140.0), "above")
+let popBottom = ofKind(lay(rtBottom, 140.0), "Popover")[0]
+let panel = popBottom.children[1]
+assert(panel.y + panel.h <= popBottom.children[0].y + 0.001)
+assert(panel.y >= 0.0)
+
+# The panel is hit before the sibling it overlaps, though it lies outside its parents' bounds.
+let path = hitTest(lay(rtBottom, 140.0), panel.x + 2.0, panel.y + 2.0)
+assert(path.contains(panel.id))
+
+# Closed: only the anchor is mounted, and the panel's texts are gone.
+mut rtClosed = Runtime()
+rtClosed.start(hostTop)
+assert_eq(ofKind(lay(rtClosed, 300.0), "Popover")[0].children.length, 1)
+
+# A press well outside the anchor and the panel dismisses it and goes no further.
+assert(click(rtBottom, hostBottom, lay(rtBottom, 140.0), 190.0, 2.0))
+assert(!isOpen(rtBottom))
+
+# Escape dismisses too.
+mut rtEsc = Runtime()
+rtEsc.start(hostTop)
+let anchorEsc = ofKind(lay(rtEsc, 300.0), "Button")[0]
+assert(click(rtEsc, hostTop, lay(rtEsc, 300.0), anchorEsc.x + 2.0, anchorEsc.y + 2.0))
+assert(isOpen(rtEsc))
+_ = keyPress(rtEsc, hostTop, "Escape")
+assert(!isOpen(rtEsc))
+print "popover_test ok"
