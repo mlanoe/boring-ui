@@ -4,10 +4,23 @@
 use boring.ui.*
 use ui.core.*
 use todo.todo.*
+use ui.controls.*
+
+pub use BoolAction as def void(bool)
 
 # The Todo under a logo: the `Image` view's `source` is the name of a decoded file (`loadImages`).
+# `phase` (0...1, advanced by the host while `busy`) drives the indeterminate bar; `onBusy` tells the host whether the
+# bar is shown, so the window only redraws every frame while something moves.
 view WindowApp:
+    float phase
+    bool busy
+    BoolAction onBusy
+
     state bool showLogo = true
+    state int stepped = 3
+    state int segment = 0
+    state int pick = 1
+    state int tab = 0
 
     def setShowLogo(bool v):
         showLogo = v
@@ -24,6 +37,24 @@ view WindowApp:
                                 Image(source = "logo.png", width = 96.0, height = 64.0, label = "Logo")
                                 Image(source = "photo.jpg", width = 96.0, height = 64.0, label = "Landscape")
                     TodoApp()
+                    DisclosureGroup(title = "Controls"):
+                        Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
+                            stepped = v)
+                        ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")
+                        SegmentedControl(selected = segment, options = ["Day", "Week", "Month"], onSelect = (i):
+                            segment = i)
+                        Picker(selected = pick, options = ["Red", "Green", "Blue"], onSelect = (i):
+                            pick = i)
+                        TabView(selected = tab, titles = ["Info", "Work"], onSelect = (i):
+                            tab = i):
+                            Text(content = "Nothing is running.")
+                            Column(alignment = .Leading, spacing = 4.0):
+                                Button(label = (if busy: "Stop" else "Start"), onActivate = ():
+                                    onBusy(!busy))
+                                if busy:
+                                    IndeterminateBar(phase = phase, width = 200.0)
 
 struct AppRoot as ViewBuilder:
-    req View buildView(mut Runtime rt): WindowApp()
+    Slot<bool>'actor busy = Slot(value = false)
+    req View buildView(mut Runtime rt): WindowApp(phase = 0.0, busy = busy.value, onBusy = (v):
+        busy.value = v)

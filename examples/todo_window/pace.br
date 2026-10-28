@@ -26,6 +26,8 @@ struct Motion:
     # the time of the previous frame (for inertia) and whether a fling is still running
     var float32 lastSeconds = 0.0
     var bool rolling = false
+    # whether the busy indicator was on at the previous frame
+    var bool busyShown = false
     # the caret last reported to the input method (window points), and whether one has been
     var int caretX = 0
     var int caretY = 0
@@ -110,3 +112,31 @@ def void paceMomentum(mut Motion m, mut Runtime rt, Builder host, int w, int h, 
 def void touchAbort(mut Motion m, mut Runtime rt):
     touchCancel(rt)
     m.dirty = true
+
+# The cells the loop writes and the root builder reads (the indeterminate bar of the controls panel).
+struct BusyCells:
+    Slot<float>'actor phase = Slot(value = 0.0)
+    Slot<bool>'actor busy = Slot(value = false)
+
+# The indeterminate bar's phase (0...1) at `seconds`: one sweep every 1.4 s.
+def float phaseAt(float32 seconds):
+    let t = (seconds as float) * 0.7
+    let whole = t as int
+    t - (whole as float)
+
+# Keeps the window in step with the busy indicator: while `cells.busy` the phase advances and the root is rebuilt every frame (its
+# new phase), and once more when `busy` has just changed (the view reads it). True when the runtime was rebuilt, so the frame must be painted.
+def bool syncBusy(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, float32 seconds):
+    let busy = cells.busy.value
+    if !busy and !m.busyShown:
+        return false
+    cells.phase.value = phaseAt(seconds)
+    m.busyShown = busy
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
+
+def bool isBusy(BusyCells cells):
+    cells.busy.value

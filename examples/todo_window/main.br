@@ -220,13 +220,19 @@ if sansFont.length == 0:
     print "no sans font found on this machine (see text/src/fonts.br): text will not be drawn"
 let theme = Theme(measurer = EngineMeasurer(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir)))
 
+# `phase` and `busy` are cells the loop writes (the indeterminate bar of the controls panel): the builder reads them
+# whenever the root is rebuilt, and the view's `onBusy` callback flips `busy`.
 struct ThemedRoot as ViewBuilder:
     Theme theme
+    Slot<float>'actor phase
+    Slot<bool>'actor busy
     req View buildView(mut Runtime rt):
-        Provide(value = theme, children = [WindowApp()])
+        Provide(value = theme, children = [WindowApp(phase = phase.value, busy = busy.value, onBusy = (v):
+            busy.value = v)])
 
 mut cache = GlyphCache(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))
-let host = ViewRoot(inner = ThemedRoot(theme = theme))
+let cells = BusyCells()
+let host = ViewRoot(inner = ThemedRoot(theme = theme, phase = cells.phase, busy = cells.busy))
 mut rt = Runtime()
 rt.start(host)
 
@@ -299,7 +305,8 @@ kernel:
         textInput(rt, host, screen.marked, screen.marked_end, screen.text)
         for name in screen.key_events:
             touch(pace)
-        let eventful = served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
+        let rebuilt = syncBusy(pace, rt, host, cells, screen.time)
+        let eventful = rebuilt or served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
         let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)
         # the accessibility tree (laid out only while an assistive technology is connected)
         screen.setAccessibility(axFrame(rt, shown))
@@ -315,7 +322,7 @@ kernel:
         k.count = next.count
         k(block = (16, 16), grid = ((screen.width + 15) / 16, (screen.height + 15) / 16))
         screen.present(k.out)
-        if pacePending(pace, screen.time):
+        if pacePending(pace, screen.time) or isBusy(cells):
             screen.requestRedraw()
         if !quiet:
             trackCaret(pace, rt, pw, ph)
