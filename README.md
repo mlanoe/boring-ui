@@ -636,3 +636,23 @@ anchor: **above** it when it does not fit below and the window has more room abo
 and outside its parents' bounds. A press outside the topmost popover (anchor and panel) or Escape dismisses it (`events.br`, the generated
 `dismiss` action writes `false`); focus is not trapped (it is not a `Sheet`). `Picker` is built on it. Test: `tests/popover_test.br`.
 Not done: horizontal flipping, panels taller than the room on both sides (the panel is clamped to the window), `Popover` inside a `Sheet`.
+
+## Programmatic scrolling — `Scroll(anchor, request)` and `ScrollAnchor`
+
+`ScrollAnchor(name = "x"):` marks a place inside a `Scroll`'s content (layout-transparent); `Scroll(anchor = "x", request = n)` scrolls so that
+anchor sits at the viewport's leading edge, clamped to the content (`events.br` `applyScrollRequests`). Request-driven, not value-driven: a
+request above zero that differs from the last one applied to that scroller (its generation, the anchor, the number: `Runtime.scrollApplied`) is
+applied once; bump `request` to scroll to the same anchor again, and a user's later scrolling is left alone. An anchor that is not laid out yet
+keeps the request pending. The host calls `applyScrollRequests(rt, host, placed)` after an update (`todo_window`'s `paceFrame` does, before taking
+the frame's layout). The "Jump to tabs" button of the window's Controls panel uses it. Tests: `tests/scroll_request_test.br`,
+`examples/todo_window/controls_panel_test.br`. Not done: two nested scrollers each with a request in one call (positions are read from one layout),
+animated scrolling, a "bottom"/"center" alignment of the anchor.
+
+## Tooltip — `OnHover` and `Tooltip`
+
+`OnHover(value = flag):` (native, layout-transparent) writes into its bound `value` whether the pointer is over a control inside it: the runtime's
+hover target is the deepest enabled Button, Toggle, TextField or Slider under the pointer, and `events.br` `syncHoverScopes` updates the `OnHover`
+ancestors of the old and new target inside the event that changes `rt.hover` (`pointerMove`, `pointerLeave`; the generated `setBool` action).
+`Tooltip(text = "..."):` + one child (`controls.br`) is a `Popover` whose panel shows `text` while that child is hovered, below it or above near the
+window's bottom. Test: `tests/tooltip_test.br`. Not done: a show delay (the runtime has no clock; a host could pass one), hover over non-control
+content (a `Text`, an `Image`), tooltips for keyboard focus, touch long-press.

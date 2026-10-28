@@ -36,4 +36,30 @@ for b in opened:
         found = true
         assert(b.y + b.h <= 360.001)
 assert(found)
+
+# "Jump to tabs" scrolls the panel so the tab bar is inside its viewport (a request applied with the laid-out window).
+def Placed? firstOfKind(Placed p, string kind):
+    if p.kind == kind:
+        return p
+    for c in p.children:
+        if let f = firstOfKind(c, kind):
+            return f
+    nil
+
+def Placed? labelled(Placed p, string label):
+    if p.kind == "Button" and (p.props["label"] else ("")) == label:
+        return p
+    for c in p.children:
+        if let f = labelled(c, label):
+            return f
+    nil
+
+let jumpButton = labelled(after, "Jump to tabs") else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+assert(click(rt, host, after, jumpButton.x + 2.0, jumpButton.y + 2.0))
+assert(applyScrollRequests(rt, host, placedOf(rt, 640, 360)))
+let scrolled = placedOf(rt, 640, 360)
+let viewport = firstOfKind(scrolled, "Scroll") else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+let info = labelled(scrolled, "Info") else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+assert(info.y >= viewport.y - 0.001)
+assert(info.y + info.h <= viewport.y + viewport.h + 0.001)
 print "controls_panel_test ok"

@@ -147,3 +147,19 @@ pub view DisclosureGroup:
                 Column(alignment = .Leading, spacing = 2.0):
                     for i in 0..<children.length with i:
                         children[i]
+
+# A tooltip: `text` in a small floating panel while the pointer is over the control that `Tooltip` wraps (its one child; the hover target is the
+# deepest enabled Button, Toggle, TextField or Slider, so wrap one). The panel opens below the control, above it near the window's bottom
+# (a `Popover`). No delay yet: the runtime has no clock.
+pub view Tooltip:
+    state bool shown = false
+
+    string text
+    [View] children
+
+    body():
+        Popover(isPresented = shown):
+            OnHover(value = shown):
+                children[0]
+            Padding(insets = 4.0):
+                Text(content = text)

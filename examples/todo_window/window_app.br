@@ -21,14 +21,16 @@ view WindowApp:
     state int segment = 0
     state int pick = 1
     state int tab = 0
+    state int jump = 0
 
     def setShowLogo(bool v):
         showLogo = v
 
     body():
         Column(alignment = .Leading, spacing = 8.0):
-            Button(label = "Toggle logo", onActivate = ():
-                showLogo = !showLogo)
+            Tooltip(text = "Fades the logo and the photo out and back"):
+                Button(label = "Toggle logo", onActivate = ():
+                    showLogo = !showLogo)
             AnimationScope(curve = "EaseInOut", duration = 300.0, value = "{showLogo}"):
                 Column(alignment = .Leading, spacing = 8.0):
                     if showLogo:
@@ -39,8 +41,10 @@ view WindowApp:
                     TodoApp()
                     DisclosureGroup(title = "Controls"):
                         Frame(maxHeight = 150.0):
-                            Scroll:
+                            Scroll(anchor = "tabs", request = jump):
                                 Column(alignment = .Leading, spacing = 8.0):
+                                    Button(label = "Jump to tabs", onActivate = ():
+                                        jump += 1)
                                     Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
                                         stepped = v)
                                     ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")
@@ -48,14 +52,16 @@ view WindowApp:
                                         segment = i)
                                     Picker(selected = pick, options = ["Red", "Green", "Blue"], onSelect = (i):
                                         pick = i)
-                                    TabView(selected = tab, titles = ["Info", "Work"], onSelect = (i):
-                                        tab = i):
-                                        Text(content = "Nothing is running.")
-                                        Column(alignment = .Leading, spacing = 4.0):
-                                            Button(label = (if busy: "Stop" else "Start"), onActivate = ():
-                                                onBusy(!busy))
-                                            if busy:
-                                                IndeterminateBar(phase = phase, width = 200.0)
+                                    ScrollAnchor(name = "tabs"):
+                                        TabView(selected = tab, titles = ["Info", "Work"], onSelect = (i):
+                                            tab = i):
+                                            Text(content = "Nothing is running.")
+                                            Column(alignment = .Leading, spacing = 4.0):
+                                                Tooltip(text = "Starts or stops the indeterminate bar"):
+                                                    Button(label = (if busy: "Stop" else "Start"), onActivate = ():
+                                                        onBusy(!busy))
+                                                if busy:
+                                                    IndeterminateBar(phase = phase, width = 200.0)
 
 struct AppRoot as ViewBuilder:
     Slot<bool>'actor busy = Slot(value = false)

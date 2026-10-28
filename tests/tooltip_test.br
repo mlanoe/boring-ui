@@ -1,0 +1,63 @@
+# Tooltip (src/controls.br): the panel shows while a wrapped control is hovered, and goes when the pointer leaves.
+# Run: boring run tests/tooltip_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.controls.*
+
+view Panel:
+    body():
+        Column(alignment = .Leading, spacing = 40.0):
+            Tooltip(text = "Saves the file"):
+                Button(label = "Save", onActivate = ():
+                    pass2())
+            Button(label = "Other", onActivate = ():
+                pass2())
+
+def void pass2():
+    print "x"
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 300.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def int texts(Runtime rt):
+    ofKind(lay(rt), "Text").length
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# Nothing hovered: no tooltip text.
+assert_eq(texts(rt), 0)
+let save = ofKind(lay(rt), "Button")[0]
+let other = ofKind(lay(rt), "Button")[1]
+
+# The pointer over "Save": the tooltip's text is laid out, below the button.
+assert(pointerMove(rt, host, lay(rt), save.x + 2.0, save.y + 2.0))
+assert_eq(texts(rt), 1)
+let panel = ofKind(lay(rt), "Text")[0]
+assert(panel.y >= save.y + save.h - 0.001)
+
+# Moving to another control, then leaving the window: it goes.
+assert(pointerMove(rt, host, lay(rt), other.x + 2.0, other.y + 2.0))
+assert_eq(texts(rt), 0)
+assert(pointerMove(rt, host, lay(rt), save.x + 2.0, save.y + 2.0))
+assert_eq(texts(rt), 1)
+assert(pointerLeave(rt, host))
+assert_eq(texts(rt), 0)
+print "tooltip_test ok"

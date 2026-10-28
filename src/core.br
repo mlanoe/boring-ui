@@ -458,6 +458,8 @@ pub struct Runtime:
     # Modal presentation: the ids of the `Sheet` nodes that are presented, outermost first, and the focus
     # each one displaced (restored on dismissal while that control still exists and is enabled).
     pub var [int] openSheets = []
+    # The programmatic-scroll request each `Scroll` last had applied (events.br `applyScrollRequests`), by node id: "generation|anchor|request".
+    pub var mut {int=string} scrollApplied = {=}
     pub var [Handle] focusReturn = []
     # Animation metadata of the transactions (draft: "An ordinary library function establishes animation
     # metadata on the current UI transaction"): `animate` / `withoutAnimation` record theirs in

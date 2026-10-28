@@ -610,6 +610,40 @@ def Handle? hoverTarget(Runtime rt, Placed placed, float x, float y):
         i -= 1
     nil
 
+# The mounted ancestors of node `id` (outermost first, `id` itself excluded) that are `OnHover` wrappers.
+def bool hoverPath(Mounted n, int id, mut [int] out):
+    if n.id == id:
+        return true
+    if n.kind == "OnHover":
+        out.push(n.id)
+    for c in n.children:
+        if hoverPath(c, id, out):
+            return true
+    if n.kind == "OnHover":
+        _ = out.pop()
+    false
+
+def [int] hoverScopes(Runtime rt, int id):
+    mut out = [] as [int]
+    if id >= 0:
+        if let r = rt.root:
+            _ = hoverPath(r, id, out)
+    out
+
+# Tells every `OnHover` whose "pointer is over a control inside" answer changed between the old and the new hover target (writes the bound
+# `value`: `setBool`). Called inside the event that changes `rt.hover`.
+def void syncHoverScopes(mut Runtime rt, Builder host, int fromId, int toId):
+    let before = hoverScopes(rt, fromId)
+    let after = hoverScopes(rt, toId)
+    for id in before:
+        if !after.contains(id):
+            if let h = rt.handle(id):
+                _ = act(rt, host, h, "setBool", "false")
+    for id in after:
+        if !before.contains(id):
+            if let h = rt.handle(id):
+                _ = act(rt, host, h, "setBool", "true")
+
 # The pointer moved to (x, y): the control under it becomes `rt.hover` (one update pass when that changes; the
 # painter shades it), and while a slider holds the pointer, moving it (even outside the slider) drags the value.
 # Returns whether anything changed.
@@ -626,6 +660,7 @@ pub def bool pointerMove(mut Runtime rt, Builder host, Placed placed, float x, f
     if nextId != currentId:
         rt.beginEvent()
         rt.hover = hoverTarget(rt, placed, x, y)   # looked up again: binding `target` above would move it
+        syncHoverScopes(rt, host, currentId, nextId)
         rt.invalidateRoot()
         rt.endEvent(host)
         changed = true
@@ -652,7 +687,11 @@ pub def bool pointerLeave(mut Runtime rt, Builder host):
     if rt.hover == nil:
         return false
     rt.beginEvent()
+    var leftId = -1
+    if let c = rt.hover:
+        leftId = c.id
     rt.hover = nil
+    syncHoverScopes(rt, host, leftId, -1)
     rt.invalidateRoot()
     rt.endEvent(host)
     true
@@ -1257,6 +1296,58 @@ def float numOf(Placed p, string key):
     if let s = p.props[key]:
         return s.parseFloat() else (0.0)
     0.0
+
+# ── programmatic scrolling ──────────────────────────────────────────────────────────────────────
+# `Scroll(anchor = name, request = n)` scrolls so the `ScrollAnchor(name = name)` below it sits at the viewport's leading edge, as far as the
+# content allows. It is request-driven: a request above zero that differs from the last one applied to that scroller (the node's generation,
+# the anchor and the request) is applied once; bump `request` to scroll to the same anchor again. A request whose anchor is not laid
+# out (yet) stays pending. The host calls `applyScrollRequests` after an update with the laid-out window, like `revealFocus`.
+
+# The first `ScrollAnchor` called `name` in the subtree of `p`.
+def Placed? anchorIn(Placed p, string name):
+    if p.kind == "ScrollAnchor" and (p.props["name"] else ("")) == name:
+        return p
+    for c in p.children:
+        if let found = anchorIn(c, name):
+            return found
+    nil
+
+def void scrollRequestsIn(Placed p, mut [Placed] out):
+    if p.kind == "Scroll" and (p.props["anchor"] else ("")) != "" and numOf(p, "request") > 0.0:
+        out.push(p)
+    for c in p.children:
+        scrollRequestsIn(c, out)
+
+# Applies the pending requests of every `Scroll` of the laid-out window `placed`. Returns whether any offset moved (the window must be laid out again).
+pub def bool applyScrollRequests(mut Runtime rt, Builder host, Placed placed):
+    mut pending = [] as [Placed]
+    scrollRequestsIn(placed, pending)
+    var moved = false
+    for v in pending:
+        if let node = rt.find(v.id):
+            let name = v.props["anchor"] else ("")
+            let stamp = "{node.generation}|{name}|{numOf(v, "request")}"
+            if (rt.scrollApplied[v.id] else ("")) != stamp:
+                if let a = anchorIn(v, name):
+                    rt.scrollApplied[v.id] = stamp
+                    let vertical = (v.props["axis"] else ("Vertical")) == "Vertical"
+                    var delta = a.x - v.x
+                    if vertical:
+                        delta = a.y - v.y
+                    let current = numOf(v, "scroll")
+                    var target = current + delta
+                    if target < 0.0:
+                        target = 0.0
+                    let most = numOf(v, "scrollMax")
+                    if target > most:
+                        target = most
+                    if target != current:
+                        rt.beginEvent()
+                        _ = rt.scrollTo(v.id, target)
+                        rt.invalidateRoot()
+                        rt.endEvent(host)
+                        moved = true
+    moved
 
 # ── retiring phase ──────────────────────────────────────────────────────────────────────────────
 # A subtree removed under an animated `Transition` stays mounted but frozen until its removal finishes. The host

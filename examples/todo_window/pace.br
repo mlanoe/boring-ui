@@ -51,6 +51,8 @@ def Placed paceFrame(mut Motion m, mut Runtime rt, Builder host, bool eventful, 
             _ = endRetirement(rt, host, id)
             m.dirty = true
     if m.dirty:
+        # a `Scroll(anchor, request)` asked to scroll: applied with the laid-out window before this frame's layout is taken
+        _ = applyScrollRequests(rt, host, placedOf(rt, w, h))
         let animation = rt.takeAnimation()
         let triggers = rt.takeTriggers()
         if isAnimating(m.an, now) and animation == nil and triggers.length == 0:
