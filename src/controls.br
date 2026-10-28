@@ -132,11 +132,15 @@ pub view DisclosureGroup:
     string title
     [View] children
 
+    def toggle():
+        let now = open
+        open = !now
+
     body():
         let marker = if open: "▾" else "▸"
         Column(alignment = .Leading, spacing = 4.0):
             Button(label = "{marker} {title}", style = ButtonStyle.Plain, onActivate = ():
-                open = !open)
+                self.toggle())
             if open:
                 Column(alignment = .Leading, spacing = 2.0):
                     for i in 0..<children.length with i:
