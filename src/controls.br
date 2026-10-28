@@ -103,3 +103,41 @@ pub view IndeterminateBar:
                                     Background(color = "#3478f6"):
                                         Spacer()
                             Spacer()
+
+# An integer stepper: "-" and "+" buttons around the value, clamped to `min`...`max`; each activation calls `onChange`
+# with the new value (nothing is called when the bound is already reached, and the button is disabled there).
+pub view Stepper:
+    int value
+    int min = 0
+    int max = 100
+    string label = "Value"
+    IndexAction onChange
+
+    body():
+        Row(alignment = .Center, spacing = 8.0):
+            Disabled(value = value <= min):
+                Button(label = "-", onActivate = ():
+                    onChange(value - 1))
+            AccessibilityLabel(label = label):
+                Text(content = "{value}")
+            Disabled(value = value >= max):
+                Button(label = "+", onActivate = ():
+                    onChange(value + 1))
+
+# A section that folds: a header button (with a ▸/▾ marker) and, while open, its children below. The open flag is the
+# group's own state, so it survives rebuilds of the parent and resets when the group leaves the tree.
+pub view DisclosureGroup:
+    state bool open = false
+
+    string title
+    [View] children
+
+    body():
+        let marker = if open: "▾" else "▸"
+        Column(alignment = .Leading, spacing = 4.0):
+            Button(label = "{marker} {title}", style = ButtonStyle.Plain, onActivate = ():
+                open = !open)
+            if open:
+                Column(alignment = .Leading, spacing = 2.0):
+                    for i in 0..<children.length with i:
+                        children[i]

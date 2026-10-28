@@ -1,0 +1,76 @@
+# Stepper and DisclosureGroup (src/controls.br).
+# Run: boring run tests/stepper_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.controls.*
+
+view Panel:
+    state int n = 1
+
+    req int current():
+        n
+
+    def set(int v):
+        n = v
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            Stepper(value = n, min = 0, max = 2, onChange = (v):
+                self.set(v))
+            DisclosureGroup(title = "More"):
+                Text(content = "details")
+                Text(content = "more details")
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 300.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Panel__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+def int current(Runtime rt):
+    Panel().current(state(rt))
+
+def void press(mut Runtime rt, Builder host, int index):
+    let b = ofKind(lay(rt), "Button")[index]
+    assert(click(rt, host, lay(rt), b.x + 2.0, b.y + 2.0))
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# Buttons: "-", "+", and the disclosure header.
+assert_eq(ofKind(lay(rt), "Button").length, 3)
+press(rt, host, 1)
+assert_eq(current(rt), 2)
+# At the maximum "+" is disabled: a click does nothing.
+let plus = ofKind(lay(rt), "Button")[1]
+_ = click(rt, host, lay(rt), plus.x + 2.0, plus.y + 2.0)
+assert_eq(current(rt), 2)
+press(rt, host, 0)
+assert_eq(current(rt), 1)
+
+# The group is folded: no "details" until the header is pressed, and again after a second press.
+assert_eq(ofKind(lay(rt), "Text").length, 1)           # only the stepper's value
+press(rt, host, 2)
+assert_eq(ofKind(lay(rt), "Text").length, 3)
+press(rt, host, 2)
+assert_eq(ofKind(lay(rt), "Text").length, 1)
+print "stepper_test ok"
