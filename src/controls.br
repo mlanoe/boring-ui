@@ -40,7 +40,7 @@ pub view SegmentedControl:
                 Button(label = options[i], style = (if selected == i: .Primary else .Secondary), onActivate = ():
                     onSelect(i))
 
-# Tabs (the callback is re-wrapped, not forwarded as is: `boring build` double-wraps a forwarded closure field): a `SegmentedControl` over `titles` and, below it, only the child at index `selected` (the other children
+# Tabs: a `SegmentedControl` over `titles` and, below it, only the child at index `selected` (the other children
 # are not mounted, so their state is dropped when their tab is left).
 pub view TabView:
     int selected
@@ -50,8 +50,7 @@ pub view TabView:
 
     body():
         Column(alignment = .Leading, spacing = 8.0):
-            SegmentedControl(selected = selected, options = titles, onSelect = (i):
-                onSelect(i))
+            SegmentedControl(selected = selected, options = titles, onSelect = onSelect)
             Column(alignment = .Leading, spacing = 0.0):
                 if selected >= 0 and selected < children.length:
                     children[selected]
