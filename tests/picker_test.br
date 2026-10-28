@@ -1,0 +1,60 @@
+# Picker (src/controls.br): unfolds on activation, choosing folds it and reports the index.
+# Run: boring run tests/picker_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.controls.*
+
+view Panel:
+    state int choice = 1
+
+    req int current():
+        choice
+
+    def pick(int i):
+        choice = i
+
+    body():
+        Picker(selected = choice, options = ["Red", "Green", "Blue"], onSelect = (i):
+            self.pick(i))
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 300.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Panel__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+def int choice(Runtime rt):
+    Panel().current(state(rt))
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+assert_eq(ofKind(lay(rt), "Button").length, 1)
+assert_eq(choice(rt), 1)
+let head = ofKind(lay(rt), "Button")[0]
+assert(click(rt, host, lay(rt), head.x + 2.0, head.y + 2.0))
+let opened = ofKind(lay(rt), "Button")
+assert_eq(opened.length, 4)
+assert(click(rt, host, lay(rt), opened[3].x + 2.0, opened[3].y + 2.0))
+assert_eq(choice(rt), 2)
+assert_eq(ofKind(lay(rt), "Button").length, 1)
+print "picker_test ok"

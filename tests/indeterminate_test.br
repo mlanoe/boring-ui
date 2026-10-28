@@ -1,0 +1,41 @@
+# IndeterminateBar (src/controls.br): the segment (30% of the width) sweeps from just off the left edge to just off the
+# right edge as the phase goes 0...1, and the bar is clipped to its track.
+# Run: boring run tests/indeterminate_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.controls.*
+
+struct PhaseBuilder as ViewBuilder:
+    float phase
+    req View buildView(mut Runtime rt): IndeterminateBar(phase = phase, width = 100.0, height = 6.0)
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.001 and d > 0.0 - 0.001
+
+# The segment's x relative to the track, and its width, at a phase.
+def float segmentX(float phase):
+    let host = ViewRoot(inner = PhaseBuilder(phase = phase))
+    mut rt = Runtime()
+    rt.start(host)
+    let p = layout(rt, 200.0, 50.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+    let track = ofKind(p, "Clip")[0]
+    let seg = ofKind(p, "Offset")[0]
+    seg.x - track.x
+
+assert(near(segmentX(0.0), -30.0))
+assert(near(segmentX(0.5), 35.0))
+assert(near(segmentX(1.0), 100.0))
+assert(near(segmentX(2.0), 100.0))        # out-of-range phases clamp
+print "indeterminate_test ok"

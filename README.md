@@ -618,3 +618,11 @@ render/tests/run_tests.sh       # the renderer project's own tests (interpreter)
 render/tests/run_kernel_tests.sh # kernel rasterizer vs CPU reference on the real simd and wgpu targets
 render/bench/run_bench.sh       # CPU reference vs per-pixel vs tiled kernel timings
 ```
+
+## Composite controls — [`src/controls.br`](src/controls.br)
+
+Controls written as ordinary `view`s over `boring.ui` primitives, so they need no native facade (and no change to `boring`):
+`ProgressBar(value, width, height, label)` (determinate, `value` clamped to 0...1, spoken as "label: N%") and
+`SegmentedControl(selected, options, onSelect)` and `TabView(selected, titles, onSelect):` + one child per tab (only the selected child is mounted, so a left tab loses its state). `Picker(selected, options, onSelect)` (inline drop-down, own open state) and `IndeterminateBar(phase)` (a clipped segment sweeping as the host advances `phase` 0...1 each frame: the animation system has no free-running loop). Tests: `tests/controls_test.br`, `tests/tabs_test.br`, `tests/picker_test.br`, `tests/indeterminate_test.br` (interpreter and `boring build`).
+Findings: a `bind` declared in a view of an imported module was not linked to the caller's `state` (fixed in `boring`'s `lower_view`, which now reads the imported files' view signatures); `selected` + `onSelect` stay as the API; `Background`/other wrappers need a child (`Spacer()` for a plain
+swatch), otherwise `viewChildren` returns nil at run time.

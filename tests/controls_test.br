@@ -1,0 +1,71 @@
+# ProgressBar and SegmentedControl (src/controls.br).
+# Run: boring run tests/controls_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.controls.*
+
+view Panel:
+    state int mode = 0
+
+    req int current():
+        mode
+
+    def pick(int i):
+        mode = i
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            ProgressBar(value = 0.25, width = 200.0, height = 8.0)
+            ProgressBar(value = 3.0, width = 100.0, label = "Over")
+            SegmentedControl(selected = mode, options = ["A", "B", "C"], onSelect = (i):
+                self.pick(i))
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 300.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Panel__State state(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+def int mode(Runtime rt):
+    Panel().current(state(rt))
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# Fills: 25% of 200 and the clamped 100% of 100 (the track is a Frame of the full width).
+mut widths = []
+for f in ofKind(lay(rt), "Frame"):
+    widths.push(f.w)
+assert(widths.contains(200.0))
+assert(widths.contains(50.0))
+assert(widths.contains(100.0))
+assert(!widths.contains(300.0))
+
+# Three options, the first selected; clicking the third selects it.
+let buttons = ofKind(lay(rt), "Button")
+assert_eq(buttons.length, 3)
+assert_eq(mode(rt), 0)
+assert(click(rt, host, lay(rt), buttons[2].x + 2.0, buttons[2].y + 2.0))
+assert_eq(mode(rt), 2)
+assert(click(rt, host, lay(rt), buttons[1].x + 2.0, buttons[1].y + 2.0))
+assert_eq(mode(rt), 1)
+print "controls_test ok"
