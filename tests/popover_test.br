@@ -57,6 +57,10 @@ def bool isOpen(Runtime rt):
 def string side(Runtime rt, float height):
     ofKind(lay(rt, height), "Popover")[0].children[1].props["side"] else ("none")
 
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.001 and d > 0.0 - 0.001
+
 # Room below (anchor near the top of a tall window): the panel is under the anchor.
 let hostTop = ViewRoot(inner = PanelBuilder(gap = 0.0))
 mut rtTop = Runtime()
@@ -102,4 +106,8 @@ assert(click(rtEsc, hostTop, lay(rtEsc, 300.0), anchorEsc.x + 2.0, anchorEsc.y +
 assert(isOpen(rtEsc))
 _ = keyPress(rtEsc, hostTop, "Escape")
 assert(!isOpen(rtEsc))
+
+# A popover in a stack takes the room of its anchor alone: the Column's height is the same as with a plain Button (negotiation sees its span).
+let closedPop = ofKind(lay(rtClosed, 300.0), "Popover")[0]
+assert(near(closedPop.h, closedPop.children[0].h))
 print "popover_test ok"

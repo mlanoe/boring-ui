@@ -465,6 +465,11 @@ def Span spanUncached(Mounted n, bool horiz, float? cross, mut Memo memo):
             return fixedSpan(0.0)
         return span(n.children[0], horiz, cross, memo)
     let k = n.kind
+    if k == "Popover":
+        # The anchor's span: the panel (second child) floats and takes no room.
+        if !hasChild(n):
+            return fixedSpan(0.0)
+        return span(n.children[0], horiz, cross, memo)
     if k == "Text":
         let content = n.props["content"] else ("")
         if horiz:

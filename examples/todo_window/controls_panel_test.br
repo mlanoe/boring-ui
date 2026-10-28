@@ -22,6 +22,8 @@ let host = ViewRoot(inner = AppRoot())
 mut rt = Runtime()
 rt.start(host)
 let before = placedOf(rt, 640, 360)
+# the closed window fits (a `Popover` around the first button, the tooltip, must not steal room from the stack)
+assert(before.h <= 360.001)
 let buttons = ofKind(before, "Button")
 let header = buttons[buttons.length - 1]
 assert_eq(header.props["label"] else (""), "▸ Controls")
