@@ -84,6 +84,35 @@ pub view Picker:
                         Button(label = options[i], style = (if selected == i: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
                             self.choose(i))
 
+# A menu of actions: a button labelled `label ▾` that opens the `items` in a `Popover` below it (above when the window has more room there). Choosing
+# an item closes the menu and calls `onSelect` with its index (nothing is marked as selected, unlike `Picker`); a press outside or Escape closes it
+# too. The item at index `danger` (when it is not -1) is a destructive one and shows as such.
+pub view Menu:
+    string label
+    [string] items
+    IndexAction onSelect
+    int danger = -1
+
+    state bool open = false
+
+    def choose(int i):
+        open = false
+        onSelect(i)
+
+    def toggle():
+        let now = open
+        open = !now
+
+    body():
+        Popover(isPresented = open):
+            Button(label = "{label} ▾", style = ButtonStyle.Secondary, onActivate = ():
+                self.toggle())
+            Padding(insets = 4.0):
+                Column(alignment = .Leading, spacing = 2.0):
+                    for i in 0..<items.length with i:
+                        Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                            self.choose(i))
+
 # An indeterminate progress bar: a segment (0.3 of the width) sweeps across the track as `phase` goes 0...1 (the host
 # advances it every frame and wraps it: the animation system is value-triggered, it has no free-running loop).
 pub view IndeterminateBar:
@@ -150,16 +179,146 @@ pub view DisclosureGroup:
 
 # A tooltip: `text` in a small floating panel while the pointer is over the control that `Tooltip` wraps (its one child; the hover target is the
 # deepest enabled Button, Toggle, TextField or Slider, so wrap one). The panel opens below the control, above it near the window's bottom
-# (a `Popover`). No delay yet: the runtime has no clock.
+# (a `Popover`). It appears once the pointer has stayed `delay` milliseconds (default 500; 0 = at once) — the host feeds the clock with
+# `tickHover` — and goes as soon as the pointer leaves.
 pub view Tooltip:
     state bool shown = false
 
     string text
+    int delay = 500
     [View] children
 
     body():
         Popover(isPresented = shown):
-            OnHover(value = shown):
+            OnHover(value = shown, delay = delay):
                 children[0]
             Padding(insets = 4.0):
                 Text(content = text)
+
+# ── navigation ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# Hierarchical navigation without a native facade: a stack of named pages. `NavigationStack` owns the path (its own state), shows only the top page
+# under a bar with a back button and the page's title, and hands its descendants a `Navigator` (through the environment) that
+# `NavigationLink` and `NavigationBack` use to push and pop. Pages below the top are not mounted (like `TabView`'s other tabs): their state is
+# dropped while covered.
+
+pub use NameAction as def void(string)
+pub use PlainAction as def void()
+
+# What a page can do to the stack it sits in; provided by `NavigationStack`, read as `env Navigator nav`.
+pub struct Navigator as EnvValue:
+    pub NameAction push
+    pub PlainAction pop
+    pub int depth
+
+# The stack. `children[0]` is the root page (titled `title`); `children[1 + i]` is the page named `names[i]`, titled `titles[i]`. `NavigationLink(to = name)`
+# pushes a page by name.
+pub view NavigationStack:
+    state [string] path = []
+
+    string title = ""
+    [string] names = []
+    [string] titles = []
+    [View] children
+
+    def push(string name):
+        path.push(name)
+
+    def pop():
+        if path.length > 0:
+            _ = path.pop()
+
+    def int indexOf(string name):
+        var found = -1
+        for i in 0..<names.length:
+            if names[i] == name:
+                found = i
+        found
+
+    body():
+        let depth = path.length
+        var at = 0
+        var heading = title
+        if depth > 0:
+            let i = self.indexOf(path[depth - 1])
+            if i >= 0 and i + 1 < children.length:
+                at = i + 1
+                if i < titles.length:
+                    heading = titles[i]
+        let doPush = (name): self.push(name)
+        let doPop = (): self.pop()
+        Provide(value = Navigator(push = doPush, pop = doPop, depth = depth)):
+            Column(alignment = .Leading, spacing = 8.0):
+                Row(alignment = .Center, spacing = 8.0):
+                    if depth > 0:
+                        Button(label = "‹ Back", style = ButtonStyle.Plain, onActivate = ():
+                            self.pop())
+                    AccessibilityHeading(level = 1):
+                        Text(content = heading)
+                Separator()
+                Column(alignment = .Leading, spacing = 0.0):
+                    if at < children.length:
+                        children[at]
+
+# A button that pushes the page named `to` onto the enclosing `NavigationStack`.
+pub view NavigationLink:
+    env Navigator nav
+
+    string label
+    string to
+
+    body():
+        Button(label = "{label} ›", style = ButtonStyle.Secondary, onActivate = ():
+            nav.push(to))
+
+# A button that pops the enclosing `NavigationStack` (the stack's bar already has one while it is deeper than the root; at the root popping does nothing).
+pub view NavigationBack:
+    env Navigator nav
+
+    string label = "Back"
+
+    body():
+        Button(label = label, onActivate = ():
+            nav.pop())
+
+# ── forms ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# `Form` stacks `Section`s; a `Section` is an optional caption `header`, a bordered group whose rows are separated by hairlines, and an optional `footer`
+# caption; `LabeledContent` is one row: a label on the leading side and its control (the child) trailing.
+
+pub view Form:
+    [View] children
+
+    body():
+        Column(alignment = .Leading, spacing = 16.0):
+            for i in 0..<children.length with i:
+                children[i]
+
+pub view Section:
+    string header = ""
+    string footer = ""
+    [View] children
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            if header != "":
+                AccessibilityHeading(level = 2):
+                    Text(content = header, font = .Caption, bold = true)
+            Border(color = "#c8c8d0"):
+                Padding(insets = 8.0):
+                    Column(alignment = .Leading, spacing = 6.0):
+                        for i in 0..<children.length with i:
+                            if i > 0:
+                                Separator()
+                            children[i]
+            if footer != "":
+                Text(content = footer, font = .Caption)
+
+pub view LabeledContent:
+    string label
+    [View] children
+
+    body():
+        Row(alignment = .Center, spacing = 12.0):
+            Text(content = label)
+            Spacer()
+            for i in 0..<children.length with i:
+                children[i]

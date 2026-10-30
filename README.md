@@ -635,7 +635,7 @@ anchor: **above** it when it does not fit below and the window has more room abo
 "below"/"above"). `scene.br` paints panels last (shadow + elevated surface) and `hitTest` tests them first, so a panel floats over its siblings
 and outside its parents' bounds. A press outside the topmost popover (anchor and panel) or Escape dismisses it (`events.br`, the generated
 `dismiss` action writes `false`); focus is not trapped (it is not a `Sheet`). `Picker` is built on it. Test: `tests/popover_test.br`.
-Not done: horizontal flipping, panels taller than the room on both sides (the panel is clamped to the window), `Popover` inside a `Sheet`.
+Sideways, past the window's right edge the panel's right edge meets the anchor's (`props["edge"]` = left/right; `tests/popover_edge_test.br`). Not done: panels taller than the room on both sides (the panel is clamped to the window), `Popover` inside a `Sheet`.
 
 ## Programmatic scrolling — `Scroll(anchor, request)` and `ScrollAnchor`
 
@@ -645,7 +645,10 @@ request above zero that differs from the last one applied to that scroller (its 
 applied once; bump `request` to scroll to the same anchor again, and a user's later scrolling is left alone. An anchor that is not laid out yet
 keeps the request pending. The host calls `applyScrollRequests(rt, host, placed)` after an update (`todo_window`'s `paceFrame` does, before taking
 the frame's layout). The "Jump to tabs" button of the window's Controls panel uses it. Tests: `tests/scroll_request_test.br`,
-`examples/todo_window/controls_panel_test.br`. Not done: two nested scrollers each with a request in one call (positions are read from one layout),
+`examples/todo_window/controls_panel_test.br`. With `animated = true` the scroller glides to the anchor instead of jumping: `applyScrollRequests`
+starts a `Runtime.glide`, and the host steps it with `stepGlide(rt, host, placed, dt)` each frame while `glideActive(rt)` (ease-out, the remaining
+distance shrinks by 1000x per 0.4 s whatever the frame rate; a wheel, a press or a touch stops it). `todo_window` steps it in `paceMomentum`; its
+Jump button glides. Test: `tests/scroll_glide_test.br`. Not done: two nested scrollers each with a request in one call (positions are read from one layout),
 animated scrolling, a "bottom"/"center" alignment of the anchor.
 
 ## Tooltip — `OnHover` and `Tooltip`
@@ -654,5 +657,29 @@ animated scrolling, a "bottom"/"center" alignment of the anchor.
 hover target is the deepest enabled Button, Toggle, TextField or Slider under the pointer, and `events.br` `syncHoverScopes` updates the `OnHover`
 ancestors of the old and new target inside the event that changes `rt.hover` (`pointerMove`, `pointerLeave`; the generated `setBool` action).
 `Tooltip(text = "..."):` + one child (`controls.br`) is a `Popover` whose panel shows `text` while that child is hovered, below it or above near the
-window's bottom. Test: `tests/tooltip_test.br`. Not done: a show delay (the runtime has no clock; a host could pass one), hover over non-control
+window's bottom, after `delay` milliseconds (default 500, `Tooltip(delay = 0)` = at once). The runtime has no clock of its own: the host calls
+`tickHover(rt, host, nowMs)` every frame (the first tick after the pointer enters starts the count) and keeps frames coming while `hoverWaiting(rt)`
+(`OnHover(delay = …)`; the todo window does both, `pace.br` `syncHover`). Test: `tests/tooltip_test.br`. Not done: hover over non-control
 content (a `Text`, an `Image`), tooltips for keyboard focus, touch long-press.
+
+
+## Navigation — `NavigationStack`, `NavigationLink`, `NavigationBack`
+
+`NavigationStack(title = "Home", names = ["a", "b"], titles = ["Page A", "Page B"]):` takes the root page as its first child and the page named
+`names[i]` as child `1 + i` (`controls.br`, no native facade). It owns the path (its own `state`), shows only the top page under a bar with a
+"‹ Back" button (while deeper than the root) and the page's title, and provides a `Navigator` (an `EnvValue`: `push(name)`, `pop()`, `depth`) to
+everything inside. `NavigationLink(label, to)` pushes a page by name; `NavigationBack(label)` pops (nothing happens at the root). Pages below the top are not
+mounted, so their state is dropped while covered (as `TabView`'s other tabs); a name that is not in `names` shows the root under a back button.
+The window's Controls panel has a "Settings" stack. Test: `tests/navigation_test.br` (interpreter and `boring build`).
+Not done: the system back gesture / Escape, push and pop animations (`Transition`), a path bound from outside (deep links), a typed
+`navigationDestination(for:)` instead of names, a title bar that lives outside the stack, `NavigationSplitView`.
+
+## Forms and menus — `Form`, `Section`, `LabeledContent`, `Menu`
+
+`Form:` stacks `Section(header = "", footer = ""):` groups: a bold caption header, a bordered group whose rows are separated by hairlines, a caption footer
+(`controls.br`, no native facade). `LabeledContent(label = "Name"):` is one row, the label leading and its control (the child) pushed to the trailing
+edge. `Menu(label, items, onSelect, danger = -1)` is a button `label ▾` that opens the items in a `Popover` (below, above or sideways as the window allows);
+choosing one closes it and reports its index, a press outside or Escape closes it, and the item at `danger` has the destructive role. Tests:
+`tests/form_test.br`, `tests/menu_test.br` (interpreter and `boring build`); the window's Settings > Profile page uses all four. Not done: right-click
+context menus (`contextMenu` on any view), submenus, separators and keyboard arrows inside a menu, a section border that follows the theme, a
+`Form` that adapts to a narrow window.

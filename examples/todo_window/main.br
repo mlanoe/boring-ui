@@ -271,7 +271,7 @@ kernel:
         # a quiet frame (a redraw asked for by an animation, no input since the last one) leaves the runtime as it was:
         # nothing to hit-test, and the caret has not moved, so neither lays the window out again
         let quiet = !screen.resized and !screen.mouse_pressed("left") and !screen.mouse_released("left") and !screen.mouse_pressed("right") and !screen.mouse_released("right") and !screen.mouse.right and screen.mouse.scroll_x == 0.0 and screen.mouse.scroll_y == 0.0 and !screen.touchStarted and !screen.touching and !screen.touchEnded and !screen.touchCancelled and screen.key_events.length == 0 and screen.text == "" and screen.marked == "" and !served and !pace.rolling and !pace.dirty and mx == pace.lastX and my == pace.lastY and pace.caretKnown
-        if !quiet:
+        if !quiet and pointerKnown(pace, mx, my, screen.mouse_pressed("left") or screen.mouse_pressed("right")):
             motion(rt, host, pw, ph, mx, my)
         if screen.mouse_pressed("left"):
             pressWith(pace, rt, host, pw, ph, mx, my, screen.time, screen.shift)
@@ -305,7 +305,9 @@ kernel:
         textInput(rt, host, screen.marked, screen.marked_end, screen.text)
         for name in screen.key_events:
             touch(pace)
-        let rebuilt = syncBusy(pace, rt, host, cells, screen.time)
+        let busyRebuilt = syncBusy(pace, rt, host, cells, screen.time)
+        let hoverRebuilt = syncHover(pace, rt, host, screen.time)
+        let rebuilt = busyRebuilt or hoverRebuilt
         let eventful = rebuilt or served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
         let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)
         # the accessibility tree (laid out only while an assistive technology is connected)
@@ -322,7 +324,7 @@ kernel:
         k.count = next.count
         k(block = (16, 16), grid = ((screen.width + 15) / 16, (screen.height + 15) / 16))
         screen.present(k.out)
-        if pacePending(pace, screen.time) or isBusy(cells):
+        if pacePending(pace, screen.time) or isBusy(cells) or hoverWaiting(rt):
             screen.requestRedraw()
         if !quiet:
             trackCaret(pace, rt, pw, ph)

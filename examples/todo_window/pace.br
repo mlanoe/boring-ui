@@ -17,6 +17,10 @@ struct Motion:
     var Animator an = Animator()
     var bool dirty = false
     var int lastX = 0 - 1
+    # The pointer position the window reported at launch (before any real movement) and whether the pointer has moved or pressed since.
+    var int startX = 0 - 1
+    var int startY = 0 - 1
+    var bool pointerSeen = false
     var int lastY = 0 - 1
     # the previous primary press (time in seconds, position) and how many quick presses in a row it ended
     var float32 pressAt = 0.0 - 10.0
@@ -53,6 +57,8 @@ def Placed paceFrame(mut Motion m, mut Runtime rt, Builder host, bool eventful, 
     if m.dirty:
         # a `Scroll(anchor, request)` asked to scroll: applied with the laid-out window before this frame's layout is taken
         _ = applyScrollRequests(rt, host, placedOf(rt, w, h))
+        if glideActive(rt):
+            m.rolling = true
         let animation = rt.takeAnimation()
         let triggers = rt.takeTriggers()
         if isAnimating(m.an, now) and animation == nil and triggers.length == 0:
@@ -65,6 +71,19 @@ def Placed paceFrame(mut Motion m, mut Runtime rt, Builder host, bool eventful, 
 def bool pacePending(Motion m, float32 seconds):
     let now = (seconds as float) * 1000.0
     m.dirty or m.rolling or isAnimating(m.an, now) or !m.an.completionTaken
+
+# Whether the pointer is really over the window: a window reports (0, 0) until the first pointer event, which must not count as hovering
+# whatever sits at the corner (a tooltip would show at launch). The first position is remembered; the pointer is known once it moves from it
+# or a button is pressed.
+def bool pointerKnown(mut Motion m, int x, int y, bool pressed):
+    if m.pointerSeen:
+        return true
+    if m.startX < 0:
+        m.startX = x
+        m.startY = y
+    if pressed or x != m.startX or y != m.startY:
+        m.pointerSeen = true
+    m.pointerSeen
 
 def void touch(mut Motion m):
     m.dirty = true
@@ -109,6 +128,10 @@ def void paceMomentum(mut Motion m, mut Runtime rt, Builder host, int w, int h, 
     if momentumActive(rt):
         m.rolling = stepMomentum(rt, host, placedOf(rt, w, h), dt)
         m.dirty = true
+    if glideActive(rt):
+        if stepGlide(rt, host, placedOf(rt, w, h), dt):
+            m.rolling = true
+        m.dirty = true
 
 # The system cancelled the touch (a call, the window lost): nothing is pressed and nothing flings.
 def void touchAbort(mut Motion m, mut Runtime rt):
@@ -138,6 +161,13 @@ def bool syncBusy(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, f
     rt.endEvent(host)
     m.dirty = true
     true
+
+# Feeds the runtime's hover clock (tooltips appear after their delay); true when it rebuilt the runtime, so the frame must be painted.
+def bool syncHover(mut Motion m, mut Runtime rt, Builder host, float32 seconds):
+    let rebuilt = tickHover(rt, host, (seconds as float) * 1000.0)
+    if rebuilt:
+        m.dirty = true
+    rebuilt
 
 def bool isBusy(BusyCells cells):
     cells.busy.value

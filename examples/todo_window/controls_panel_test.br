@@ -58,7 +58,14 @@ def Placed? labelled(Placed p, string label):
 
 let jumpButton = labelled(after, "Jump to tabs") else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
 assert(click(rt, host, after, jumpButton.x + 2.0, jumpButton.y + 2.0))
-assert(applyScrollRequests(rt, host, placedOf(rt, 640, 360)))
+# The panel's scroller is `animated`: the request starts a glide, stepped here until it lands.
+assert(!applyScrollRequests(rt, host, placedOf(rt, 640, 360)))
+assert(glideActive(rt))
+var glideSteps = 0
+while glideActive(rt) and glideSteps < 200:
+    _ = stepGlide(rt, host, placedOf(rt, 640, 360), 0.05)
+    glideSteps += 1
+assert(!glideActive(rt))
 let scrolled = placedOf(rt, 640, 360)
 let viewport = firstOfKind(scrolled, "Scroll") else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
 let info = labelled(scrolled, "Info") else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))

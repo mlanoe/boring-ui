@@ -22,6 +22,7 @@ view WindowApp:
     state int pick = 1
     state int tab = 0
     state int jump = 0
+    state int lang = 0
 
     def setShowLogo(bool v):
         showLogo = v
@@ -41,7 +42,7 @@ view WindowApp:
                     TodoApp()
                     DisclosureGroup(title = "Controls"):
                         Frame(maxHeight = 150.0):
-                            Scroll(anchor = "tabs", request = jump):
+                            Scroll(anchor = "tabs", request = jump, animated = true):
                                 Column(alignment = .Leading, spacing = 8.0):
                                     Button(label = "Jump to tabs", onActivate = ():
                                         jump += 1)
@@ -52,6 +53,20 @@ view WindowApp:
                                         segment = i)
                                     Picker(selected = pick, options = ["Red", "Green", "Blue"], onSelect = (i):
                                         pick = i)
+                                    NavigationStack(title = "Settings", names = ["profile", "about"], titles = ["Profile", "About"]):
+                                        Column(alignment = .Leading, spacing = 4.0):
+                                            NavigationLink(label = "Profile", to = "profile")
+                                            NavigationLink(label = "About", to = "about")
+                                        Form:
+                                            Section(header = "Account", footer = "Shown on your profile."):
+                                                LabeledContent(label = "Name"):
+                                                    Text(content = "Demo user")
+                                                LabeledContent(label = "Language"):
+                                                    Menu(label = (["English", "Français", "Deutsch"])[lang], items = ["English", "Français", "Deutsch"], onSelect = (i):
+                                                        lang = i)
+                                            Section(header = "More"):
+                                                NavigationLink(label = "About", to = "about")
+                                        Text(content = "A boring-ui demo window.")
                                     ScrollAnchor(name = "tabs"):
                                         TabView(selected = tab, titles = ["Info", "Work"], onSelect = (i):
                                             tab = i):

@@ -490,6 +490,7 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
 # "Range" (Shift) selects from the anchor to it; "" replaces the selection. Anything else ignores it.
 pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float x, float y, string mods):
     rt.momentum = nil
+    rt.glide = nil
     if pressScrollbar(rt, host, placed, x, y):
         return true
     let path = hitTest(placed, x, y)
@@ -637,12 +638,56 @@ def void syncHoverScopes(mut Runtime rt, Builder host, int fromId, int toId):
     let after = hoverScopes(rt, toId)
     for id in before:
         if !after.contains(id):
+            mut kept = [] as [HoverWait]
+            for w in rt.hoverPending:
+                if w.id != id:
+                    kept.push(w)
+            rt.hoverPending = kept
             if let h = rt.handle(id):
                 _ = act(rt, host, h, "setBool", "false")
     for id in after:
         if !before.contains(id):
             if let h = rt.handle(id):
-                _ = act(rt, host, h, "setBool", "true")
+                let delay = hoverDelay(rt, id)
+                if delay > 0.0:
+                    rt.hoverPending.push(HoverWait(id = id, since = -1.0, delay = delay))
+                else:
+                    _ = act(rt, host, h, "setBool", "true")
+
+def float hoverDelay(Runtime rt, int id):
+    if let n = rt.find(id):
+        return ((n.props["delay"] else ("0")).parseFloat()) else (0.0)
+    0.0
+
+# Whether some `OnHover` with a `delay` is still waiting for it (the host keeps ticking frames while so).
+pub def bool hoverWaiting(Runtime rt):
+    rt.hoverPending.length > 0
+
+# The host's clock, `nowMs` milliseconds: an `OnHover` whose delay has elapsed since the pointer entered (counted from the first tick after the
+# entry) now reports true. Returns whether the runtime was rebuilt (the frame must be painted).
+pub def bool tickHover(mut Runtime rt, Builder host, float nowMs):
+    if rt.hoverPending.length == 0:
+        return false
+    mut waiting = [] as [HoverWait]
+    mut due = [] as [int]
+    for w in rt.hoverPending:
+        if w.since < 0.0:
+            waiting.push(HoverWait(id = w.id, since = nowMs, delay = w.delay))
+        else:
+            if nowMs - w.since >= w.delay:
+                due.push(w.id)
+            else:
+                waiting.push(w)
+    rt.hoverPending = waiting
+    if due.length == 0:
+        return false
+    rt.beginEvent()
+    for id in due:
+        if let h = rt.handle(id):
+            _ = act(rt, host, h, "setBool", "true")
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    true
 
 # The pointer moved to (x, y): the control under it becomes `rt.hover` (one update pass when that changes; the
 # painter shades it), and while a slider holds the pointer, moving it (even outside the slider) drags the value.
@@ -1341,13 +1386,59 @@ pub def bool applyScrollRequests(mut Runtime rt, Builder host, Placed placed):
                     let most = numOf(v, "scrollMax")
                     if target > most:
                         target = most
-                    if target != current:
+                    let glides = (v.props["animated"] else ("false")) == "true"
+                    if glides:
+                        if let h = rt.handle(v.id):
+                            rt.glide = Glide(node = h.id, generation = h.generation, target = target)
+                    if !glides and target != current:
                         rt.beginEvent()
                         _ = rt.scrollTo(v.id, target)
                         rt.invalidateRoot()
                         rt.endEvent(host)
                         moved = true
     moved
+
+pub def bool glideActive(Runtime rt):
+    rt.glide != nil
+
+# Advances a programmatic `animated` scroll by `dt` seconds: the remaining distance shrinks by a factor of 1/1000 per 0.4 s (ease-out, frame-rate
+# independent) and it lands on the target within half a pixel. Returns whether it is still running (the host schedules another frame).
+pub def bool stepGlide(mut Runtime rt, Builder host, Placed placed, float dt):
+    let running = rt.glide
+    guard let g = running else:
+        return false
+    guard let h = rt.handle(g.node) else:
+        rt.glide = nil
+        return false
+    guard let node = findPlaced(placed, g.node) else:
+        rt.glide = nil
+        return false
+    if h.generation != g.generation:
+        rt.glide = nil
+        return false
+    let at = numOf(node, "scroll")
+    var most = numOf(node, "scrollMax")
+    var target = g.target
+    if target > most:
+        target = most
+    var left = target - at
+    var pos = target
+    var alive = false
+    if left > 0.5 or left < -0.5:
+        let keep = pow(0.001, dt / 0.4)
+        left = left * keep
+        pos = target - left
+        alive = left > 0.5 or left < -0.5
+        if !alive:
+            pos = target
+    if pos != at:
+        rt.beginEvent()
+        _ = rt.scrollTo(g.node, pos)
+        rt.invalidateRoot()
+        rt.endEvent(host)
+    if !alive:
+        rt.glide = nil
+    alive
 
 # ── retiring phase ──────────────────────────────────────────────────────────────────────────────
 # A subtree removed under an animated `Transition` stays mounted but frozen until its removal finishes. The host
@@ -1464,6 +1555,7 @@ def float frictionPerTick():
 
 pub def bool fling(mut Runtime rt, Placed placed, float x, float y, float vx, float vy):
     rt.momentum = nil
+    rt.glide = nil
     let path = hitTest(placed, x, y)
     var i = path.length - 1
     while i >= 0:
@@ -1487,6 +1579,7 @@ pub def bool momentumActive(Runtime rt):
 
 pub def void cancelMomentum(mut Runtime rt):
     rt.momentum = nil
+    rt.glide = nil
 
 # Advances inertia by `dt` seconds. Returns whether it is still running (the host schedules another frame).
 pub def bool stepMomentum(mut Runtime rt, Builder host, Placed placed, float dt):
@@ -1550,6 +1643,7 @@ def float flingWindow():
 
 pub def bool touchDown(mut Runtime rt, Builder host, Placed placed, float x, float y, float t):
     rt.momentum = nil
+    rt.glide = nil
     rt.gesture = TouchGesture(startX = x, startY = y, lastX = x, lastY = y, lastT = t)
     true
 
@@ -1600,6 +1694,7 @@ pub def void touchCancel(mut Runtime rt):
 # transaction. Returns whether any offset moved.
 pub def bool scrollBy(mut Runtime rt, Builder host, Placed placed, float x, float y, float dx, float dy):
     rt.momentum = nil
+    rt.glide = nil
     let path = hitTest(placed, x, y)
     var restX = dx
     var restY = dy

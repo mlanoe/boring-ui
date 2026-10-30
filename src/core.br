@@ -343,6 +343,12 @@ pub struct KeyObserver:
 # Inertial scrolling in flight (draft, "Scroll": "Momentum is driven by platform-timed follow-up transactions"): the
 # scroller it moves, its axis and its velocity in pixels per second (positive = the offset grows). Ended by new input,
 # by hitting an edge or friction, and when the scroller unmounts.
+# A programmatic scroll gliding to `target` (events.br `stepGlide`).
+pub struct Glide:
+    pub int node
+    pub int generation
+    pub float target
+
 pub struct Momentum:
     pub int node
     pub int generation
@@ -417,6 +423,12 @@ pub struct LayoutMemory:
             placed = {=}
             sizes = {=}
 
+# An `OnHover` scope waiting for its `delay` (ms): `since` is the clock reading of the first `tickHover` after the entry (-1.0 until that tick).
+pub struct HoverWait:
+    pub int id
+    pub float since
+    pub float delay
+
 pub struct Runtime:
     pub var Mounted? root = nil
     pub var mut [string] events = []
@@ -439,9 +451,12 @@ pub struct Runtime:
     # The enabled interactive control (Button, Toggle, TextField, Slider) under the pointer, set by `pointerMove`
     # (generation-checked; cleared when it unmounts or a sheet opens). The painter shades it.
     pub var Handle? hover = nil
+    # `OnHover` scopes the pointer entered whose `delay` has not elapsed yet (see `HoverWait`). Dropped when the pointer leaves the scope.
+    pub var mut [HoverWait] hoverPending = []
     # The composition in progress, if any (see `Composition`); pruned after every update pass.
     pub var Composition? composition = nil
     pub var Momentum? momentum = nil
+    pub var Glide? glide = nil
     # The internal clipboard (see events.br, `copySelection` / `pasteClipboard`).
     pub var string clipboard = ""
     # A press in a text field is still dragging a selection (a double or triple click is not: it already selected).

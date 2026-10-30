@@ -77,4 +77,14 @@ let settled = paceFrame(pace, rt, host, false, bx + 3, by, 640, 360, 2.5)
 assert(!pacePending(pace, 2.5))
 assert_eq(retiringIds(rt).length, 0)                  # the removal was released when it finished
 assert(firstOf(settled, "Image") == nil)                # and the ghost is gone
+
+# The launch position (0, 0) is not a pointer: only a move away from it, or a press, makes the pointer known.
+mut launch = Motion()
+assert(!pointerKnown(launch, 0, 0, false))
+assert(!pointerKnown(launch, 0, 0, false))
+assert(pointerKnown(launch, 5, 0, false))
+assert(pointerKnown(launch, 0, 0, false))             # and it stays known
+mut clicked = Motion()
+assert(!pointerKnown(clicked, 0, 0, false))
+assert(pointerKnown(clicked, 0, 0, true))
 print "pace ok"

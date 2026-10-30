@@ -1242,7 +1242,8 @@ pub def void popupsIn(Placed p, mut [Placed] out):
         popupsIn(c, out)
 
 # Where a popover's panel goes: below its anchor, left edges aligned, unless it does not fit there and the window has more room
-# above (then its bottom edge meets the anchor's top); the panel is kept inside the window. `props["side"]` records the choice.
+# above (then its bottom edge meets the anchor's top); likewise sideways: past the window's right edge, the panel's right edge meets the
+# anchor's. The panel is kept inside the window. `props["side"]` (below/above) and `props["edge"]` (left/right) record the choice.
 def Placed popupAt(Placed anchor, Placed panel, float width, float height):
     let below = anchor.y + anchor.h
     var side = "below"
@@ -1255,12 +1256,18 @@ def Placed popupAt(Placed anchor, Placed panel, float width, float height):
     if ny < 0.0:
         ny = 0.0
     var nx = anchor.x
+    var edge = "left"
+    if nx + panel.w > width and anchor.x + anchor.w - panel.w >= 0.0:
+        # does not fit past the anchor's left edge: its right edge meets the anchor's right edge
+        nx = anchor.x + anchor.w - panel.w
+        edge = "right"
     if nx + panel.w > width:
         nx = width - panel.w
     if nx < 0.0:
         nx = 0.0
     mut moved = translated(panel, nx - panel.x, ny - panel.y)
     moved.props["side"] = side
+    moved.props["edge"] = edge
     moved
 
 # The popover layer: every presented popover's panel is moved next to its anchor (see `popupAt`).

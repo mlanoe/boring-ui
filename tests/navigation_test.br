@@ -1,0 +1,85 @@
+# NavigationStack / NavigationLink / NavigationBack (src/controls.br): push by name, the bar's back button, one page mounted at a time.
+# Run: boring run tests/navigation_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.controls.*
+
+view Panel:
+    body():
+        NavigationStack(title = "Home", names = ["a", "b"], titles = ["Page A", "Page B"]):
+            Column(alignment = .Leading, spacing = 4.0):
+                Text(content = "root")
+                NavigationLink(label = "Open A", to = "a")
+            Column(alignment = .Leading, spacing = 4.0):
+                Text(content = "page a")
+                NavigationLink(label = "Open B", to = "b")
+                NavigationBack(label = "Done")
+            Column(alignment = .Leading, spacing = 4.0):
+                Text(content = "page b")
+                NavigationLink(label = "Open nothing", to = "zzz")
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 400.0, 400.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def bool hasText(Runtime rt, string s):
+    for t in ofKind(lay(rt), "Text"):
+        if (t.props["content"] else ("")) == s:
+            return true
+    false
+
+def bool pressLabel(mut Runtime rt, Builder host, string label):
+    for b in ofKind(lay(rt), "Button"):
+        if (b.props["label"] else ("")).startsWith(label):
+            return click(rt, host, lay(rt), b.x + 2.0, b.y + 2.0)
+    false
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# The root: its title, its content, no back button.
+assert(hasText(rt, "Home"))
+assert(hasText(rt, "root"))
+assert(!hasText(rt, "page a"))
+assert(!pressLabel(rt, host, "‹ Back"))
+
+# Push "a": its title and content replace the root's; the bar gets a back button.
+assert(pressLabel(rt, host, "Open A"))
+assert(hasText(rt, "Page A"))
+assert(hasText(rt, "page a"))
+assert(!hasText(rt, "root"))
+
+# Push "b" on top, then the bar's back button returns to "a", then NavigationBack to the root.
+assert(pressLabel(rt, host, "Open B"))
+assert(hasText(rt, "page b"))
+assert(hasText(rt, "Page B"))
+assert(pressLabel(rt, host, "‹ Back"))
+assert(hasText(rt, "page a"))
+assert(pressLabel(rt, host, "Done"))
+assert(hasText(rt, "root"))
+assert(hasText(rt, "Home"))
+
+# An unknown page name has no page: the root shows under a back button, and Back returns to the page below.
+assert(pressLabel(rt, host, "Open A"))
+assert(pressLabel(rt, host, "Open B"))
+assert(pressLabel(rt, host, "Open nothing"))
+assert(hasText(rt, "root"))
+assert(pressLabel(rt, host, "‹ Back"))
+assert(hasText(rt, "page b"))
+print "navigation_test ok"

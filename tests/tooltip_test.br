@@ -47,17 +47,26 @@ assert_eq(texts(rt), 0)
 let save = ofKind(lay(rt), "Button")[0]
 let other = ofKind(lay(rt), "Button")[1]
 
-# The pointer over "Save": the tooltip's text is laid out, below the button.
+# The pointer over "Save": nothing yet; the clock starts at the first tick, and the text appears 500 ms later, below the button.
 assert(pointerMove(rt, host, lay(rt), save.x + 2.0, save.y + 2.0))
+assert_eq(texts(rt), 0)
+assert(hoverWaiting(rt))
+assert(!tickHover(rt, host, 1000.0))
+assert(!tickHover(rt, host, 1400.0))
+assert_eq(texts(rt), 0)
+assert(tickHover(rt, host, 1500.0))
+assert(!hoverWaiting(rt))
 assert_eq(texts(rt), 1)
 let panel = ofKind(lay(rt), "Text")[0]
 assert(panel.y >= save.y + save.h - 0.001)
 
-# Moving to another control, then leaving the window: it goes.
+# Moving to another control cancels / hides it; leaving before the delay never shows it.
 assert(pointerMove(rt, host, lay(rt), other.x + 2.0, other.y + 2.0))
 assert_eq(texts(rt), 0)
 assert(pointerMove(rt, host, lay(rt), save.x + 2.0, save.y + 2.0))
-assert_eq(texts(rt), 1)
+assert(!tickHover(rt, host, 2000.0))
 assert(pointerLeave(rt, host))
+assert(!hoverWaiting(rt))
+assert(!tickHover(rt, host, 3000.0))
 assert_eq(texts(rt), 0)
 print "tooltip_test ok"
