@@ -13,6 +13,7 @@ view Panel:
             Column(alignment = .Leading, spacing = 4.0):
                 Text(content = "root")
                 NavigationLink(label = "Open A", to = "a")
+                NavigationBack(label = "Root back")
             Column(alignment = .Leading, spacing = 4.0):
                 Text(content = "page a")
                 NavigationLink(label = "Open B", to = "b")
@@ -58,6 +59,9 @@ assert(hasText(rt, "Home"))
 assert(hasText(rt, "root"))
 assert(!hasText(rt, "page a"))
 assert(!pressLabel(rt, host, "‹ Back"))
+# NavigationBack is disabled at the root: it does nothing.
+assert(!pressLabel(rt, host, "Root back"))
+assert(hasText(rt, "root"))
 
 # Push "a": its title and content replace the root's; the bar gets a back button.
 assert(pressLabel(rt, host, "Open A"))

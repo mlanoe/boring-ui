@@ -668,7 +668,7 @@ content (a `Text`, an `Image`), tooltips for keyboard focus, touch long-press.
 `NavigationStack(title = "Home", names = ["a", "b"], titles = ["Page A", "Page B"]):` takes the root page as its first child and the page named
 `names[i]` as child `1 + i` (`controls.br`, no native facade). It owns the path (its own `state`), shows only the top page under a bar with a
 "‹ Back" button (while deeper than the root) and the page's title, and provides a `Navigator` (an `EnvValue`: `push(name)`, `pop()`, `depth`) to
-everything inside. `NavigationLink(label, to)` pushes a page by name; `NavigationBack(label)` pops (nothing happens at the root). Pages below the top are not
+everything inside. `NavigationLink(label, to)` pushes a page by name; `NavigationBack(label)` pops (disabled at the root). Pages below the top are not
 mounted, so their state is dropped while covered (as `TabView`'s other tabs); a name that is not in `names` shows the root under a back button.
 The window's Controls panel has a "Settings" stack. Test: `tests/navigation_test.br` (interpreter and `boring build`).
 Not done: the system back gesture / Escape, push and pop animations (`Transition`), a path bound from outside (deep links), a typed

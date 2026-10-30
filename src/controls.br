@@ -270,15 +270,16 @@ pub view NavigationLink:
         Button(label = "{label} ›", style = ButtonStyle.Secondary, onActivate = ():
             nav.push(to))
 
-# A button that pops the enclosing `NavigationStack` (the stack's bar already has one while it is deeper than the root; at the root popping does nothing).
+# A button that pops the enclosing `NavigationStack` (the stack's bar already has one while it is deeper than the root).
 pub view NavigationBack:
     env Navigator nav
 
     string label = "Back"
 
     body():
-        Button(label = label, onActivate = ():
-            nav.pop())
+        Disabled(value = nav.depth == 0):
+            Button(label = label, onActivate = ():
+                nav.pop())
 
 # ── forms ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # `Form` stacks `Section`s; a `Section` is an optional caption `header`, a bordered group whose rows are separated by hairlines, and an optional `footer`
