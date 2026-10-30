@@ -123,8 +123,7 @@ struct BusyCells:
 # The indeterminate bar's phase (0...1) at `seconds`: one sweep every 1.4 s.
 def float phaseAt(float32 seconds):
     let t = (seconds as float) * 0.7
-    let whole = t as int
-    t - (whole as float)
+    t - (t as int) as float
 
 # Keeps the window in step with the busy indicator: while `cells.busy` the phase advances and the root is rebuilt every frame (its
 # new phase), and once more when `busy` has just changed (the view reads it). True when the runtime was rebuilt, so the frame must be painted.

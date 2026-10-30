@@ -54,6 +54,14 @@ def Panel__State state(Runtime rt):
 def bool isOpen(Runtime rt):
     Panel(gap = 0.0).isOpen(state(rt))
 
+# A runtime started on `host`, with the anchor pressed once (opens the popover).
+def Runtime opened(Builder host, float height):
+    mut rt = Runtime()
+    rt.start(host)
+    let anchor = ofKind(lay(rt, height), "Button")[0]
+    assert(click(rt, host, lay(rt, height), anchor.x + 2.0, anchor.y + 2.0))
+    rt
+
 def string side(Runtime rt, float height):
     ofKind(lay(rt, height), "Popover")[0].children[1].props["side"] else ("none")
 
@@ -63,10 +71,7 @@ def bool near(float a, float b):
 
 # Room below (anchor near the top of a tall window): the panel is under the anchor.
 let hostTop = ViewRoot(inner = PanelBuilder(gap = 0.0))
-mut rtTop = Runtime()
-rtTop.start(hostTop)
-let anchorTop = ofKind(lay(rtTop, 300.0), "Button")[0]
-assert(click(rtTop, hostTop, lay(rtTop, 300.0), anchorTop.x + 2.0, anchorTop.y + 2.0))
+mut rtTop = opened(hostTop, 300.0)
 assert(isOpen(rtTop))
 assert_eq(side(rtTop, 300.0), "below")
 let popTop = ofKind(lay(rtTop, 300.0), "Popover")[0]
@@ -74,10 +79,7 @@ assert(popTop.children[1].y >= popTop.children[0].y + popTop.children[0].h - 0.0
 
 # No room below (anchor near the bottom of a short window): the panel opens upward, inside the window.
 let hostBottom = ViewRoot(inner = PanelBuilder(gap = 100.0))
-mut rtBottom = Runtime()
-rtBottom.start(hostBottom)
-let anchorBottom = ofKind(lay(rtBottom, 140.0), "Button")[0]
-assert(click(rtBottom, hostBottom, lay(rtBottom, 140.0), anchorBottom.x + 2.0, anchorBottom.y + 2.0))
+mut rtBottom = opened(hostBottom, 140.0)
 assert(isOpen(rtBottom))
 assert_eq(side(rtBottom, 140.0), "above")
 let popBottom = ofKind(lay(rtBottom, 140.0), "Popover")[0]
@@ -99,10 +101,7 @@ assert(click(rtBottom, hostBottom, lay(rtBottom, 140.0), 190.0, 2.0))
 assert(!isOpen(rtBottom))
 
 # Escape dismisses too.
-mut rtEsc = Runtime()
-rtEsc.start(hostTop)
-let anchorEsc = ofKind(lay(rtEsc, 300.0), "Button")[0]
-assert(click(rtEsc, hostTop, lay(rtEsc, 300.0), anchorEsc.x + 2.0, anchorEsc.y + 2.0))
+mut rtEsc = opened(hostTop, 300.0)
 assert(isOpen(rtEsc))
 _ = keyPress(rtEsc, hostTop, "Escape")
 assert(!isOpen(rtEsc))
