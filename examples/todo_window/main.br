@@ -197,7 +197,7 @@ def [int] caretAt(Runtime rt, int w, int h):
                     at = caret + c.cursor
                 let offset = placed.theme.measurer.caretX(shown, at, body, 0)
                 let origin = fieldOrigin(placed.theme.measurer, shown, at, node.w, body)
-                return [(node.x + 4.0 + origin + offset) as int, (node.y + 4.0) as int]
+                return [(node.x + 4.0 + origin + offset) as int, (node.y + maxOf(0.0, (node.h - body) / 2.0)) as int]
     [0, 0]
 
 
@@ -218,7 +218,7 @@ let fontsDir = "../../../text/fonts"
 let sansFont = sansFontFrom(fontsDir)
 if sansFont.length == 0:
     print "no sans font found on this machine (see text/src/fonts.br): text will not be drawn"
-let theme = Theme(measurer = EngineMeasurer(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir)))
+let theme = macThemeOn(Theme(measurer = EngineMeasurer(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))))
 
 # `phase` and `busy` are cells the loop writes (the indeterminate bar of the controls panel): the builder reads them
 # whenever the root is rebuilt, and the view's `onBusy` callback flips `busy`.

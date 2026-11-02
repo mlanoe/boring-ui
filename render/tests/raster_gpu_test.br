@@ -89,4 +89,14 @@ assert(compareGlyphs([rect(0.0, 0.0, 40.0, 20.0, "#FFFFFF"), mark(0, 13.0, 10.0,
 assert(compareGlyphs([clip(0.0, 0.0, 15.0, 20.0), mark(0, 13.0, 10.0, "#000000"), pop()], 40, 20) <= 1)
 assert(compareGlyphs([fade(0.5), rect(0.0, 0.0, 20.0, 20.0, "#0000FF"), mark(0, 3.0, 8.0, "#FFFFFF"), unfade()], 40, 20) <= 1)
 
+def Command roundedRect(float x, float y, float w, float h, float r, string hex):
+    Command(kind = "FillRect", x = x, y = y, w = w, h = h, hex = hex, radius = r)
+
+def Command roundedStroke(float x, float y, float w, float h, float line, float r, string hex):
+    Command(kind = "StrokeRect", x = x, y = y, w = w, h = h, hex = hex, value = line, radius = r)
+
+assert(compare([roundedRect(1.0, 1.0, 12.0, 6.0, 3.0, "#336699")], 16, 8) <= 1)
+assert(compare([roundedRect(0.5, 0.25, 14.3, 7.1, 4.0, "#FF000080"), roundedStroke(0.5, 0.25, 14.3, 7.1, 1.0, 4.0, "#0000FF")], 16, 8) <= 1)
+assert(compare([clip(2.0, 1.0, 9.5, 5.0), roundedRect(0.0, 0.0, 16.0, 8.0, 8.0, "#00FF00"), pop(), roundedStroke(2.0, 1.0, 12.0, 6.0, 1.5, 3.0, "#000000")], 16, 8) <= 1)
+
 print "raster gpu ok"

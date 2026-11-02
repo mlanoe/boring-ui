@@ -18,14 +18,14 @@ let placed = layout(rt, 600.0, 600.0) else (Placed(id = -1, kind = "", x = 0.0, 
 let list = displayList(placed)
 let picture = rasterize(list, 600, 600)
 
-# Every FillRect of the list lands on the picture: the first one's top-left pixel is not transparent.
+# Every FillRect of the list lands on the picture: the first one's centre pixel is not transparent (its corners may be rounded).
 var firstFill = -1
 for i in 0..<list.length:
     if firstFill < 0 and list[i].kind == "FillRect":
         firstFill = i
 assert(firstFill >= 0)
 let f = list[firstFill]
-assert(pixelHex(picture, f.x as int, f.y as int) != "#00000000")
+assert(pixelHex(picture, (f.x + f.w / 2.0) as int, (f.y + f.h / 2.0) as int) != "#00000000")
 
 # Text is drawn now; nothing the Todo application emits is skipped.
 assert(!picture.unsupported.contains("DrawText"))

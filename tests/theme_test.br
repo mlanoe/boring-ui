@@ -22,7 +22,7 @@ assert_eq(brand.color(ColorRole.Accent), "#7357FF")
 assert_eq(brand.color(ColorRole.PrimaryText), "#1D1D1F")
 assert_eq(brand.metric(MetricRole.ControlRadius), 10.0)
 assert_eq(sys.color(ColorRole.Accent), "#0A84FF")
-assert_eq(sys.metric(MetricRole.ControlRadius), 6.0)
+assert_eq(sys.metric(MetricRole.ControlRadius), 8.0)
 
 # Replacing a token twice keeps one entry.
 let twice = brand.withColor(ColorRole.Accent, "#FF00FF")

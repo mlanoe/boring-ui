@@ -353,6 +353,94 @@ pub view ColorPicker:
                     Button(label = "White", style = ButtonStyle.Plain, onActivate = ():
                         self.preset(255.0, 255.0, 255.0))
 
+# ── shapes and canvas ──────────────────────────────────────────────────────────────────────────────────────────────────────
+# The renderer paints rectangles (with rounded corners), text and images, so shapes are those: a filled rectangle, circle or capsule, optionally
+# outlined, and axis-aligned lines. An outline is a second, inset fill of the outline's color under the shape's own (so a shape's fill is opaque
+# and a hollow outline is not possible); diagonal lines and arbitrary paths are not drawable yet.
+
+# A filled rectangle of `width` x `height` with corners rounded by `radius` and, when `stroke` is a color, an outline of `strokeWidth` inside it.
+pub view Rectangle:
+    string color
+    float width
+    float height
+    float radius = 0.0
+    string stroke = ""
+    float strokeWidth = 1.0
+
+    body():
+        Frame(width = width, height = height):
+            if stroke != "" and strokeWidth > 0.0:
+                Background(color = stroke, radius = radius):
+                    Padding(insets = strokeWidth):
+                        Background(color = color, radius = (if radius > strokeWidth: radius - strokeWidth else: 0.0)):
+                            Spacer()
+            else:
+                Background(color = color, radius = radius):
+                    Spacer()
+
+# A filled circle of `diameter`, optionally outlined like `Rectangle`.
+pub view Circle:
+    string color
+    float diameter
+    string stroke = ""
+    float strokeWidth = 1.0
+
+    body():
+        Rectangle(color = color, width = diameter, height = diameter, radius = diameter / 2.0, stroke = stroke, strokeWidth = strokeWidth)
+
+# A filled capsule (a rectangle whose short sides are fully rounded).
+pub view Capsule:
+    string color
+    float width
+    float height
+    string stroke = ""
+    float strokeWidth = 1.0
+
+    body():
+        Rectangle(color = color, width = width, height = height, radius = (if width < height: width / 2.0 else: height / 2.0), stroke = stroke, strokeWidth = strokeWidth)
+
+# A horizontal line of `length` and `thickness`.
+pub view HLine:
+    string color
+    float length
+    float thickness = 1.0
+
+    body():
+        Rectangle(color = color, width = length, height = thickness)
+
+# A vertical line of `length` and `thickness`.
+pub view VLine:
+    string color
+    float length
+    float thickness = 1.0
+
+    body():
+        Rectangle(color = color, width = thickness, height = length)
+
+# A fixed `width` x `height` drawing surface: its children are stacked in the top-left corner (later ones over earlier ones), each placed with `At`,
+# and anything outside the surface is clipped. Children are ordinary views, so shapes, text, images and even controls can be drawn on it.
+pub view Canvas:
+    float width
+    float height
+    [View] children
+
+    body():
+        Frame(width = width, height = height):
+            Clip:
+                Layer(alignment = .TopLeading):
+                    for i in 0..<children.length with i:
+                        children[i]
+
+# Places its child `x`, `y` from the top-left corner of the `Canvas` it is drawn on (a paint and hit-test translation: it does not change sizes).
+pub view At:
+    float x
+    float y
+    [View] children
+
+    body():
+        Offset(x = x, y = y):
+            children[0]
+
 # An indeterminate progress bar: a segment (0.3 of the width) sweeps across the track as `phase` goes 0...1 (the host
 # advances it every frame and wraps it: the animation system is value-triggered, it has no free-running loop).
 pub view IndeterminateBar:

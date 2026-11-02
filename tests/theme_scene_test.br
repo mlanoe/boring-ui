@@ -38,7 +38,7 @@ def noop():
 # ── the default theme paints with the system tokens ──────────────────────────────────────────────
 
 let plain = lay(Button(label = "OK", onActivate = noop), 200.0, 100.0)
-assert_eq(hexOf(displayList(plain), "FillRect", 0), "#F5F5F7")      # Secondary: Surface
+assert_eq(hexOf(displayList(plain), "FillRect", 0), "#E5E5EA")      # Secondary: Separator
 assert_eq(hexOf(displayList(plain), "DrawText", 0), "#1D1D1F")      # Text
 assert_eq(plain.w, 32.0)                                            # 16 + 2 * 8
 assert_eq(plain.h, 32.0)

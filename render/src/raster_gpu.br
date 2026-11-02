@@ -18,7 +18,7 @@
 # Glyph masks: a `DrawGlyph` is op 7; its box is the mask's pixel rectangle (pen snapped, `left`/`top` applied), float
 # slot 8 holds the mask width and `u[4 i + 3]` the offset of its bytes in `Encoded.pool` (one byte per entry).
 #
-# Layout, per command `i`: `f[12 i ..]` = box x0 y0 x1 y1, clip x0 y0 x1 y1, value, dx, dy, (unused);
+# Layout, per command `i`: `f[12 i ..]` = box x0 y0 x1 y1, clip x0 y0 x1 y1, value, dx, dy, corner radius (fill and stroke);
 # `u[4 i ..]` = op, colour, glyph, (unused). Ops: 0 fill, 1 stroke, 2 shadow, 3 glyph, 4 push opacity, 5 pop, 6 image.
 #
 # Everything the kernel calls is a top-level function over float32 scalars (the one helper shape that every
@@ -92,6 +92,8 @@ pub def Encoded encodeWith([Command] list, [Bitmap] images, GlyphAtlas glyphs, i
             let color = parseColor(c.hex)
             if color.a > 0:
                 push(f, u, 0, areaOf(c), clip, 0.0, 0.0, 0.0, pack(color), 0)
+                let radiusAt = f.length - 1
+                f[radiusAt] = c.radius as float32
                 count += 1
         elif c.kind == "MarkedText":
             let color = parseColor(c.hex)
@@ -102,6 +104,8 @@ pub def Encoded encodeWith([Command] list, [Bitmap] images, GlyphAtlas glyphs, i
             let color = parseColor(c.hex)
             if color.a > 0:
                 push(f, u, 1, areaOf(c), clip, c.value, 0.0, 0.0, pack(color), 0)
+                let radiusAt = f.length - 1
+                f[radiusAt] = c.radius as float32
                 count += 1
         elif c.kind == "DrawShadow":
             let color = parseColor(c.hex)
@@ -211,6 +215,29 @@ pub def float32 gauss(float32 i, float32 a, float32 b, float32 sigma):
     let c = i + 0.5
     let k = sigma * 1.4142135
     0.5 * (erfOfDevice((b - c) / k) - erfOfDevice((a - c) / k))
+
+# Coverage of pixel (`fx`, `fy`) by the rounded rectangle `x0 y0 x1 y1`, corner radius `r`: the device twin of raster.br's `roundMask`.
+pub def float32 roundMaskDevice(float32 fx, float32 fy, float32 x0, float32 y0, float32 x1, float32 y1, float32 r):
+    let hx = (x1 - x0) / 2.0
+    let hy = (y1 - y0) / 2.0
+    var float32 m = 0.0
+    if hx > 0.0 and hy > 0.0:
+        let rr = minf(r, minf(hx, hy))
+        let qx = abs(fx + 0.5 - (x0 + x1) / 2.0) - (hx - rr)
+        let qy = abs(fy + 0.5 - (y0 + y1) / 2.0) - (hy - rr)
+        let ox = maxf(qx, 0.0)
+        let oy = maxf(qy, 0.0)
+        let d = sqrt(ox * ox + oy * oy) + minf(maxf(qx, qy), 0.0) - rr
+        m = maxf(0.0, minf(1.0, 0.5 - d))
+    m
+
+# A rounded fill (`line` 0) or inside border of that width: coverage of the pixel, clip included (raster.br `fillRounded`).
+pub def float32 roundedCover(float32 fx, float32 fy, float32 bx0, float32 by0, float32 bx1, float32 by1, float32 kx0, float32 ky0, float32 kx1, float32 ky1, float32 r, float32 line):
+    var float32 m = roundMaskDevice(fx, fy, bx0, by0, bx1, by1, r)
+    if line > 0.0:
+        let w = minf(line, minf((bx1 - bx0) / 2.0, (by1 - by0) / 2.0))
+        m = maxf(0.0, m - roundMaskDevice(fx, fy, bx0 + w, by0 + w, bx1 - w, by1 - w, maxf(r - w, 0.0)))
+    m * overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
 
 # One blended ALPHA channel: source (already scaled by its alpha) over a destination kept at `keep`, rounded. (Colour
 # channels blend in linear light: `mixLinear`.)
@@ -350,6 +377,15 @@ kernel RasterKernel:
                                 let ax1 = maxf(ax0, minf(rx1, kx1))
                                 let ay1 = maxf(ay0, minf(ry1, ky1))
                                 cover = overlap(fx, fx + 1.0, ax0, ax1) * overlap(fy, fy + 1.0, ay0, ay1)
+                            let rad = f[fb + 11]
+                            if rad > 0.0:
+                                # rounded corners: one pass over the whole outline (a stroke's bands are not used)
+                                cover = 0.0
+                                if band == 0 and (op == 0 or f[fb + 8] > 0.0):
+                                    var float32 line = 0.0
+                                    if op == 1:
+                                        line = f[fb + 8]
+                                    cover = roundedCover(fx, fy, bx0, by0, bx1, by1, kx0, ky0, kx1, ky1, rad, line)
                         elif op == 2:
                             let sigma = maxf(f[fb + 8], 0.0) / 2.0
                             let reach = 3.0 * sigma

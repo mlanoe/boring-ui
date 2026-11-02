@@ -245,6 +245,47 @@ def shadowArea(mut [uint] px, int base, int width, int height, Area box, float r
             x += 1
         y += 1
 
+# Coverage of pixel (`px`, `py`) by the rounded rectangle `x0 y0 x1 y1` with corner radius `r` (clamped to half the shorter
+# side): 0.5 minus the signed distance from the pixel centre to its outline, clamped to 0..1. The GPU kernels
+# (`roundMaskDevice`) evaluate this same expression.
+def float roundMask(int px, int py, float x0, float y0, float x1, float y1, float r):
+    let hx = (x1 - x0) / 2.0
+    let hy = (y1 - y0) / 2.0
+    if hx <= 0.0 or hy <= 0.0:
+        return 0.0
+    let rr = rmin(r, rmin(hx, hy))
+    let qx = abs(px as float + 0.5 - (x0 + x1) / 2.0) - (hx - rr)
+    let qy = abs(py as float + 0.5 - (y0 + y1) / 2.0) - (hy - rr)
+    let d = sqrt(rmax(qx, 0.0) * rmax(qx, 0.0) + rmax(qy, 0.0) * rmax(qy, 0.0)) + rmin(rmax(qx, qy), 0.0) - rr
+    rmax(0.0, rmin(1.0, 0.5 - d))
+
+# A rounded fill (`line` 0) or inside border (`line` > 0, ring between the outline and the outline inset by `line`) of `box`.
+def fillRounded(mut [uint] px, int base, int width, int height, Area outline, float radius, float line, Area clip, Rgba color):
+    let visible = intersect(outline, clip)
+    if visible.x1 <= visible.x0 or visible.y1 <= visible.y0 or color.a == 0:
+        return
+    let w = rmin(line, rmin((outline.x1 - outline.x0) / 2.0, (outline.y1 - outline.y0) / 2.0))
+    let first_x = rmax(visible.x0.floor(), 0.0) as int
+    let first_y = rmax(visible.y0.floor(), 0.0) as int
+    let last_x = rmin(visible.x1.ceil() - 1.0, (width - 1) as float) as int
+    let last_y = rmin(visible.y1.ceil() - 1.0, (height - 1) as float) as int
+    var y = first_y
+    while y <= last_y:
+        let cover_y = overlap1d(y as float, (y + 1) as float, clip.y0, clip.y1)
+        var x = first_x
+        while x <= last_x:
+            var m = roundMask(x, y, outline.x0, outline.y0, outline.x1, outline.y1, radius)
+            if line > 0.0:
+                m = rmax(0.0, m - roundMask(x, y, outline.x0 + w, outline.y0 + w, outline.x1 - w, outline.y1 - w, rmax(radius - w, 0.0)))
+            let cover = m * overlap1d(x as float, (x + 1) as float, clip.x0, clip.x1) * cover_y
+            if cover > 0.0:
+                let a = color.a as float * cover
+                let k = a / 255.0
+                let i = base + y * width + x
+                px[i] = blend(px[i], srgbToLinear(color.r as float) * k, srgbToLinear(color.g as float) * k, srgbToLinear(color.b as float) * k, a)
+            x += 1
+        y += 1
+
 # One glyph of the atlas stretched onto the cell (`cx`, `cy`, `cw` x `ch`), coverage accumulated per pixel from
 # the lit texels it overlaps, then blended once.
 def drawGlyph(mut [uint] px, int base, int width, int height, [uint8] atlas, int glyph, float cx, float cy, float cw, float ch, Area clip, Rgba color):
@@ -419,7 +460,12 @@ pub def Raster rasterizeWith([Command] list, [Bitmap] images, GlyphAtlas glyphs,
     for c in list:
         let base = opacities.length * count
         let clip = clips[clips.length - 1]
-        if c.kind == "FillRect":
+        if c.kind == "FillRect" and c.radius > 0.0:
+            fillRounded(store, base, width, height, areaOf(c), c.radius, 0.0, clip, parseColor(c.hex))
+        elif c.kind == "StrokeRect" and c.radius > 0.0:
+            if c.value > 0.0:
+                fillRounded(store, base, width, height, areaOf(c), c.radius, c.value, clip, parseColor(c.hex))
+        elif c.kind == "FillRect":
             fillArea(store, base, width, height, intersect(areaOf(c), clip), parseColor(c.hex))
         elif c.kind == "MarkedText":
             fillArea(store, base, width, height, intersect(underlineOf(c), clip), parseColor(c.hex))

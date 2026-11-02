@@ -3,7 +3,7 @@
 # can be built for the kernel targets without pulling it in.
 #
 # Vocabulary (`kind`): `FillRect`, `StrokeRect` (inside border), `DrawShadow`, `DrawText`, `DrawImage`,
-# `DrawGlyph`, `MarkedText`, `PushClip`/`PopClip`, `PushOpacity`/`PopOpacity`.
+# `DrawGlyph`, `MarkedText`, `PushClip`/`PopClip`, `PushOpacity`/`PopOpacity`. `FillRect`/`StrokeRect` carry an optional corner `radius`.
 #
 # `DrawGlyph` is one shaped glyph of a real font: `glyph` is its index in the `GlyphAtlas` handed next to the list,
 # (`x`, `y`) the pen position on the baseline (pixels, snapped to the pixel grid by the renderers), `hex` its colour.
@@ -27,6 +27,9 @@ pub struct Command:
     pub var float value = 0.0
     pub var float dx = 0.0
     pub var float dy = 0.0
+    # `FillRect` / `StrokeRect`: the corner radius (0 = square corners). Clamped to half the shorter side by the renderers;
+    # a `StrokeRect`'s inner edge follows it inset by the border width.
+    pub var float radius = 0.0
 
 # A decoded image a `DrawImage` command refers to by `name` (the command's `text`): `width` x `height` texels, row-major,
 # straight-alpha sRGB `0xAARRGGBB`. Decoding files (PNG, JPEG, ...) is outside Boring; a renderer is handed the

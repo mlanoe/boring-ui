@@ -50,6 +50,7 @@ pub enum MetricRole:
     ControlRadius
     ControlBorderWidth
     FocusRingWidth
+    ToggleFocusRingWidth
     SeparatorThickness
     MinimumHitSize
     ScrollbarThickness
@@ -203,10 +204,12 @@ def float systemMetric(string role):
     if role == "SpacerMinimum":
         return 8.0
     if role == "ControlRadius":
-        return 6.0
+        return 8.0
     if role == "ControlBorderWidth":
         return 1.0
     if role == "FocusRingWidth":
+        return 2.0
+    if role == "ToggleFocusRingWidth":
         return 2.0
     if role == "SeparatorThickness":
         return 1.0
@@ -245,9 +248,11 @@ pub def ButtonSpec buttonSpec(string style):
         return ButtonSpec(background = "Accent", text = "OnAccent", padding = 0.0, filled = true)
     if style == "Plain":
         return ButtonSpec(background = "WindowBackground", text = "Accent", padding = 0.0, filled = false)
+    if style == "Danger":
+        return ButtonSpec(background = "Danger", text = "OnDanger", padding = 0.0, filled = true)
     if style == "Compact":
-        return ButtonSpec(background = "Surface", text = "PrimaryText", padding = -4.0, filled = true)
-    ButtonSpec(background = "Surface", text = "PrimaryText", padding = 0.0, filled = true)
+        return ButtonSpec(background = "Separator", text = "PrimaryText", padding = -4.0, filled = true)
+    ButtonSpec(background = "Separator", text = "PrimaryText", padding = 0.0, filled = true)
 
 # ── the theme value ──────────────────────────────────────────────────────────────────────────────
 
@@ -492,11 +497,11 @@ pub struct Theme as EnvValue:
                 problems.push("font {e.role}: {e.value} is not a positive size")
         for e in buttonStyles:
             if !isBuiltInStyle(e.style):
-                problems.push("button style for {e.role}: '{e.style}' is not Primary, Secondary, Plain or Compact")
+                problems.push("button style for {e.role}: '{e.style}' is not Primary, Secondary, Plain, Compact or Danger")
         problems
 
 def bool isBuiltInStyle(string s):
-    s == "Primary" or s == "Secondary" or s == "Plain" or s == "Compact"
+    s == "Primary" or s == "Secondary" or s == "Plain" or s == "Compact" or s == "Danger"
 
 def bool isHexDigit(string c):
     "0123456789abcdefABCDEF".contains(c)
@@ -517,6 +522,39 @@ pub def Theme systemTheme():
 
 pub def Theme darkTheme():
     Theme(name = "system.dark", dark = true)
+
+# A macOS-flavoured theme: system blue / red, grouped-background grays, 13 pt body text, 28-pt-tall controls with
+# 8-pt corners, 18-pt round check marks, a rounded 12-pt sheet. Built only from overrides (the built-in base is unchanged),
+# `Destructive` buttons are filled red (`Danger` style) rather than accent blue.
+pub def Theme macTheme():
+    macThemeOn(Theme(name = "mac"))
+
+# The same overrides on top of `base` (to keep its text measurer, e.g. a real font engine's).
+pub def Theme macThemeOn(Theme base):
+    var t = base
+    t = t.withColor(ColorRole.Accent, "#007AFF")
+    t = t.withColor(ColorRole.FocusRing, "#007AFF")
+    t = t.withColor(ColorRole.Danger, "#FF3B30")
+    t = t.withColor(ColorRole.Surface, "#F2F2F7")
+    t = t.withColor(ColorRole.ControlBorder, "#D1D1D6")
+    t = t.withColor(ColorRole.Separator, "#E5E5EA")
+    t = t.withColor(ColorRole.SecondaryText, "#8E8E93")
+    t = t.withColor(ColorRole.PlaceholderText, "#AEAEB2")
+    t = t.withFontSize(FontRole.Title, 22.0)
+    t = t.withFontSize(FontRole.Headline, 15.0)
+    t = t.withFontSize(FontRole.Body, 13.0)
+    t = t.withFontSize(FontRole.Label, 12.0)
+    t = t.withFontSize(FontRole.Caption, 10.0)
+    t = t.withMetric(MetricRole.ControlPadding, 7.0)
+    t = t.withMetric(MetricRole.TextFieldHeight, 28.0)
+    t = t.withMetric(MetricRole.TextFieldWidth, 200.0)
+    t = t.withMetric(MetricRole.ToggleSize, 18.0)
+    t = t.withMetric(MetricRole.ControlRadius, 8.0)
+    t = t.withMetric(MetricRole.StackSpacing, 10.0)
+    t = t.withMetric(MetricRole.SheetCornerRadius, 12.0)
+    t = t.withMetric(MetricRole.ToggleFocusRingWidth, 0.0)
+    t = t.withButtonStyle(ButtonRole.Destructive, "Danger")
+    t
 
 # The `Theme` nearest in a provider scope (nearest first), or the system theme.
 pub def Theme themeIn([EnvValue] scope):

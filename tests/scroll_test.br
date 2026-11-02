@@ -59,7 +59,7 @@ let cmds = displayList(placed)
 assert_eq(describe(cmds[0]), "PushClip 0,0 100x48")
 assert_eq(describe(cmds[cmds.length - 2]), "PopClip 0,0 100x48")
 # ... and the scroll indicator is drawn after the pop, over the content, because there is something to scroll
-assert_eq(describe(cmds[cmds.length - 1]), "FillRect 92,2 6x20 scrollbar")
+assert_eq(describe(cmds[cmds.length - 1]), "FillRect 92,2 6x20 scrollbar radius=3")
 
 # The button is below the fold: not reachable, so a press at its (scrolled-out) place does nothing.
 assert_eq(hitTest(placed, 10.0, 160.0).length, 0)

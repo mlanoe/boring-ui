@@ -358,4 +358,23 @@ assert_eq(pixelHex(edge2, 0, 0), "#FFBCBCBC")   # linear 0.5 encodes to 188, ind
 
 assert_eq(toPpm(rasterize([rect(0.0, 0.0, 1.0, 1.0, "#FF0000")], 2, 1)), "P3\n2 1\n255\n255 0 0 255 255 255\n")
 
+# ── rounded corners: the corner pixels of a rounded fill are cut, the rest is untouched; a rounded stroke is a ring ─────
+
+def Command rounded(float x, float y, float w, float h, float r, string hex):
+    Command(kind = "FillRect", x = x, y = y, w = w, h = h, hex = hex, radius = r)
+
+let round = rasterize([rounded(0.0, 0.0, 10.0, 10.0, 5.0, "#FF0000")], 10, 10)
+assert_eq(pixelHex(round, 0, 0), "#00000000")
+assert_eq(pixelHex(round, 9, 9), "#00000000")
+assert_eq(pixelHex(round, 5, 5), "#FFFF0000")
+let edge = rasterize([rounded(0.0, 0.0, 10.0, 10.0, 2.0, "#FF0000")], 10, 10)
+assert(pixelHex(edge, 0, 0) != "#FFFF0000", "radius 2 clips the corner pixel")
+assert_eq(pixelHex(edge, 3, 0), "#FFFF0000")
+assert_eq(pixelHex(rasterize([rounded(0.0, 0.0, 10.0, 10.0, 0.0, "#FF0000")], 10, 10), 0, 0), "#FFFF0000")
+
+let ring = rasterize([Command(kind = "StrokeRect", x = 0.0, y = 0.0, w = 20.0, h = 20.0, hex = "#0000FF", value = 1.0, radius = 4.0)], 20, 20)
+assert_eq(pixelHex(ring, 10, 10), "#00000000")
+assert_eq(pixelHex(ring, 10, 0), "#FF0000FF")
+assert_eq(pixelHex(ring, 0, 0), "#00000000")
+
 print "raster ok"

@@ -103,4 +103,8 @@ assert(compareGlyphs([rect(0.0, 0.0, 40.0, 20.0, "#FFFFFF"), mark(0, 13.0, 10.0,
 assert(compareGlyphs([clip(0.0, 0.0, 15.0, 20.0), mark(0, 13.0, 10.0, "#000000"), pop()], 40, 20) <= 1)
 assert(compareGlyphs([fade(0.5), rect(0.0, 0.0, 20.0, 20.0, "#0000FF"), mark(0, 3.0, 8.0, "#FFFFFF"), unfade()], 40, 20) <= 1)
 
+# rounded corners: a fill and a border with a radius, across a tile boundary (x = 16) and under a clip
+assert(compare([Command(kind = "FillRect", x = 10.0, y = 2.0, w = 22.0, h = 14.0, hex = "#336699", radius = 5.0), Command(kind = "StrokeRect", x = 10.0, y = 2.0, w = 22.0, h = 14.0, hex = "#FF8800", value = 1.5, radius = 5.0)], 40, 20) <= 1)
+assert(compare([clip(12.0, 3.0, 12.5, 9.0), Command(kind = "FillRect", x = 10.0, y = 2.0, w = 22.0, h = 14.0, hex = "#00AA55", radius = 7.0), pop()], 40, 20) <= 1)
+
 print "raster tile ok"

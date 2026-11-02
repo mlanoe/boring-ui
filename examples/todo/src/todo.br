@@ -61,18 +61,28 @@ pub view NewTodoSheet:
 # shared-slot fields cannot be compared.)
 pub use RowCommand as def void(string)
 
+# `card` sets the row on a white rounded card (the macOS grouped-list look); off by default so the headless goldens stay as they were.
 pub view TodoRow:
     Todo item
     RowCommand onCommand
+    bool card = false
 
     body():
-        Row(alignment = .Center, spacing = 8.0):
+        let content = Row(alignment = .Center, spacing = 8.0):
             Toggle(value = item.completed, label = "Completed")
             TextField(value = item.title, label = "Item title", placeholder = "")
             Button(label = "Delete", onActivate = ():
                 onCommand("delete"))
+        if card:
+            Padding(insets = 3.0):
+                Background(color = "ElevatedSurface", radius = 10.0):
+                    Padding(insets = 8.0):
+                        content
+        else:
+            content
 
 pub view TodoApp:
+    bool cards = false
     state [Todo] items = [newTodo(1, "Design boring-ui"), newTodo(2, "Implement the vertical slice")]
     state int nextId = 3
     state string selection = ""
@@ -94,7 +104,7 @@ pub view TodoApp:
                 items.removeIndices([at])
 
     body():
-        Column(alignment = .Leading, spacing = 4.0):
+        let page = Column(alignment = .Leading, spacing = 4.0):
             Row(alignment = .Center, spacing = 8.0):
                 Text(content = "Todos", font = .Title)
                 Spacer()
@@ -102,7 +112,13 @@ pub view TodoApp:
                     showingNewItem = true)
             List(selection = selection, onMove = (a, b): self.moveItem(a, b), onDelete = (indices): self.dropAt(indices)):
                 for item in items with item.id:
-                    TodoRow(item = item, onCommand = (name):
+                    TodoRow(item = item, card = cards, onCommand = (name):
                         self.command(name, item.id))
             Sheet(isPresented = showingNewItem):
                 NewTodoSheet(items = items, nextId = nextId, isPresented = showingNewItem)
+        if cards:
+            Background(color = "Surface", radius = 14.0):
+                Padding(insets = 14.0):
+                    page
+        else:
+            page

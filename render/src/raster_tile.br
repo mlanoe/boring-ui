@@ -193,6 +193,15 @@ kernel TileKernel:
                                 let ax1 = maxf(ax0, minf(rx1, kx1))
                                 let ay1 = maxf(ay0, minf(ry1, ky1))
                                 cover = overlap(fx, fx + 1.0, ax0, ax1) * overlap(fy, fy + 1.0, ay0, ay1)
+                            let rad = f[fb + 11]
+                            if rad > 0.0:
+                                # rounded corners: one pass over the whole outline (a stroke's bands are not used)
+                                cover = 0.0
+                                if band == 0 and (op == 0 or f[fb + 8] > 0.0):
+                                    var float32 line = 0.0
+                                    if op == 1:
+                                        line = f[fb + 8]
+                                    cover = roundedCover(fx, fy, bx0, by0, bx1, by1, kx0, ky0, kx1, ky1, rad, line)
                         elif op == 2:
                             let sigma = maxf(f[fb + 8], 0.0) / 2.0
                             let reach = 3.0 * sigma
