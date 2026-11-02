@@ -703,3 +703,12 @@ under the pointer. The todo window routes the right button through it (`pace.br`
 pointer takes the press, anywhere else the right button keeps standing in for a finger (drag to scroll, fling). The window's Controls panel has a
 "Right-click here" menu. Test: `tests/context_menu_test.br`. Not done: opening at the pointer instead of under the child, long-press on touch,
 submenus, keyboard (the menu key, Shift+F10) and arrow navigation inside the menu.
+
+## Alerts and confirmation dialogs
+
+`Alert` and `ConfirmationDialog` are modal composites built on `Sheet` (focus trap, Escape, focus restoration come with it).
+
+- `Alert(isPresented, title, message, buttons, onSelect, defaultIndex = 0, cancel = -1, danger = -1)`: a row of buttons; `onSelect` gets the chosen index and the alert closes. Enter activates `defaultIndex`, Escape the `cancel` button.
+- `ConfirmationDialog(isPresented, title, message, options, onSelect, cancelLabel = "Cancel", danger = -1)`: options stacked vertically plus an automatic Cancel (Escape) that closes without calling `onSelect`.
+
+See `tests/alert_test.br`; the todo window opens them from "Ask…" and from the context menu's Delete.

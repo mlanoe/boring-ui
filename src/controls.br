@@ -138,6 +138,80 @@ pub view ContextMenu:
                         Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
                             self.choose(i))
 
+# A modal alert: a `Sheet` holding a title, an optional message and a row of buttons. Choosing a button closes the alert and calls `onSelect` with its
+# index. `defaultIndex` is the button focused first and activated by Enter; `cancel` (an index, -1 for none) is the button Escape activates (an alert
+# with no cancel button ignores Escape's choice but, like any sheet, still closes); `danger` marks a destructive button.
+pub view Alert:
+    bind bool isPresented
+
+    string title
+    string message = ""
+    [string] buttons = ["OK"]
+    IndexAction onSelect
+    int defaultIndex = 0
+    int cancel = -1
+    int danger = -1
+
+    def choose(int i):
+        isPresented = false
+        onSelect(i)
+
+    body():
+        Sheet(isPresented = isPresented):
+            Padding(insets = 16.0):
+                Column(alignment = .Center, spacing = 12.0):
+                    Text(content = title, font = .Headline, bold = true)
+                    if message != "":
+                        Text(content = message)
+                    Row(alignment = .Center, spacing = 8.0):
+                        for i in 0..<buttons.length with i:
+                            if i == defaultIndex:
+                                DefaultFocus:
+                                    DefaultAction:
+                                        Button(label = buttons[i], style = ButtonStyle.Primary, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                            self.choose(i))
+                            else:
+                                Button(label = buttons[i], role = (if i == cancel: ButtonRole.Cancel elif i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                    self.choose(i))
+
+# A confirmation dialog: like `Alert` but the choices stack vertically and a trailing Cancel button is added automatically (Escape activates it,
+# choosing it closes the dialog without calling `onSelect`). `danger` marks a destructive option; the first option is the Enter default.
+pub view ConfirmationDialog:
+    bind bool isPresented
+
+    string title
+    string message = ""
+    [string] options
+    IndexAction onSelect
+    string cancelLabel = "Cancel"
+    int danger = -1
+
+    def choose(int i):
+        isPresented = false
+        onSelect(i)
+
+    def dismiss():
+        isPresented = false
+
+    body():
+        Sheet(isPresented = isPresented):
+            Padding(insets = 16.0):
+                Column(alignment = .Center, spacing = 8.0):
+                    Text(content = title, font = .Headline, bold = true)
+                    if message != "":
+                        Text(content = message)
+                    for i in 0..<options.length with i:
+                        if i == 0:
+                            DefaultFocus:
+                                DefaultAction:
+                                    Button(label = options[i], style = ButtonStyle.Primary, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                        self.choose(i))
+                        else:
+                            Button(label = options[i], role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                self.choose(i))
+                    Button(label = cancelLabel, role = ButtonRole.Cancel, onActivate = ():
+                        self.dismiss())
+
 # An indeterminate progress bar: a segment (0.3 of the width) sweeps across the track as `phase` goes 0...1 (the host
 # advances it every frame and wraps it: the animation system is value-triggered, it has no free-running loop).
 pub view IndeterminateBar:

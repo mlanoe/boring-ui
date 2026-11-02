@@ -23,12 +23,28 @@ view WindowApp:
     state int tab = 0
     state int jump = 0
     state int lang = 0
+    state bool askOpen = false
+    state bool confirmOpen = false
+    state string verdict = ""
 
     def setShowLogo(bool v):
         showLogo = v
 
+    def menuChosen(int i):
+        if i == 2:
+            confirmOpen = true
+        else:
+            stepped = i
+
+    def decided(string v):
+        verdict = v
+
     body():
         Column(alignment = .Leading, spacing = 8.0):
+            Alert(isPresented = askOpen, title = "Discard changes?", message = "This cannot be undone.", buttons = ["Keep", "Discard"], cancel = 0, danger = 1, onSelect = (i):
+                self.decided(if i == 1: "Discarded" else: "Kept"))
+            ConfirmationDialog(isPresented = confirmOpen, title = "Delete this item?", options = ["Delete"], danger = 0, onSelect = (i):
+                self.decided("Deleted"))
             Tooltip(text = "Fades the logo and the photo out and back"):
                 Button(label = "Toggle logo", onActivate = ():
                     showLogo = !showLogo)
@@ -47,8 +63,11 @@ view WindowApp:
                                     Button(label = "Jump to tabs", onActivate = ():
                                         jump += 1)
                                     ContextMenu(items = ["Copy", "Paste", "Delete"], danger = 2, onSelect = (i):
-                                        stepped = i):
+                                        self.menuChosen(i)):
                                         Text(content = "Right-click here")
+                                    Button(label = "Ask…", onActivate = ():
+                                        askOpen = true)
+                                    Text(content = verdict)
                                     Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
                                         stepped = v)
                                     ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")
