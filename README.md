@@ -683,3 +683,12 @@ choosing one closes it and reports its index, a press outside or Escape closes i
 `tests/form_test.br`, `tests/menu_test.br` (interpreter and `boring build`); the window's Settings > Profile page uses all four. Not done: right-click
 context menus (`contextMenu` on any view), submenus, separators and keyboard arrows inside a menu, a section border that follows the theme, a
 `Form` that adapts to a narrow window.
+
+## Grid — `Grid` and `equal` stacks
+
+`Grid(columns = 3, spacing = 8.0):` lays its children out left to right, three to a row, in columns of equal width (each cell takes an equal share of
+the width, a short last row keeps its columns); a row is as tall as its tallest cell. It is `controls.br` composition of `Row(equal = true)`s of `Fill`s:
+`equal` is a new field of `Row` and `Column` (stdlib `ui.br`, `layout.br` `equalised`) that raises every child's ideal size along the stack's axis to the
+largest, so the space left over is shared evenly. Every child is mounted (use `List` for long data). Test: `tests/grid_test.br`; the window's
+Settings > About page has a three-column grid of buttons. Not done: columns of different weights or fixed widths, spanning cells, row/column
+alignment per cell, a lazy (windowed) grid, a horizontal grid.

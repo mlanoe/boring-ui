@@ -66,7 +66,19 @@ view WindowApp:
                                                         lang = i)
                                             Section(header = "More"):
                                                 NavigationLink(label = "About", to = "about")
-                                        Text(content = "A boring-ui demo window.")
+                                        Column(alignment = .Leading, spacing = 8.0):
+                                            Text(content = "A boring-ui demo window.")
+                                            Grid(columns = 3, spacing = 6.0):
+                                                Button(label = "One", onActivate = ():
+                                                    stepped = 1)
+                                                Button(label = "Two", onActivate = ():
+                                                    stepped = 2)
+                                                Button(label = "Three", onActivate = ():
+                                                    stepped = 3)
+                                                Button(label = "Four", onActivate = ():
+                                                    stepped = 4)
+                                                Button(label = "Five", onActivate = ():
+                                                    stepped = 5)
                                     ScrollAnchor(name = "tabs"):
                                         TabView(selected = tab, titles = ["Info", "Work"], onSelect = (i):
                                             tab = i):

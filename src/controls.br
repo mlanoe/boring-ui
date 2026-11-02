@@ -323,3 +323,25 @@ pub view LabeledContent:
             Spacer()
             for i in 0..<children.length with i:
                 children[i]
+
+# ── grid ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# `Grid(columns = n)` lays its children out left to right, `n` to a row, in rows of equal-width columns (each cell takes an equal share of the width;
+# the last row may be short). Cells in a row are aligned at the top. Rows are as tall as their tallest cell. Built from `Row(equal = true)`s of `Fill`s
+# (`equal` makes a stack share its axis evenly, see the facade); every child is mounted (use `List` for long, virtualised data).
+pub view Grid:
+    int columns = 2
+    float spacing = 8.0
+    [View] children
+
+    body():
+        let across = if columns < 1: 1 else columns
+        let rows = (children.length + across - 1) / across
+        Column(alignment = .Leading, spacing = spacing):
+            for r in 0..<rows with r:
+                Row(alignment = .Leading, spacing = spacing, equal = true):
+                    for c in 0..<across with c:
+                        Fill(height = false, alignment = .TopLeading):
+                            if r * across + c < children.length:
+                                children[r * across + c]
+                            if r * across + c >= children.length:
+                                Spacer()   # a `Frame` needs a child: the short last row's empty cells

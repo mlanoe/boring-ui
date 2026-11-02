@@ -1,0 +1,65 @@
+# Grid (src/controls.br): n columns of equal width, rows as tall as their tallest cell, a short last row.
+# Run: boring run tests/grid_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.events.*
+use ui.controls.*
+
+view Panel:
+    body():
+        Grid(columns = 3, spacing = 10.0):
+            Text(content = "a")
+            Text(content = "bb")
+            Text(content = "ccc")
+            Text(content = "d")
+            Text(content = "e")
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 300.0, 300.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Placed textOf(Runtime rt, string s):
+    for t in ofKind(lay(rt), "Text"):
+        if (t.props["content"] else ("")) == s:
+            return t
+    Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+def bool near(float a, float b):
+    let d = a - b
+    d < 0.5 and d > 0.0 - 0.5
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+let a = textOf(rt, "a")
+let b = textOf(rt, "bb")
+let c = textOf(rt, "ccc")
+let d = textOf(rt, "d")
+let e = textOf(rt, "e")
+assert(a.id >= 0 and b.id >= 0 and c.id >= 0 and d.id >= 0 and e.id >= 0)
+
+# Equal columns whatever the content: the first column of row 2 starts where row 1's does, and so do the others.
+assert(near(a.x, d.x))
+assert(near(b.x, e.x))
+# Column pitch is the same between columns 1-2 and 2-3 ((300 - 2 * 10) / 3 + 10 = 103.3).
+assert(near(b.x - a.x, c.x - b.x))
+assert(b.x - a.x > 90.0)
+# Rows: the second row is below the first; cells of a row share a top.
+assert(d.y > a.y)
+assert(near(a.y, b.y) and near(b.y, c.y))
+print "grid_test ok"

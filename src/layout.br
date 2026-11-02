@@ -199,6 +199,21 @@ def float gapOf(Mounted n):
         return 0.0
     numProp(n, "spacing") else (n.theme.metric(MetricRole.StackSpacing))
 
+# A stack with `equal = true` gives every child the same ideal size along its axis: the largest of the children's ideals.
+def bool isEqual(Mounted n):
+    (n.props["equal"] else ("false")) == "true"
+
+def [float] equalised(Mounted n, [float] ideals):
+    if !isEqual(n):
+        return ideals
+    var top = 0.0
+    for x in ideals:
+        top = maxOf(top, x)
+    mut out = [] as [float]
+    for x in ideals:
+        out.push(top)
+    out
+
 # The key of the keyed iteration each item of `flatten(n)` came from, in the same order ("" for plain items).
 def [string] flattenKeys(Mounted n):
     mut [string] out = []
@@ -577,11 +592,14 @@ def Span stackSpan(Mounted n, bool isRow, bool horiz, float? cross, mut Memo mem
         var lo = 0.0
         var id = 0.0
         var hi = 0.0
+        mut [float] idealsHere = []
         for c in items:
             let s = spanIn(c, isRow, horiz, cross, memo)
             lo += s.min
-            id += s.ideal
+            idealsHere.push(s.ideal)
             hi += s.max
+        for x in equalised(n, idealsHere):
+            id += x
         let gaps = g * nonNeg((items.length - 1) as float)
         return Span(min = lo + gaps, ideal = id + gaps, max = minOf(hi + gaps, unbounded))
     # Across: negotiate the main axis under the given proposal, then report the resulting extent.
@@ -672,6 +690,7 @@ def Neg negotiateUncached(Mounted n, bool isRow, float? mainProp, float? crossPr
         mins.push(s.min)
         ideals.push(s.ideal)
         maxs.push(s.max)
+    ideals = equalised(n, ideals)
     mut [float] cur = []
     for m in mins:
         cur.push(m)
