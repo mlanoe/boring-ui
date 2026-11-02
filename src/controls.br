@@ -212,6 +212,147 @@ pub view ConfirmationDialog:
                     Button(label = cancelLabel, role = ButtonRole.Cancel, onActivate = ():
                         self.dismiss())
 
+# ── date picker ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+pub use DateAction as def void(int, int, int)
+
+pub def bool isLeapYear(int year):
+    (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+
+# The number of days of `month` (1...12) of `year` (proleptic Gregorian).
+pub def int daysInMonth(int year, int month):
+    if month == 2:
+        let feb = if isLeapYear(year): 29 else: 28
+        return feb
+    if month == 4 or month == 6 or month == 9 or month == 11:
+        return 30
+    31
+
+# The weekday of a date, 0 = Monday ... 6 = Sunday (Sakamoto's method).
+pub def int weekday(int year, int month, int day):
+    let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    let y = if month < 3: year - 1 else: year
+    let sunday = (y + y / 4 - y / 100 + y / 400 + t[month - 1] + day) % 7
+    (sunday + 6) % 7
+
+# A month calendar: a header with previous/next month buttons and the month's name, a row of weekday initials and the days in a Monday-first
+# grid. `year`/`month` (1...12)/`day` is the selected date; choosing a day calls `onChange(year, month, day)`. Browsing months is the picker's own
+# state (an offset from the selected month) and snaps back to the selected month when a day is chosen. Days outside `minYear`...`maxYear` can't be
+# browsed to. Inline only (SwiftUI's graphical style); wrap it in a `Popover` for a drop-down.
+pub view DatePicker:
+    state int offset = 0
+
+    int year
+    int month
+    int day
+    DateAction onChange
+    int minYear = 1900
+    int maxYear = 2100
+
+    def browse(int by):
+        let now = offset
+        offset = now + by
+
+    def pick(int y, int m, int d):
+        offset = 0
+        onChange(y, m, d)
+
+    body():
+        let names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+        let initials = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+        let index = year * 12 + (month - 1) + offset
+        let shownYear = index / 12
+        let shownMonth = index % 12 + 1
+        let lead = weekday(shownYear, shownMonth, 1)
+        let days = daysInMonth(shownYear, shownMonth)
+        let weeks = (lead + days + 6) / 7
+        Frame(width = 240.0):
+            Column(alignment = .Leading, spacing = 6.0):
+                Row(alignment = .Center, spacing = 8.0):
+                    Disabled(value = shownYear <= minYear and shownMonth == 1):
+                        Button(label = "<", style = ButtonStyle.Plain, onActivate = ():
+                            self.browse(-1))
+                    Text(content = "{names[shownMonth - 1]} {shownYear}", bold = true)
+                    Disabled(value = shownYear >= maxYear and shownMonth == 12):
+                        Button(label = ">", style = ButtonStyle.Plain, onActivate = ():
+                            self.browse(1))
+                Row(alignment = .Leading, spacing = 2.0, equal = true):
+                    for i in 0..<7 with i:
+                        Fill(height = false, alignment = .TopLeading):
+                            Text(content = initials[i], font = .Caption)
+                for w in 0..<weeks with w:
+                    Row(alignment = .Leading, spacing = 2.0, equal = true):
+                        for c in 0..<7 with c:
+                            Fill(height = false, alignment = .TopLeading):
+                                if w * 7 + c >= lead and w * 7 + c < lead + days:
+                                    Button(label = "{w * 7 + c - lead + 1}", style = (if shownYear == year and shownMonth == month and w * 7 + c - lead + 1 == day: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
+                                        self.pick(shownYear, shownMonth, w * 7 + c - lead + 1))
+                                else:
+                                    Spacer()
+
+# ── color picker ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+def int clampByte(float v):
+    let n = v as int
+    if n < 0:
+        return 0
+    if n > 255:
+        return 255
+    n
+
+def string hexByte(int n):
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    "{digits[n / 16]}{digits[n % 16]}"
+
+# `#rrggbb` for channel values 0...255 (clamped, fractions truncated): the form every color property of the toolkit takes.
+pub def string colorHex(float red, float green, float blue):
+    "#{hexByte(clampByte(red))}{hexByte(clampByte(green))}{hexByte(clampByte(blue))}"
+
+# A color chooser: a swatch of the current color with its `#rrggbb` value, a red / green / blue slider (0...255) each and a row of preset colors.
+# The color is the three bound channels (use `colorHex` to get the string); presets write all three. Inline, like `DatePicker`.
+pub view ColorPicker:
+    bind float red
+    bind float green
+    bind float blue
+    string label = "Color"
+
+    def preset(float r, float g, float b):
+        red = r
+        green = g
+        blue = b
+
+    body():
+        let hex = colorHex(red, green, blue)
+        Frame(width = 240.0):
+            Column(alignment = .Leading, spacing = 8.0):
+                Row(alignment = .Center, spacing = 8.0):
+                    AccessibilityLabel(label = label):
+                        Frame(width = 48.0, height = 24.0):
+                            Background(color = hex, radius = 4.0):
+                                Spacer()
+                    Text(content = hex, font = .Monospace)
+                Row(alignment = .Center, spacing = 8.0):
+                    Text(content = "R")
+                    Frame(width = 200.0):
+                        Slider(value = red, min = 0.0, max = 255.0, step = 1.0, label = "{label} red")
+                Row(alignment = .Center, spacing = 8.0):
+                    Text(content = "G")
+                    Frame(width = 200.0):
+                        Slider(value = green, min = 0.0, max = 255.0, step = 1.0, label = "{label} green")
+                Row(alignment = .Center, spacing = 8.0):
+                    Text(content = "B")
+                    Frame(width = 200.0):
+                        Slider(value = blue, min = 0.0, max = 255.0, step = 1.0, label = "{label} blue")
+                Row(alignment = .Center, spacing = 2.0):
+                    Button(label = "Red", style = ButtonStyle.Plain, onActivate = ():
+                        self.preset(255.0, 59.0, 48.0))
+                    Button(label = "Green", style = ButtonStyle.Plain, onActivate = ():
+                        self.preset(52.0, 199.0, 89.0))
+                    Button(label = "Blue", style = ButtonStyle.Plain, onActivate = ():
+                        self.preset(0.0, 122.0, 255.0))
+                    Button(label = "Black", style = ButtonStyle.Plain, onActivate = ():
+                        self.preset(0.0, 0.0, 0.0))
+                    Button(label = "White", style = ButtonStyle.Plain, onActivate = ():
+                        self.preset(255.0, 255.0, 255.0))
+
 # An indeterminate progress bar: a segment (0.3 of the width) sweeps across the track as `phase` goes 0...1 (the host
 # advances it every frame and wraps it: the animation system is value-triggered, it has no free-running loop).
 pub view IndeterminateBar:

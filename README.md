@@ -712,3 +712,11 @@ submenus, keyboard (the menu key, Shift+F10) and arrow navigation inside the men
 - `ConfirmationDialog(isPresented, title, message, options, onSelect, cancelLabel = "Cancel", danger = -1)`: options stacked vertically plus an automatic Cancel (Escape) that closes without calling `onSelect`.
 
 See `tests/alert_test.br`; the todo window opens them from "Ask…" and from the context menu's Delete.
+
+## Date picker
+
+`DatePicker(year, month, day, onChange, minYear = 1900, maxYear = 2100)` is an inline month calendar (SwiftUI's graphical style): a header with previous/next month buttons, weekday initials and a Monday-first grid of day buttons, the selected day shown as the primary button. `onChange(year, month, day)` fires when a day is chosen. Browsing months is the picker's own state (an offset from the selected month, snapping back when a day is chosen), so the date itself stays in the caller's state. Wrap it in a `Popover` for a drop-down. The calendar math (`isLeapYear`, `daysInMonth`, `weekday`) is exported from `controls.br`. Not yet: time of day, ranges, locale-dependent first weekday and month names. See `tests/date_picker_test.br`.
+
+## Color picker
+
+`ColorPicker(bind red, bind green, bind blue, label = "Color")` is an inline color chooser: a swatch of the current color with its `#rrggbb` value, a red / green / blue slider (0...255, whole steps) each and a row of preset colors (Red, Green, Blue, Black, White) that write all three channels. The color is the three bound floats; `colorHex(red, green, blue)` turns them into the `#rrggbb` string every color property of the toolkit takes (values are clamped and truncated). Not yet: alpha, hue/saturation/brightness controls, a hex text field, an eyedropper. See `tests/color_picker_test.br`.

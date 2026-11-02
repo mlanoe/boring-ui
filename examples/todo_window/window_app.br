@@ -26,6 +26,12 @@ view WindowApp:
     state bool askOpen = false
     state bool confirmOpen = false
     state string verdict = ""
+    state int dy = 2026
+    state int dm = 11
+    state int dd = 2
+    state float cr = 0.0
+    state float cg = 122.0
+    state float cb = 255.0
 
     def setShowLogo(bool v):
         showLogo = v
@@ -35,6 +41,11 @@ view WindowApp:
             confirmOpen = true
         else:
             stepped = i
+
+    def setDate(int y, int m, int d):
+        dy = y
+        dm = m
+        dd = d
 
     def decided(string v):
         verdict = v
@@ -55,7 +66,7 @@ view WindowApp:
                             Row(alignment = .Center, spacing = 8.0):
                                 Image(source = "logo.png", width = 96.0, height = 64.0, label = "Logo")
                                 Image(source = "photo.jpg", width = 96.0, height = 64.0, label = "Landscape")
-                    TodoApp()
+                    TodoApp(cards = true)
                     DisclosureGroup(title = "Controls"):
                         Frame(maxHeight = 150.0):
                             Scroll(anchor = "tabs", request = jump, animated = true):
@@ -68,6 +79,10 @@ view WindowApp:
                                     Button(label = "Ask…", onActivate = ():
                                         askOpen = true)
                                     Text(content = verdict)
+                                    DatePicker(year = dy, month = dm, day = dd, onChange = (y, m, d):
+                                        self.setDate(y, m, d))
+                                    Text(content = "{dy}-{dm}-{dd}")
+                                    ColorPicker(red = cr, green = cg, blue = cb, label = "Accent")
                                     Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
                                         stepped = v)
                                     ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")

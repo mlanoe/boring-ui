@@ -1,0 +1,105 @@
+# DatePicker: calendar math and the month grid (src/controls.br).
+# Run: boring run tests/date_picker_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.controls.*
+use ui.events.*
+
+assert_eq(daysInMonth(2024, 2), 29)
+assert_eq(daysInMonth(2026, 2), 28)
+assert_eq(daysInMonth(1900, 2), 28)
+assert_eq(daysInMonth(2000, 2), 29)
+assert_eq(daysInMonth(2026, 4), 30)
+assert_eq(daysInMonth(2026, 12), 31)
+assert_eq(weekday(2026, 11, 2), 0)      # Monday
+assert_eq(weekday(2026, 11, 1), 6)      # Sunday
+assert_eq(weekday(2000, 1, 1), 5)       # Saturday
+assert_eq(weekday(2024, 2, 29), 3)      # Thursday
+
+view Page:
+    state int y = 2026
+    state int m = 11
+    state int d = 2
+
+    def set(int ny, int nm, int nd):
+        y = ny
+        m = nm
+        d = nd
+
+    req string current():
+        "{y}-{m}-{d}"
+
+    body():
+        DatePicker(year = y, month = m, day = d, onChange = (a, b, c):
+            self.set(a, b, c))
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 400.0, 400.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] findAll(Placed p, string kind, string key, string want):
+    mut out = []
+    if p.kind == kind and (p.props[key] else ("")) == want:
+        out.push(p)
+    for c in p.children:
+        for f in findAll(c, kind, key, want):
+            out.push(f)
+    out
+
+def Placed named(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want)[0]
+
+def int count(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want).length
+
+def Page__State pageState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Page__State else (Page__State())
+
+def void press(mut Runtime rt, Builder host, string label):
+    let b = named(rt, "Button", "label", label)
+    assert(click(rt, host, lay(rt), b.x + 2.0, b.y + 2.0))
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# November 2026: 30 day buttons, titled, the selected day is the Primary one
+assert_eq(count(rt, "Text", "content", "November 2026"), 1)
+assert_eq(count(rt, "Button", "label", "30"), 1)
+assert_eq(count(rt, "Button", "label", "31"), 0)
+assert_eq(named(rt, "Button", "label", "2").props["style"], "Primary")
+
+# pick a day: reports it
+press(rt, host, "17")
+assert_eq(Page().current(pageState(rt)), "2026-11-17")
+assert_eq(named(rt, "Button", "label", "17").props["style"], "Primary")
+
+# browse forward past the year end: December, then January 2027
+press(rt, host, ">")
+assert_eq(count(rt, "Text", "content", "December 2026"), 1)
+assert_eq(count(rt, "Button", "label", "31"), 1)
+press(rt, host, ">")
+assert_eq(count(rt, "Text", "content", "January 2027"), 1)
+
+# picking a day there selects it and snaps the view to that month
+press(rt, host, "5")
+assert_eq(Page().current(pageState(rt)), "2027-1-5")
+assert_eq(count(rt, "Text", "content", "January 2027"), 1)
+
+# backwards across the year boundary, and a short month
+press(rt, host, "<")
+press(rt, host, "<")
+assert_eq(count(rt, "Text", "content", "November 2026"), 1)
+for i in 0..<9:
+    press(rt, host, "<")
+assert_eq(count(rt, "Text", "content", "February 2026"), 1)
+assert_eq(count(rt, "Button", "label", "28"), 1)
+assert_eq(count(rt, "Button", "label", "29"), 0)
+print("date_picker_test ok")
