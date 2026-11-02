@@ -313,7 +313,22 @@ def paintNode(Placed p, mut [Command] out):
     if (p.kind == "Button" or p.kind == "Toggle" or p.kind == "TextField" or p.kind == "Slider") and propOrLive(p, "focused", "false") == "true" and ringWidth > 0.0:
         # The focus ring sits just outside the control's bounds, over the control and its own children.
         let width = ringWidth
-        mut ring = Command(kind = "StrokeRect", x = p.x - width, y = p.y - width, w = p.w + 2.0 * width, h = p.h + 2.0 * width, text = "", color = "focus", node = p.id)
+        var ringX = p.x - width
+        var ringW = p.w + 2.0 * width
+        if p.kind == "Slider":
+            # Only the thumb is ringed, not the whole track.
+            let low = num(p, "min", 0.0)
+            let high = num(p, "max", 1.0)
+            var frac = 0.0
+            if high > low:
+                frac = (num(p, "value", low) - low) / (high - low)
+            if frac < 0.0:
+                frac = 0.0
+            if frac > 1.0:
+                frac = 1.0
+            ringX = p.x + frac * (p.w - p.h) - width
+            ringW = p.h + 2.0 * width
+        mut ring = Command(kind = "StrokeRect", x = ringX, y = p.y - width, w = ringW, h = p.h + 2.0 * width, text = "", color = "focus", node = p.id)
         ring.hex = p.theme.color(ColorRole.FocusRing)
         ring.value = width
         if p.kind == "Toggle":

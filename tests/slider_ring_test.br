@@ -1,0 +1,55 @@
+# A focused Slider's focus ring surrounds the thumb only, following the value (src/scene.br).
+# Run: boring run tests/slider_ring_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+
+view Panel:
+    state float level = 0.0
+    body():
+        Frame(width = 160.0):
+            Slider(value = level, min = 0.0, max = 100.0, label = "Level")
+
+struct PanelRoot as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Command] rings(Runtime rt):
+    mut [Command] out = []
+    for c in displayList(must(layout(rt, 300.0, 200.0))):
+        if c.color == "focus":
+            out.push(c)
+    out
+
+def Command thumb(Runtime rt):
+    for c in displayList(must(layout(rt, 300.0, 200.0))):
+        if c.color == "thumb":
+            return c
+    Command(kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0)
+
+let host = ViewRoot(inner = PanelRoot())
+mut rt = Runtime()
+rt.start(host)
+assert_eq(rings(rt).length, 0)
+assert(keyPress(rt, host, "Tab"))
+let r = rings(rt)
+assert_eq(r.length, 1)
+let t = thumb(rt)
+# the ring is the thumb grown by its width on every side, not the whole control
+assert_eq(r[0].w, t.w + 2.0 * r[0].value)
+assert_eq(r[0].x, t.x - r[0].value)
+assert_eq(r[0].y, t.y - r[0].value)
+assert(r[0].w < 60.0)
+
+# it follows the value to the far end
+assert(keyPress(rt, host, "End"))
+let r2 = rings(rt)
+let t2 = thumb(rt)
+assert(t2.x > t.x)
+assert_eq(r2[0].x, t2.x - r2[0].value)
+print("slider_ring_test ok")
