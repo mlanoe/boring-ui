@@ -720,3 +720,11 @@ See `tests/alert_test.br`; the todo window opens them from "Ask…" and from the
 ## Color picker
 
 `ColorPicker(bind red, bind green, bind blue, label = "Color")` is an inline color chooser: a swatch of the current color with its `#rrggbb` value, a red / green / blue slider (0...255, whole steps) each and a row of preset colors (Red, Green, Blue, Black, White) that write all three channels. The color is the three bound floats; `colorHex(red, green, blue)` turns them into the `#rrggbb` string every color property of the toolkit takes (values are clamped and truncated). Not yet: alpha, hue/saturation/brightness controls, a hex text field, an eyedropper. See `tests/color_picker_test.br`.
+
+## Canvas and shapes
+
+The renderer paints rectangles (with rounded corners), text and images, so shapes are those, built from existing primitives: `Rectangle(color, width, height, radius = 0, stroke = "", strokeWidth = 1)`, `Circle(color, diameter, ...)`, `Capsule(color, width, height, ...)`, `HLine` / `VLine(color, length, thickness = 1)`. An outline is a second, inset fill under the shape's own, so a shape's fill is opaque (no hollow outlines).
+
+`Canvas(width, height)` is a fixed-size, clipping drawing surface; its children are stacked in the top-left corner (later over earlier) and each is placed with `At(x, y)` (a paint and hit-test translation, so it never changes sizes). Children are ordinary views: shapes, text, images, even controls. A `for ... with` loop of `At`s inside a `Canvas` works (data-driven charts).
+
+Not yet: diagonal lines, arbitrary paths, ellipses, gradients, hollow strokes (they need renderer commands, not a view-level fix). See `tests/canvas_test.br`.

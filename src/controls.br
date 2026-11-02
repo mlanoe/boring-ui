@@ -373,10 +373,10 @@ pub view Rectangle:
                 Background(color = stroke, radius = radius):
                     Padding(insets = strokeWidth):
                         Background(color = color, radius = (if radius > strokeWidth: radius - strokeWidth else: 0.0)):
-                            Spacer()
+                            Spacer(minLength = 0.0)
             else:
                 Background(color = color, radius = radius):
-                    Spacer()
+                    Spacer(minLength = 0.0)
 
 # A filled circle of `diameter`, optionally outlined like `Rectangle`.
 pub view Circle:
@@ -425,11 +425,12 @@ pub view Canvas:
     [View] children
 
     body():
-        Frame(width = width, height = height):
-            Clip:
-                Layer(alignment = .TopLeading):
-                    for i in 0..<children.length with i:
-                        children[i]
+        Clip:
+            Frame(width = width, height = height):
+                Fill(alignment = .TopLeading):
+                    Layer(alignment = .TopLeading):
+                        for i in 0..<children.length with i:
+                            children[i]
 
 # Places its child `x`, `y` from the top-left corner of the `Canvas` it is drawn on (a paint and hit-test translation: it does not change sizes).
 pub view At:

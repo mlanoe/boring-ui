@@ -83,6 +83,17 @@ view WindowApp:
                                         self.setDate(y, m, d))
                                     Text(content = "{dy}-{dm}-{dd}")
                                     ColorPicker(red = cr, green = cg, blue = cb, label = "Accent")
+                                    Canvas(width = 160.0, height = 60.0):
+                                        At(x = 0.0, y = 0.0):
+                                            Rectangle(color = "#f2f2f7", width = 160.0, height = 60.0, radius = 6.0, stroke = "#d1d1d6")
+                                        At(x = 12.0, y = 54.0 - 4.0 * (stepped as float)):
+                                            Rectangle(color = colorHex(cr, cg, cb), width = 18.0, height = 4.0 * (stepped as float), radius = 3.0)
+                                        At(x = 40.0, y = 54.0 - 2.0 * (stepped as float)):
+                                            Rectangle(color = "#34c759", width = 18.0, height = 2.0 * (stepped as float), radius = 3.0)
+                                        At(x = 68.0, y = 54.0 - 3.0 * (stepped as float)):
+                                            Capsule(color = "#ff9500", width = 18.0, height = 3.0 * (stepped as float))
+                                        At(x = 110.0, y = 10.0):
+                                            Circle(color = "#ff3b30", diameter = 8.0 + 4.0 * (stepped as float), stroke = "#ffffff", strokeWidth = 2.0)
                                     Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
                                         stepped = v)
                                     ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")

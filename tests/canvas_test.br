@@ -1,0 +1,76 @@
+# Canvas and shapes: Rectangle, Circle, Capsule, lines, At (src/controls.br).
+# Run: boring run tests/canvas_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.controls.*
+
+struct Builder1 as ViewBuilder:
+    req View buildView(mut Runtime rt):
+        Canvas(width = 120.0, height = 80.0):
+            At(x = 10.0, y = 5.0):
+                Rectangle(color = "#ff0000", width = 40.0, height = 20.0, radius = 4.0)
+            At(x = 60.0, y = 30.0):
+                Circle(color = "#00ff00", diameter = 30.0, stroke = "#0000ff", strokeWidth = 3.0)
+            At(x = 0.0, y = 70.0):
+                HLine(color = "#000000", length = 100.0, thickness = 2.0)
+            At(x = 100.0, y = 60.0):
+                Capsule(color = "#ffff00", width = 50.0, height = 10.0)
+            for i in 0..<3 with i:
+                At(x = 20.0 * (i as float), y = 40.0):
+                    Rectangle(color = "#abcdef", width = 4.0, height = 4.0)
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 400.0, 300.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Command] fills(Runtime rt, string hex):
+    mut out = []
+    for c in displayList(lay(rt)):
+        if c.kind == "FillRect" and c.hex == hex:
+            out.push(c)
+    out
+
+let host = ViewRoot(inner = Builder1())
+mut rt = Runtime()
+rt.start(host)
+
+# the canvas takes exactly its size
+let root = lay(rt)
+assert_eq(root.w, 120.0)
+assert_eq(root.h, 80.0)
+
+# a rounded rectangle at its offset
+let red = fills(rt, "#ff0000")
+assert_eq(red.length, 1)
+assert_eq(red[0].x, 10.0)
+assert_eq(red[0].y, 5.0)
+assert_eq(red[0].w, 40.0)
+assert_eq(red[0].h, 20.0)
+assert_eq(red[0].radius, 4.0)
+
+# an outlined circle: outer fill in the stroke color, inset inner fill in the fill color, both fully round
+let ring = fills(rt, "#0000ff")
+assert_eq(ring.length, 1)
+assert_eq(ring[0].w, 30.0)
+assert_eq(ring[0].radius, 15.0)
+let core = fills(rt, "#00ff00")
+assert_eq(core.length, 1)
+assert_eq(core[0].x, 63.0)
+assert_eq(core[0].w, 24.0)
+assert_eq(core[0].radius, 12.0)
+
+# a line and a capsule (radius = half the short side; clipped by the canvas, so only the inside part is checked through layout)
+let line = fills(rt, "#000000")
+assert_eq(line[0].h, 2.0)
+assert_eq(line[0].w, 100.0)
+let cap = fills(rt, "#ffff00")
+assert_eq(cap[0].radius, 5.0)
+# a loop of `At`s places each item
+let dots = fills(rt, "#abcdef")
+assert_eq(dots.length, 3)
+assert_eq(dots[2].x, 40.0)
+assert_eq(dots[2].y, 40.0)
+print("canvas_test ok")
