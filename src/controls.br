@@ -113,6 +113,31 @@ pub view Menu:
                         Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
                             self.choose(i))
 
+# A context menu: the first child, right-clicked anywhere inside, opens `items` in a `Popover` below it (the host calls `contextPress` on a right
+# press). Like `Menu`, choosing an item closes it and reports its index, a press outside or Escape closes it, and `danger` marks a destructive item.
+# The menu opens under the child, not at the pointer.
+pub view ContextMenu:
+    state bool open = false
+
+    [string] items
+    IndexAction onSelect
+    int danger = -1
+    [View] children
+
+    def choose(int i):
+        open = false
+        onSelect(i)
+
+    body():
+        Popover(isPresented = open):
+            OnContext(value = open):
+                children[0]
+            Padding(insets = 4.0):
+                Column(alignment = .Leading, spacing = 2.0):
+                    for i in 0..<items.length with i:
+                        Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                            self.choose(i))
+
 # An indeterminate progress bar: a segment (0.3 of the width) sweeps across the track as `phase` goes 0...1 (the host
 # advances it every frame and wraps it: the animation system is value-triggered, it has no free-running loop).
 pub view IndeterminateBar:

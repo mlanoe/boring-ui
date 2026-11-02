@@ -286,13 +286,13 @@ kernel:
             touchEnd(pace, rt, host, pw, ph, tx, ty, screen.time)
         if screen.touchCancelled:
             touchAbort(pace, rt)
-        # the right mouse button stands in for a finger on a desktop: the same gesture
+        # the right mouse button opens a context menu under the pointer; elsewhere it stands in for a finger on a desktop: the same gesture
         if screen.mouse_pressed("right"):
-            touchStart(rt, host, pw, ph, mx, my, screen.time)
+            rightDown(pace, rt, host, pw, ph, mx, my, screen.time)
         if screen.mouse.right:
-            touchDrag(pace, rt, host, pw, ph, mx, my, screen.time)
+            rightHeld(pace, rt, host, pw, ph, mx, my, screen.time)
         if screen.mouse_released("right"):
-            touchEnd(pace, rt, host, pw, ph, mx, my, screen.time)
+            rightUp(pace, rt, host, pw, ph, mx, my, screen.time)
         paceMomentum(pace, rt, host, pw, ph, screen.time)
         if screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0:
             wheel(rt, host, pw, ph, mx, my, screen.mouse.scroll_x as float / scale, screen.mouse.scroll_y as float / scale)

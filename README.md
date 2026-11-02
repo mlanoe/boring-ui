@@ -692,3 +692,14 @@ the width, a short last row keeps its columns); a row is as tall as its tallest 
 largest, so the space left over is shared evenly. Every child is mounted (use `List` for long data). Test: `tests/grid_test.br`; the window's
 Settings > About page has a three-column grid of buttons. Not done: columns of different weights or fixed widths, spanning cells, row/column
 alignment per cell, a lazy (windowed) grid, a horizontal grid.
+
+## Context menus — `ContextMenu`, `OnContext` and `contextPress`
+
+`ContextMenu(items = [...], onSelect, danger = -1):` + one child: a secondary press (the right mouse button) anywhere inside the child opens the items in a
+`Popover` below the child; choosing one closes it and reports its index (as `Menu`), a press outside or Escape closes it. It is `controls.br`
+composition over the new `OnContext(bind bool value)` facade (stdlib `ui.br`, layout-transparent), which gets `true` when `contextPress(rt, host, placed, x, y)`
+(`events.br`) lands inside it; `contextPress` also dismisses a presented popover on a press outside it and returns false when no `OnContext` is
+under the pointer. The todo window routes the right button through it (`pace.br` `rightDown` / `rightHeld` / `rightUp`): a context menu under the
+pointer takes the press, anywhere else the right button keeps standing in for a finger (drag to scroll, fling). The window's Controls panel has a
+"Right-click here" menu. Test: `tests/context_menu_test.br`. Not done: opening at the pointer instead of under the child, long-press on touch,
+submenus, keyboard (the menu key, Shift+F10) and arrow navigation inside the menu.

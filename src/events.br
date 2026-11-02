@@ -689,6 +689,30 @@ pub def bool tickHover(mut Runtime rt, Builder host, float nowMs):
     rt.endEvent(host)
     true
 
+# A secondary press (the right mouse button) at (x, y): the deepest `OnContext` under the pointer gets `true` written into its bound value
+# (`ContextMenu` opens its menu). A press outside the topmost presented popover dismisses it, as a primary press does. Returns whether it was used;
+# on false the host may treat the press otherwise (the todo window lets the right button stand in for a finger).
+pub def bool contextPress(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    rt.momentum = nil
+    rt.glide = nil
+    let path = hitTest(placed, x, y)
+    let popovers = rt.presentedPopovers()
+    if popovers.length > 0:
+        let top = popovers[popovers.length - 1]
+        if !path.contains(top):
+            if let h = rt.handle(top):
+                _ = act(rt, host, h, "dismiss", "")
+            return true
+    var i = path.length - 1
+    while i >= 0:
+        let id = path[i]
+        if let node = rt.find(id):
+            if node.kind == "OnContext":
+                if let h = rt.handle(id):
+                    return act(rt, host, h, "setBool", "true")
+        i -= 1
+    false
+
 # The pointer moved to (x, y): the control under it becomes `rt.hover` (one update pass when that changes; the
 # painter shades it), and while a slider holds the pointer, moving it (even outside the slider) drags the value.
 # Returns whether anything changed.

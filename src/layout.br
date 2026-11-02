@@ -144,7 +144,7 @@ def bool isTransparent(Mounted n):
 
 # Wrappers that forward all layout to their one child (they only add behaviour elsewhere).
 def [string] transparentKinds():
-    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition", "DefaultFocus", "Focused", "FocusedAs", "FocusScope", "FocusOrder", "Focusable", "FocusSection", "MatchedGeometry", "ScrollAnchor", "OnHover"]
+    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition", "DefaultFocus", "Focused", "FocusedAs", "FocusScope", "FocusOrder", "Focusable", "FocusSection", "MatchedGeometry", "ScrollAnchor", "OnHover", "OnContext"]
 
 # A stack's children with every `KeyedGroup` replaced by its items, in order.
 def [Mounted] flatten(Mounted n):

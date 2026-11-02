@@ -21,6 +21,8 @@ struct Motion:
     var int startX = 0 - 1
     var int startY = 0 - 1
     var bool pointerSeen = false
+    # The right button went to a context menu (`contextPress`), so its drag and release are not a finger's.
+    var bool rightContext = false
     var int lastY = 0 - 1
     # the previous primary press (time in seconds, position) and how many quick presses in a row it ended
     var float32 pressAt = 0.0 - 10.0
@@ -84,6 +86,23 @@ def bool pointerKnown(mut Motion m, int x, int y, bool pressed):
     if pressed or x != m.startX or y != m.startY:
         m.pointerSeen = true
     m.pointerSeen
+
+# The right mouse button: a context menu under the pointer takes the press; otherwise it stands in for a finger (touchStart / touchDrag / touchEnd).
+def void rightDown(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    m.rightContext = contextPress(rt, host, placedOf(rt, w, h), x as float, y as float)
+    if m.rightContext:
+        m.dirty = true
+    else:
+        touchStart(rt, host, w, h, x, y, seconds)
+
+def void rightHeld(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    if !m.rightContext:
+        touchDrag(m, rt, host, w, h, x, y, seconds)
+
+def void rightUp(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    if !m.rightContext:
+        touchEnd(m, rt, host, w, h, x, y, seconds)
+    m.rightContext = false
 
 def void touch(mut Motion m):
     m.dirty = true

@@ -46,6 +46,9 @@ view WindowApp:
                                 Column(alignment = .Leading, spacing = 8.0):
                                     Button(label = "Jump to tabs", onActivate = ():
                                         jump += 1)
+                                    ContextMenu(items = ["Copy", "Paste", "Delete"], danger = 2, onSelect = (i):
+                                        stepped = i):
+                                        Text(content = "Right-click here")
                                     Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
                                         stepped = v)
                                     ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")
