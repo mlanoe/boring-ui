@@ -41,6 +41,7 @@ use todo.todo.*
 use pace
 use ime_caret
 use window_app
+use ui.mobile.*
 use ui.theme.*
 use text.glyph_run.*
 use text.measurer.*
@@ -226,13 +227,14 @@ struct ThemedRoot as ViewBuilder:
     Theme theme
     Slot<float>'actor phase
     Slot<bool>'actor busy
+    Slot<ScreenInfo>'actor screenInfo
     req View buildView(mut Runtime rt):
-        Provide(value = theme, children = [WindowApp(phase = phase.value, busy = busy.value, onBusy = (v):
+        Provide(value = theme, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, onBusy = (v):
             busy.value = v)])
 
 mut cache = GlyphCache(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))
 let cells = BusyCells()
-let host = ViewRoot(inner = ThemedRoot(theme = theme, phase = cells.phase, busy = cells.busy))
+let host = ViewRoot(inner = ThemedRoot(theme = theme, phase = cells.phase, busy = cells.busy, screenInfo = cells.screenInfo))
 mut rt = Runtime()
 rt.start(host)
 
@@ -307,7 +309,8 @@ kernel:
             touch(pace)
         let busyRebuilt = syncBusy(pace, rt, host, cells, screen.time)
         let hoverRebuilt = syncHover(pace, rt, host, screen.time)
-        let rebuilt = busyRebuilt or hoverRebuilt
+        let screenRebuilt = syncScreen(pace, rt, host, cells, pw, ph)
+        let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt
         let eventful = rebuilt or served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
         let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)
         # the accessibility tree (laid out only while an assistive technology is connected)

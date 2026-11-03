@@ -1,0 +1,85 @@
+# Mobile adaptation: what the host knows about the screen (`ScreenInfo`; not `Device`, a name the language reserves for GPUs) and the views that react to it. A host fills a `ScreenInfo` from its window — size in
+# points, the safe-area insets (notch, rounded corners, home indicator) and the height the software keyboard covers — and hands it to the root view
+# (the todo window keeps it in a `Slot<ScreenInfo>'actor` and rebuilds the root when it changes: see `screenChanged`). The views take it as an ordinary
+# `info` parameter, so they work the same in a test, in a desktop window resized to a phone, and on a real handset.
+
+use boring.ui.*
+
+# Width (points) below which a layout is "compact": phones in portrait, narrow split-screen windows.
+pub def float compactWidth():
+    600.0
+
+pub struct ScreenInfo:
+    pub float width = 640.0
+    pub float height = 360.0
+    # The safe area's insets: the parts of the window that a notch, a rounded corner or a system bar covers.
+    pub float safeTop = 0.0
+    pub float safeLeft = 0.0
+    pub float safeBottom = 0.0
+    pub float safeRight = 0.0
+    # The height of the software keyboard over the bottom of the window (0 while it is hidden).
+    pub float keyboard = 0.0
+
+pub def bool isCompact(ScreenInfo d):
+    d.width < compactWidth()
+
+pub def bool isLandscape(ScreenInfo d):
+    d.width > d.height
+
+# "Compact" or "Regular" (the width size class).
+pub def string sizeClass(ScreenInfo d):
+    if isCompact(d):
+        return "Compact"
+    "Regular"
+
+# Whether `a` and `b` differ in anything a layout can depend on, so a host rebuilds the root only then.
+pub def bool screenChanged(ScreenInfo a, ScreenInfo b):
+    a.width != b.width or a.height != b.height or a.safeTop != b.safeTop or a.safeLeft != b.safeLeft or a.safeBottom != b.safeBottom or a.safeRight != b.safeRight or a.keyboard != b.keyboard
+
+# The bottom inset a screen needs: the keyboard covers the home-indicator strip, so the larger of the two counts, not their sum.
+pub def float bottomInset(ScreenInfo d):
+    if d.keyboard > d.safeBottom:
+        return d.keyboard
+    d.safeBottom
+
+# `SafeArea` keeps its child clear of the notch, the rounded corners, the system bars and (with `avoidKeyboard`) the software keyboard: it pads the
+# child by the screen's insets. The child is laid out in what is left.
+pub view SafeArea:
+    ScreenInfo info
+    bool avoidKeyboard = true
+    [View] children
+
+    body():
+        let bottom = (if avoidKeyboard: bottomInset(info) else: info.safeBottom)
+        Column(alignment = .Leading, spacing = 0.0):
+            Frame(height = info.safeTop):
+                Spacer(minLength = 0.0)
+            Row(alignment = .Leading, spacing = 0.0):
+                Frame(width = info.safeLeft):
+                    Spacer(minLength = 0.0)
+                children[0]
+                Frame(width = info.safeRight):
+                    Spacer(minLength = 0.0)
+            Frame(height = bottom):
+                Spacer(minLength = 0.0)
+
+# `Adaptive` shows `children[0]` in a compact window (a phone in portrait) and `children[1]` in a regular one (a tablet, a desktop window); with
+# one child that child is used for both.
+pub view Adaptive:
+    ScreenInfo info
+    [View] children
+
+    body():
+        if isCompact(info) or children.length < 2:
+            children[0]
+        else:
+            children[1]
+
+# `MinTarget` makes its child at least `size` points square (44 is the usual touch minimum), so a small control does not shrink below a fingertip.
+pub view MinTarget:
+    float size = 44.0
+    [View] children
+
+    body():
+        Frame(minWidth = size, minHeight = size):
+            children[0]

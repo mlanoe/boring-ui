@@ -777,3 +777,20 @@ Each child is the content of one window and `titles[i]` its title (a missing tit
 It is built on a new low-level view, `OnPan`: a press inside it that lands on no control starts a pan; every movement writes "dx,dy" (points since the last report) into its bound string `value` and runs `onActivate`, until the release. A control inside (the ✕ button) keeps its own press.
 
 Not done: moving a window by a finger (touch drags scroll), resizing, minimizing, keyboard window switching, windows larger than the desktop area being clamped.
+
+## Mobile adaptation
+
+What a phone changes for a layout is the window's size class, the parts of the screen a notch or a system bar covers, and the software keyboard. A host describes them in a `ScreenInfo` (`src/mobile.br`) and gives it to the root view as an ordinary parameter, so the same views work in a test, in a desktop window resized to a phone, and on a handset:
+
+```
+ScreenInfo(width = 390.0, height = 844.0, safeTop = 47.0, safeBottom = 34.0, keyboard = 0.0)
+```
+
+- `SafeArea(info = info)` pads its child by the safe-area insets, and by the keyboard height at the bottom (`avoidKeyboard`, on by default; the keyboard covers the home-indicator strip, so the larger of the two counts).
+- `Adaptive(info = info)` shows `children[0]` in a compact window (under 600 points wide) and `children[1]` in a regular one.
+- `MinTarget(size = 44.0)` keeps a small control at least a fingertip big.
+- `isCompact`, `isLandscape`, `sizeClass` and `bottomInset` are plain functions of a `ScreenInfo`; `screenChanged(a, b)` tells a host whether the root needs a rebuild.
+
+The todo window fills `ScreenInfo` from its size each frame (`syncScreen` in `pace.br`), so narrowing the window to a phone's width flips the "Controls" panel's `Adaptive` sample to its compact layout. The safe area and the keyboard stay zero there; a host that knows them sets `safeTop`/`safeBottom`/`keyboard`.
+
+Not done: a real iOS or Android host (the `Screen` host is winit + wgpu on the desktop; there is no mobile build target, no packaging and no platform text-input adapter, see the design draft), reading the safe area or the keyboard from the platform, orientation locking, and a `MinTarget` that enlarges the hit area without moving the layout. The name is `ScreenInfo` because the language reserves `Device` for GPUs.

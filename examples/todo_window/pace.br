@@ -7,6 +7,7 @@ use ui.layout.*
 use ui.anim.*
 use ui.animator.*
 use ui.events.*
+use ui.mobile.*
 
 def Placed placedOf(Runtime rt, int w, int h):
     layout(rt, w as float, h as float) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
@@ -162,6 +163,7 @@ def void touchAbort(mut Motion m, mut Runtime rt):
 struct BusyCells:
     Slot<float>'actor phase = Slot(value = 0.0)
     Slot<bool>'actor busy = Slot(value = false)
+    Slot<ScreenInfo>'actor screenInfo = Slot(value = ScreenInfo())
 
 # The indeterminate bar's phase (0...1) at `seconds`: one sweep every 1.4 s.
 def float phaseAt(float32 seconds):
@@ -188,6 +190,19 @@ def bool syncHover(mut Motion m, mut Runtime rt, Builder host, float32 seconds):
     if rebuilt:
         m.dirty = true
     rebuilt
+
+# Hands the root view the window's size class and insets (the window is a phone-sized one when it is narrow): the root is rebuilt only when
+# something a layout can see changed. True when it was, so the frame must be painted. A host that knows a safe area or a keyboard fills it in.
+def bool syncScreen(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, int w, int h):
+    let now = ScreenInfo(width = w as float, height = h as float)
+    if !screenChanged(cells.screenInfo.value, now):
+        return false
+    cells.screenInfo.value = now
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
 
 def bool isBusy(BusyCells cells):
     cells.busy.value

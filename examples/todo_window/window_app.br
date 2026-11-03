@@ -5,8 +5,12 @@ use boring.ui.*
 use ui.core.*
 use todo.todo.*
 use ui.controls.*
+use ui.mobile.*
 
 pub use BoolAction as def void(bool)
+
+def string screenText(ScreenInfo i):
+    "Screen {i.width as int}x{i.height as int} · {sizeClass(i)}"
 
 # The Todo under a logo: the `Image` view's `source` is the name of a decoded file (`loadImages`).
 # `phase` (0...1, advanced by the host while `busy`) drives the indeterminate bar; `onBusy` tells the host whether the
@@ -14,6 +18,7 @@ pub use BoolAction as def void(bool)
 view WindowApp:
     float phase
     bool busy
+    ScreenInfo info = ScreenInfo()
     BoolAction onBusy
 
     state bool showLogo = true
@@ -110,6 +115,9 @@ view WindowApp:
                                             Border(color = "#8e8e93"):
                                                 Padding(insets = 8.0):
                                                     Text(content = "Drop here: {bin}")
+                                    Adaptive(info = info):
+                                        Text(content = "{screenText(info)} — compact layout")
+                                        Text(content = "{screenText(info)} — regular layout")
                                     Desktop(width = 340.0, height = 190.0, windowWidth = 150.0, titles = ["Notes", "Counter"]):
                                         Text(content = "Drag my title bar")
                                         Button(label = "Pressed {taps}", onActivate = ():

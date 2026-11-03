@@ -1,0 +1,98 @@
+# Mobile adaptation: ScreenInfo, SafeArea, Adaptive, MinTarget (src/mobile.br).
+# Run: boring run tests/mobile_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.controls.*
+use ui.mobile.*
+
+view Page:
+    ScreenInfo info
+
+    body():
+        SafeArea(info = info):
+            Adaptive(info = info):
+                Text(content = "Phone layout")
+                Text(content = "Wide layout")
+
+view Small:
+    body():
+        MinTarget(size = 44.0):
+            Text(content = "x")
+
+struct PageBuilder as ViewBuilder:
+    ScreenInfo info
+    req View buildView(mut Runtime rt): Page(info = info)
+
+struct SmallBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Small()
+
+def Placed lay(Runtime rt, float w, float h):
+    let p = layout(rt, w, h)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] findAll(Placed p, string kind, string key, string want):
+    mut out = []
+    if p.kind == kind and (p.props[key] else ("")) == want:
+        out.push(p)
+    for c in p.children:
+        for f in findAll(c, kind, key, want):
+            out.push(f)
+    out
+
+def Placed textAt(ScreenInfo d, string content):
+    let host = ViewRoot(inner = PageBuilder(info = d))
+    mut rt = Runtime()
+    rt.start(host)
+    findAll(lay(rt, d.width, d.height), "Text", "content", content)[0]
+
+# size classes and orientation
+let phone = ScreenInfo(width = 390.0, height = 844.0, safeTop = 47.0, safeBottom = 34.0)
+let wide = ScreenInfo(width = 1024.0, height = 768.0)
+assert(isCompact(phone))
+assert(!isCompact(wide))
+assert(!isLandscape(phone))
+assert(isLandscape(wide))
+assert_eq(sizeClass(phone), "Compact")
+assert_eq(sizeClass(wide), "Regular")
+
+# Adaptive picks the layout by width
+let compactText = textAt(phone, "Phone layout")
+assert_eq(compactText.kind, "Text")
+let regularText = textAt(wide, "Wide layout")
+assert_eq(regularText.kind, "Text")
+
+# SafeArea pushes the content below the notch and clear of the sides
+assert(compactText.y >= 47.0)
+let landscapePhone = ScreenInfo(width = 844.0, height = 390.0, safeLeft = 47.0, safeRight = 47.0, safeBottom = 21.0)
+let sideText = textAt(ScreenInfo(width = 500.0, height = 300.0, safeLeft = 47.0, safeRight = 47.0), "Phone layout")
+assert(sideText.x >= 47.0)
+
+# the keyboard covers the home-indicator strip: the larger inset counts, not their sum
+assert_eq(bottomInset(ScreenInfo(safeBottom = 34.0, keyboard = 0.0)), 34.0)
+assert_eq(bottomInset(ScreenInfo(safeBottom = 34.0, keyboard = 300.0)), 300.0)
+
+# the host rebuilds only for a change a layout can see
+assert(!screenChanged(phone, phone))
+assert(screenChanged(phone, ScreenInfo(width = 390.0, height = 844.0, safeTop = 47.0, safeBottom = 34.0, keyboard = 300.0)))
+assert(screenChanged(phone, landscapePhone))
+
+# MinTarget grows a small control to a fingertip
+let host2 = ViewRoot(inner = SmallBuilder())
+mut rt2 = Runtime()
+rt2.start(host2)
+let root2 = lay(rt2, 200.0, 200.0)
+let txt = findAll(root2, "Text", "content", "x")[0]
+assert(txt.w < 44.0)
+let frames = findAll(root2, "Frame", "minHeight", "44")
+let framesF = findAll(root2, "Frame", "minHeight", "44.0")
+assert(frames.length + framesF.length > 0)
+var big = root2.w
+for f in frames:
+    big = f.w
+for f in framesF:
+    big = f.w
+assert(big >= 44.0)
+
+print("mobile_test ok")
