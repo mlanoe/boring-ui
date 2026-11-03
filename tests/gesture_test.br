@@ -1,0 +1,233 @@
+# Pointer gestures: OnTap (counts), OnLongPress, OnSwipe (src/events.br, boring.ui facade).
+# Run: boring run tests/gesture_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.controls.*
+use ui.events.*
+
+view Page:
+    state int taps = 0
+    state int doubles = 0
+    state int longs = 0
+    state int pressed = 0
+    state string dir = ""
+    state string dirRight = ""
+    state int swipes = 0
+    state int rightSwipes = 0
+
+    def tapped():
+        taps += 1
+
+    def doubled():
+        doubles += 1
+
+    def held():
+        longs += 1
+
+    def pressedBtn():
+        pressed += 1
+
+    def swiped():
+        swipes += 1
+
+    def rightSwiped():
+        rightSwipes += 1
+
+    req int tapCount():
+        taps
+    req int doubleCount():
+        doubles
+    req int longCount():
+        longs
+    req int buttonCount():
+        pressed
+    req string lastDir():
+        dir
+    req int swipeCount():
+        swipes
+    req int rightCount():
+        rightSwipes
+
+    body():
+        Column(alignment = .Leading, spacing = 20.0):
+            OnTap(onActivate = ():
+                self.tapped()):
+                Text(content = "Tap area")
+            OnTap(count = 2, onActivate = ():
+                self.doubled()):
+                Text(content = "Double area")
+            OnLongPress(minMs = 500, onActivate = ():
+                self.held()):
+                Button(label = "Hold me", onActivate = ():
+                    self.pressedBtn())
+            OnSwipe(value = dir, onActivate = ():
+                self.swiped()):
+                Frame(width = 200.0, height = 80.0):
+                    Text(content = "Swipe area")
+            OnSwipe(value = dirRight, direction = "right", minDistance = 100, onActivate = ():
+                self.rightSwiped()):
+                Frame(width = 200.0, height = 80.0):
+                    Text(content = "Right only")
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 400.0, 500.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] findAll(Placed p, string kind, string key, string want):
+    mut out = []
+    if p.kind == kind and (p.props[key] else ("")) == want:
+        out.push(p)
+    for c in p.children:
+        for f in findAll(c, kind, key, want):
+            out.push(f)
+    out
+
+def Placed named(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want)[0]
+
+def Page__State pageState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Page__State else (Page__State())
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+def int n(Runtime rt, string which):
+    let s = pageState(rt)
+    if which == "tap":
+        return Page().tapCount(s)
+    if which == "double":
+        return Page().doubleCount(s)
+    if which == "long":
+        return Page().longCount(s)
+    if which == "button":
+        return Page().buttonCount(s)
+    if which == "swipe":
+        return Page().swipeCount(s)
+    Page().rightCount(s)
+
+let tapText = named(rt, "Text", "content", "Tap area")
+let dblText = named(rt, "Text", "content", "Double area")
+let hold = named(rt, "Button", "label", "Hold me")
+let swipeText = named(rt, "Text", "content", "Swipe area")
+let rightText = named(rt, "Text", "content", "Right only")
+
+# a tap: press and release on the spot
+setClock(rt, 1000.0)
+_ = pointerDown(rt, host, lay(rt), tapText.x + 2.0, tapText.y + 2.0)
+_ = pointerUp(rt, host, lay(rt), tapText.x + 2.0, tapText.y + 2.0)
+assert_eq(n(rt, "tap"), 1)
+
+# a press that moves well past the slop is no tap
+setClock(rt, 5000.0)
+_ = pointerDown(rt, host, lay(rt), tapText.x + 2.0, tapText.y + 2.0)
+_ = pointerMove(rt, host, lay(rt), tapText.x + 40.0, tapText.y + 2.0)
+_ = pointerUp(rt, host, lay(rt), tapText.x + 40.0, tapText.y + 2.0)
+assert_eq(n(rt, "tap"), 1)
+
+# a double tap: the first press does not satisfy count = 2, the second (within 400 ms, same place) does
+setClock(rt, 10000.0)
+_ = pointerDown(rt, host, lay(rt), dblText.x + 2.0, dblText.y + 2.0)
+_ = pointerUp(rt, host, lay(rt), dblText.x + 2.0, dblText.y + 2.0)
+assert_eq(n(rt, "double"), 0)
+setClock(rt, 10200.0)
+_ = pointerDown(rt, host, lay(rt), dblText.x + 3.0, dblText.y + 2.0)
+_ = pointerUp(rt, host, lay(rt), dblText.x + 3.0, dblText.y + 2.0)
+assert_eq(n(rt, "double"), 1)
+
+# two taps too far apart in time restart the count
+setClock(rt, 20000.0)
+_ = pointerDown(rt, host, lay(rt), dblText.x + 2.0, dblText.y + 2.0)
+_ = pointerUp(rt, host, lay(rt), dblText.x + 2.0, dblText.y + 2.0)
+setClock(rt, 21000.0)
+_ = pointerDown(rt, host, lay(rt), dblText.x + 2.0, dblText.y + 2.0)
+_ = pointerUp(rt, host, lay(rt), dblText.x + 2.0, dblText.y + 2.0)
+assert_eq(n(rt, "double"), 1)
+
+# a long press: nothing before the delay, then it fires once and the Button under it is not activated on release
+setClock(rt, 30000.0)
+_ = pointerDown(rt, host, lay(rt), hold.x + 4.0, hold.y + 4.0)
+assert(hoverWaiting(rt))
+_ = tickHover(rt, host, 30100.0)
+assert_eq(n(rt, "long"), 0)
+assert(tickHover(rt, host, 30600.0))
+assert_eq(n(rt, "long"), 1)
+assert(!hoverWaiting(rt))
+_ = tickHover(rt, host, 31600.0)
+assert_eq(n(rt, "long"), 1)
+_ = pointerUp(rt, host, lay(rt), hold.x + 4.0, hold.y + 4.0)
+assert_eq(n(rt, "button"), 0)
+
+# a short press on the same Button is an ordinary click, and the long press did not fire
+setClock(rt, 40000.0)
+assert(click(rt, host, lay(rt), hold.x + 4.0, hold.y + 4.0))
+assert_eq(n(rt, "button"), 1)
+assert_eq(n(rt, "long"), 1)
+
+# moving cancels a pending long press
+setClock(rt, 50000.0)
+_ = pointerDown(rt, host, lay(rt), hold.x + 4.0, hold.y + 4.0)
+_ = pointerMove(rt, host, lay(rt), hold.x + 4.0, hold.y + 300.0)
+assert(!hoverWaiting(rt))
+_ = tickHover(rt, host, 51000.0)
+assert_eq(n(rt, "long"), 1)
+_ = pointerUp(rt, host, lay(rt), hold.x + 4.0, hold.y + 300.0)
+
+# swipes (pressed at the middle of the text): the dominant direction goes into the bound value
+let sx = swipeText.x + swipeText.w / 2.0
+let sy = swipeText.y + swipeText.h / 2.0
+let rx = rightText.x + rightText.w / 2.0
+let ry = rightText.y + rightText.h / 2.0
+_ = pointerDown(rt, host, lay(rt), sx, sy)
+_ = pointerMove(rt, host, lay(rt), sx - 50.0, sy + 2.0)
+_ = pointerUp(rt, host, lay(rt), sx - 50.0, sy + 2.0)
+assert_eq(Page().lastDir(pageState(rt)), "left")
+assert_eq(n(rt, "swipe"), 1)
+_ = pointerDown(rt, host, lay(rt), sx, sy)
+_ = pointerMove(rt, host, lay(rt), sx + 2.0, sy + 60.0)
+_ = pointerUp(rt, host, lay(rt), sx + 2.0, sy + 60.0)
+assert_eq(Page().lastDir(pageState(rt)), "down")
+assert_eq(n(rt, "swipe"), 2)
+
+# too short a move is no swipe (and is not a tap either)
+_ = pointerDown(rt, host, lay(rt), sx, sy)
+_ = pointerMove(rt, host, lay(rt), sx + 20.0, sy)
+_ = pointerUp(rt, host, lay(rt), sx + 20.0, sy)
+assert_eq(n(rt, "swipe"), 2)
+
+# a direction filter and its own distance: left is ignored, a short right swipe too, a long enough one counts
+_ = pointerDown(rt, host, lay(rt), rx, ry)
+_ = pointerMove(rt, host, lay(rt), rx - 130.0, ry)
+_ = pointerUp(rt, host, lay(rt), rx - 130.0, ry)
+assert_eq(n(rt, "right"), 0)
+_ = pointerDown(rt, host, lay(rt), rx, ry)
+_ = pointerMove(rt, host, lay(rt), rx + 50.0, ry)
+_ = pointerUp(rt, host, lay(rt), rx + 50.0, ry)
+assert_eq(n(rt, "right"), 0)
+_ = pointerDown(rt, host, lay(rt), rx, ry)
+_ = pointerMove(rt, host, lay(rt), rx + 130.0, ry)
+_ = pointerUp(rt, host, lay(rt), rx + 130.0, ry)
+assert_eq(n(rt, "right"), 1)
+
+# a finger: a drag that ends as a swipe, a held finger that long-presses
+touchCancel(rt)
+_ = touchDown(rt, host, lay(rt), sx, sy, 60.0)
+_ = touchMove(rt, host, lay(rt), sx - 50.0, sy, 60.05)
+_ = touchUp(rt, host, lay(rt), sx - 110.0, sy, 60.1)
+assert_eq(n(rt, "swipe"), 3)
+assert_eq(Page().lastDir(pageState(rt)), "left")
+_ = touchDown(rt, host, lay(rt), hold.x + 4.0, hold.y + 4.0, 70.0)
+_ = tickHover(rt, host, 70600.0)
+assert_eq(n(rt, "long"), 2)
+_ = touchUp(rt, host, lay(rt), hold.x + 4.0, hold.y + 4.0, 70.7)
+assert_eq(n(rt, "button"), 1)
+
+print("gesture_test ok")

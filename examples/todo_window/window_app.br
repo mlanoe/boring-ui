@@ -29,6 +29,9 @@ view WindowApp:
     state int dy = 2026
     state int dm = 11
     state int dd = 2
+    state string bin = "-"
+    state string gest = "-"
+    state string swipeDir = ""
     state float cr = 0.0
     state float cg = 122.0
     state float cb = 255.0
@@ -41,6 +44,12 @@ view WindowApp:
             confirmOpen = true
         else:
             stepped = i
+
+    def fruitDropped(string v):
+        bin = v
+
+    def gestured(string what):
+        gest = what
 
     def setDate(int y, int m, int d):
         dy = y
@@ -83,6 +92,31 @@ view WindowApp:
                                         self.setDate(y, m, d))
                                     Text(content = "{dy}-{dm}-{dd}")
                                     ColorPicker(red = cr, green = cg, blue = cb, label = "Accent")
+                                    Row(alignment = .Center, spacing = 12.0):
+                                        Draggable(payload = "fruit:Apple", preview = "Apple"):
+                                            Background(color = "#ff9e98", radius = 6.0):
+                                                Padding(insets = 8.0):
+                                                    Text(content = "Apple")
+                                        Draggable(payload = "fruit:Pear"):
+                                            Background(color = "#8fe3a6", radius = 6.0):
+                                                Padding(insets = 8.0):
+                                                    Text(content = "Pear")
+                                        DropTarget(accepts = "fruit", onDrop = (v):
+                                            self.fruitDropped(v)):
+                                            Border(color = "#8e8e93"):
+                                                Padding(insets = 8.0):
+                                                    Text(content = "Drop here: {bin}")
+                                    OnTap(onActivate = ():
+                                        self.gestured("tap")):
+                                        OnTap(count = 2, onActivate = ():
+                                            self.gestured("double tap")):
+                                            OnLongPress(onActivate = ():
+                                                self.gestured("long press")):
+                                                OnSwipe(value = swipeDir, onActivate = ():
+                                                    self.gestured("swipe {swipeDir}")):
+                                                    Background(color = "#e5e5ea", radius = 6.0):
+                                                        Padding(insets = 10.0):
+                                                            Text(content = "Gestures: {gest}")
                                     Canvas(width = 160.0, height = 60.0):
                                         At(x = 0.0, y = 0.0):
                                             Rectangle(color = "#f2f2f7", width = 160.0, height = 60.0, radius = 6.0, stroke = "#d1d1d6")

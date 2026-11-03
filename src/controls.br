@@ -442,6 +442,42 @@ pub view At:
         Offset(x = x, y = y):
             children[0]
 
+# ── drag and drop ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+# `Draggable` wraps its child so that pressing on it and moving a few points drags `payload` (a string; use `kind:data` when drop targets should
+# discriminate) with a chip of `preview` (default: the payload) following the pointer; the source is dimmed meanwhile. A drag cancels the press it
+# started (a `Button` inside is not activated) and Escape cancels the drag. `DropTarget` wraps its child to receive drops: `onDrop` gets the payload,
+# `accepts` (when set) limits it to payloads of that kind, and `highlight` tints the child while an acceptable or not drag hovers it.
+pub view Draggable:
+    state bool dragging = false
+
+    string payload
+    string preview = ""
+    [View] children
+
+    body():
+        Opacity(value = (if dragging: 0.4 else: 1.0)):
+            DragSource(value = dragging, payload = payload, preview = preview):
+                children[0]
+
+pub view DropTarget:
+    state bool over = false
+    state string got = ""
+
+    NameAction onDrop
+    string accepts = ""
+    string highlight = "#007aff30"
+    [View] children
+
+    def dropped():
+        onDrop(got)
+
+    body():
+        OnDragOver(value = over):
+            OnDrop(value = got, accepts = accepts, onActivate = ():
+                self.dropped()):
+                Background(color = (if over: highlight else: "#00000000")):
+                    children[0]
+
 # An indeterminate progress bar: a segment (0.3 of the width) sweeps across the track as `phase` goes 0...1 (the host
 # advances it every frame and wraps it: the animation system is value-triggered, it has no free-running loop).
 pub view IndeterminateBar:

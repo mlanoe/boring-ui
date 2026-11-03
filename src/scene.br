@@ -378,11 +378,36 @@ def void paintSheets(Placed p, mut [Command] out):
     for c in p.children:
         paintSheets(c, out)
 
+# The chip that follows the pointer during a drag (the root carries it as live props, see `finishLayout`): a shadow, an elevated surface and the preview text.
+def void paintDrag(Placed root, mut [Command] out):
+    let text = propOrLive(root, "dragText", "")
+    if text == "":
+        return
+    let size = root.theme.fontSizeNamed("Body")
+    let textW = root.theme.measurer.width(text, size)
+    let pad = 8.0
+    let chip = Placed(id = root.id, kind = "DragPreview", x = num(root, "dragX", 0.0) + 12.0, y = num(root, "dragY", 0.0) + 12.0, w = textW + 2.0 * pad, h = size + 2.0 * pad, theme = root.theme)
+    mut shadow = cmd("DrawShadow", chip, "", "ShadowColor")
+    shadow.hex = resolveColor(root, "ShadowColor")
+    shadow.value = root.theme.metric(MetricRole.ShadowRadius)
+    shadow.dx = 0.0
+    shadow.dy = 2.0
+    out.push(shadow)
+    mut surface = cmd("FillRect", chip, "", "dragPreview")
+    surface.hex = root.theme.color(ColorRole.ElevatedSurface)
+    surface.radius = root.theme.metric(MetricRole.ControlRadius)
+    out.push(surface)
+    let label = Placed(id = root.id, kind = "Text", x = chip.x + pad, y = chip.y + pad, w = textW, h = size, theme = root.theme)
+    mut draw = cmd("DrawText", label, text, "")
+    draw.hex = root.theme.color(ColorRole.PrimaryText)
+    out.push(draw)
+
 pub def [Command] displayList(Placed root):
     mut [Command] out = []
     paint(root, out)
     paintPopovers(root, out)
     paintSheets(root, out)
+    paintDrag(root, out)
     out
 
 # One line per command, for golden tests.

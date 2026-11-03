@@ -494,6 +494,15 @@ pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float 
     if pressScrollbar(rt, host, placed, x, y):
         return true
     let path = hitTest(placed, x, y)
+    rt.drag = nil
+    rt.press = nil
+    var pressed = path.length - 1
+    while pressed >= 0:
+        if let source = rt.find(path[pressed]):
+            if source.kind == "DragSource" and !isDisabled(rt, source.id):
+                rt.drag = DragState(source = source.id, payload = propOf(source, "payload"), preview = dragPreviewOf(source), startX = x, startY = y, x = x, y = y, active = false, over = [])
+                break
+        pressed -= 1
     # A press outside the topmost presented popover (its anchor and its panel) dismisses it and goes no further.
     let popovers = rt.presentedPopovers()
     if popovers.length > 0:
@@ -502,6 +511,7 @@ pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float 
             if let h = rt.handle(top):
                 _ = act(rt, host, h, "dismiss", "")
             return true
+    beginPress(rt, path, x, y)
     var i = path.length - 1
     while i >= 0:
         let id = path[i]
@@ -661,13 +671,15 @@ def float hoverDelay(Runtime rt, int id):
 
 # Whether some `OnHover` with a `delay` is still waiting for it (the host keeps ticking frames while so).
 pub def bool hoverWaiting(Runtime rt):
-    rt.hoverPending.length > 0
+    rt.hoverPending.length > 0 or longPressWaiting(rt)
 
 # The host's clock, `nowMs` milliseconds: an `OnHover` whose delay has elapsed since the pointer entered (counted from the first tick after the
 # entry) now reports true. Returns whether the runtime was rebuilt (the frame must be painted).
 pub def bool tickHover(mut Runtime rt, Builder host, float nowMs):
+    rt.nowMs = nowMs
+    let longPressed = fireLongPress(rt, host, nowMs)
     if rt.hoverPending.length == 0:
-        return false
+        return longPressed
     mut waiting = [] as [HoverWait]
     mut due = [] as [int]
     for w in rt.hoverPending:
@@ -680,7 +692,7 @@ pub def bool tickHover(mut Runtime rt, Builder host, float nowMs):
                 waiting.push(w)
     rt.hoverPending = waiting
     if due.length == 0:
-        return false
+        return longPressed
     rt.beginEvent()
     for id in due:
         if let h = rt.handle(id):
@@ -713,12 +725,226 @@ pub def bool contextPress(mut Runtime rt, Builder host, Placed placed, float x, 
         i -= 1
     false
 
+# ── pointer gestures ───────────────────────────────────────────────────────────────────────────
+# `OnTap`, `OnLongPress` and `OnSwipe` wrap a subtree and leave the press to the controls inside it. A press that lands inside one records a
+# `PressState`; the release decides between a tap (it never moved past the slop: `OnTap`, counted over quick presses at one place) and a swipe
+# (it moved: `OnSwipe`, by the dominant axis). `tickHover` fires `OnLongPress` while the pointer is held still, and spends the press.
+
+def float tapWindow():
+    400.0
+
+pub def bool gestureView(string kind):
+    kind == "OnTap" or kind == "OnLongPress" or kind == "OnSwipe"
+
+# The host's clock (ms) at an input event, for presses that arrive between ticks (`tickHover` also sets it).
+pub def void setClock(mut Runtime rt, float nowMs):
+    rt.nowMs = nowMs
+
+def void beginPress(mut Runtime rt, [int] path, float x, float y):
+    mut nodes = [] as [int]
+    var i = path.length - 1
+    while i >= 0:
+        if let n = rt.find(path[i]):
+            if gestureView(n.kind) and !isDisabled(rt, n.id):
+                nodes.push(n.id)
+        i -= 1
+    if nodes.length > 0:
+        rt.press = PressState(nodes = nodes, startX = x, startY = y, startMs = rt.nowMs, moved = false, longFired = false)
+
+def void markPressMoved(mut Runtime rt, float x, float y):
+    let current = rt.press
+    guard let p = current else:
+        return
+    if p.moved:
+        return
+    let dx = x - p.startX
+    let dy = y - p.startY
+    if dx * dx + dy * dy > touchSlop() * touchSlop():
+        rt.press = PressState(nodes = p.nodes, startX = p.startX, startY = p.startY, startMs = p.startMs, moved = true, longFired = p.longFired)
+
+# Whether a press is being held still inside an `OnLongPress` (the host keeps ticking frames while so).
+pub def bool longPressWaiting(Runtime rt):
+    let current = rt.press
+    guard let p = current else:
+        return false
+    if p.moved or p.longFired:
+        return false
+    for id in p.nodes:
+        if let n = rt.find(id):
+            if n.kind == "OnLongPress":
+                return true
+    false
+
+def bool fireLongPress(mut Runtime rt, Builder host, float nowMs):
+    let current = rt.press
+    guard let p = current else:
+        return false
+    if p.moved or p.longFired:
+        return false
+    for id in p.nodes:
+        if let n = rt.find(id):
+            if n.kind == "OnLongPress" and nowMs - p.startMs >= sliderNumber(n, "minMs", 500.0):
+                rt.press = PressState(nodes = p.nodes, startX = p.startX, startY = p.startY, startMs = p.startMs, moved = false, longFired = true)
+                # the press is spent: the control under it neither activates nor drags on release
+                rt.capture = nil
+                rt.drag = nil
+                rt.dragSelect = false
+                if let h = rt.handle(id):
+                    _ = act(rt, host, h, "activate", "")
+                rt.invalidateRoot()
+                return true
+    false
+
+def float absOf(float v):
+    if v < 0.0:
+        return 0.0 - v
+    v
+
+def string swipeDirection(float dx, float dy):
+    if absOf(dx) >= absOf(dy):
+        if dx > 0.0:
+            return "right"
+        return "left"
+    if dy > 0.0:
+        return "down"
+    "up"
+
+# The release of a press that began inside gesture views: a tap or a swipe. Returns whether a gesture view ran.
+def bool gestureUp(mut Runtime rt, Builder host, float x, float y):
+    let current = rt.press
+    rt.press = nil
+    guard let p = current else:
+        return false
+    if p.longFired:
+        return false
+    let dx = x - p.startX
+    let dy = y - p.startY
+    var fired = false
+    if !p.moved and dx * dx + dy * dy <= touchSlop() * touchSlop():
+        var count = 1
+        let nearX = absOf(p.startX - rt.tapX) < touchSlop()
+        let nearY = absOf(p.startY - rt.tapY) < touchSlop()
+        if p.startMs - rt.tapMs < tapWindow() and nearX and nearY:
+            count = rt.taps + 1
+        rt.taps = count
+        rt.tapMs = p.startMs
+        rt.tapX = p.startX
+        rt.tapY = p.startY
+        for id in p.nodes:
+            if let n = rt.find(id):
+                if n.kind == "OnTap" and (sliderNumber(n, "count", 1.0) as int) == count:
+                    if let h = rt.handle(id):
+                        if act(rt, host, h, "activate", ""):
+                            fired = true
+        return fired
+    let dir = swipeDirection(dx, dy)
+    var far = absOf(dx)
+    if absOf(dy) > far:
+        far = absOf(dy)
+    for id in p.nodes:
+        if let n = rt.find(id):
+            let only = propOf(n, "direction")
+            if n.kind == "OnSwipe" and far >= sliderNumber(n, "minDistance", 40.0) and (only == "" or only == dir):
+                if let h = rt.handle(id):
+                    _ = act(rt, host, h, "setText", dir)
+                    if act(rt, host, h, "activate", ""):
+                        fired = true
+                if fired:
+                    break
+    fired
+
+# ── drag and drop ──────────────────────────────────────────────────────────────────────────────
+
+def string dragPreviewOf(Mounted source):
+    let shown = propOf(source, "preview")
+    if shown == "":
+        return propOf(source, "payload")
+    shown
+
+# Delivers a bool to the bound `value` of the node `id` (a `DragSource` or an `OnDragOver`), if it is still mounted.
+def void setDragFlag(mut Runtime rt, Builder host, int id, bool on):
+    if let h = rt.handle(id):
+        var text = "false"
+        if on:
+            text = "true"
+        _ = act(rt, host, h, "setBool", text)
+
+# The `OnDragOver` nodes on a hit path.
+def [int] dragOverIds(Runtime rt, [int] path):
+    mut [int] ids = []
+    for id in path:
+        if let node = rt.find(id):
+            if node.kind == "OnDragOver":
+                ids.push(id)
+    ids
+
+# Whether the `OnDrop` node accepts a payload: no `accepts`, or its kind (the part before the first ':') equals it.
+def bool dropAccepts(Mounted target, string payload):
+    let wanted = propOf(target, "accepts")
+    if wanted == "":
+        return true
+    payload.split(":")[0] == wanted
+
+# A pointer move during a press inside a `DragSource`: once the pointer is a few points away the drag starts (a pending click is cancelled), then
+# it follows the pointer, telling every `OnDragOver` it enters or leaves. Returns whether anything changed.
+def bool dragMove(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    let d = rt.drag else (DragState(source = -1, payload = "", preview = "", startX = 0.0, startY = 0.0, x = 0.0, y = 0.0, active = false, over = []))
+    if d.source < 0:
+        return false
+    if !d.active:
+        let dx = x - d.startX
+        let dy = y - d.startY
+        if dx * dx + dy * dy < 16.0:
+            return false
+        rt.capture = nil
+        rt.dragSelect = false
+        setDragFlag(rt, host, d.source, true)
+    let now = dragOverIds(rt, hitTest(placed, x, y))
+    for id in now:
+        if !d.over.contains(id):
+            setDragFlag(rt, host, id, true)
+    for id in d.over:
+        if !now.contains(id):
+            setDragFlag(rt, host, id, false)
+    rt.drag = DragState(source = d.source, payload = d.payload, preview = d.preview, startX = d.startX, startY = d.startY, x = x, y = y, active = true, over = now)
+    true
+
+# Ends an active drag: the flags go back to false and, when the pointer is over an `OnDrop` that accepts the payload, the drop is delivered.
+def void dragEnd(mut Runtime rt, Builder host, Placed placed, float x, float y, bool drop):
+    let d = rt.drag else (DragState(source = -1, payload = "", preview = "", startX = 0.0, startY = 0.0, x = 0.0, y = 0.0, active = false, over = []))
+    rt.drag = nil
+    if d.source < 0 or !d.active:
+        return
+    for id in d.over:
+        setDragFlag(rt, host, id, false)
+    setDragFlag(rt, host, d.source, false)
+    if drop:
+        let path = hitTest(placed, x, y)
+        var i = path.length - 1
+        while i >= 0:
+            if let node = rt.find(path[i]):
+                if node.kind == "OnDrop" and dropAccepts(node, d.payload):
+                    if let h = rt.handle(node.id):
+                        _ = act(rt, host, h, "setText", d.payload)
+                        _ = act(rt, host, h, "activate", "")
+                    break
+            i -= 1
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+
 # The pointer moved to (x, y): the control under it becomes `rt.hover` (one update pass when that changes; the
 # painter shades it), and while a slider holds the pointer, moving it (even outside the slider) drags the value.
 # Returns whether anything changed.
 pub def bool pointerMove(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    markPressMoved(rt, x, y)
     if rt.thumbDrag != nil:
         return dragThumb(rt, host, placed, x, y)
+    if rt.drag != nil:
+        let moved = dragMove(rt, host, placed, x, y)
+        if let d = rt.drag:
+            if d.active:
+                return moved
     var changed = false
     var nextId = -1
     if let t = hoverTarget(rt, placed, x, y):
@@ -768,9 +994,26 @@ pub def bool pointerLeave(mut Runtime rt, Builder host):
 # A pointer release: a Button activates and a Toggle toggles only when the pointer is still over the
 # control that captured it; released anywhere else it is a cancel. The capture always ends.
 pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    var busy = rt.thumbDrag != nil
+    if let d = rt.drag:
+        if d.active:
+            busy = true
+    if busy:
+        rt.press = nil
+        return releaseCapture(rt, host, placed, x, y)
+    let fired = gestureUp(rt, host, x, y)
+    let used = releaseCapture(rt, host, placed, x, y)
+    fired or used
+
+def bool releaseCapture(mut Runtime rt, Builder host, Placed placed, float x, float y):
     if rt.thumbDrag != nil:
         rt.thumbDrag = nil
         return true
+    if let d = rt.drag:
+        if d.active:
+            dragEnd(rt, host, placed, x, y, true)
+            return true
+        rt.drag = nil
     let held = rt.capture
     rt.capture = nil
     rt.dragSelect = false
@@ -796,7 +1039,9 @@ pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, flo
 
 # The platform cancelled the pointer (window lost, modal opened): the capture ends, nothing happens.
 pub def void pointerCancel(mut Runtime rt):
+    rt.press = nil
     rt.thumbDrag = nil
+    rt.drag = nil
     rt.capture = nil
     rt.dragSelect = false
 
@@ -1216,6 +1461,11 @@ pub def bool imeCancel(mut Runtime rt, Builder host):
 # default action; Space activates / toggles the focused control; editing keys edit the focused
 # TextField. Returns whether the key was used.
 pub def bool keyPress(mut Runtime rt, Builder host, string name):
+    if name == "Escape":
+        if let d = rt.drag:
+            if d.active:
+                dragEnd(rt, host, Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0), 0.0, 0.0, false)
+                return true
     if rt.keyObservers.length == 0:
         return defaultKey(rt, host, name)
     var target = -1
@@ -1669,12 +1919,16 @@ pub def bool touchDown(mut Runtime rt, Builder host, Placed placed, float x, flo
     rt.momentum = nil
     rt.glide = nil
     rt.gesture = TouchGesture(startX = x, startY = y, lastX = x, lastY = y, lastT = t)
+    rt.nowMs = t * 1000.0
+    rt.press = nil
+    beginPress(rt, hitTest(placed, x, y), x, y)
     true
 
 pub def bool touchMove(mut Runtime rt, Builder host, Placed placed, float x, float y, float t):
     let current = rt.gesture
     guard let g = current else:
         return false
+    markPressMoved(rt, x, y)
     var dragging = g.dragging
     if !dragging:
         let dx0 = x - g.startX
@@ -1702,14 +1956,24 @@ pub def bool touchUp(mut Runtime rt, Builder host, Placed placed, float x, float
         return false
     rt.gesture = nil
     if !g.dragging:
+        # a long press already ran: its lift is not a tap
+        var spent = false
+        let held = rt.press
+        if let p = held:
+            spent = p.longFired
+        if spent:
+            rt.press = nil
+            return true
         _ = pointerDown(rt, host, placed, g.startX, g.startY)
         return pointerUp(rt, host, placed, g.startX, g.startY)
+    _ = gestureUp(rt, host, x, y)
     if t - g.lastT > flingWindow():
         return true
     fling(rt, placed, g.startX, g.startY, 0.0 - g.vx, 0.0 - g.vy)
 
 # The platform cancelled the touch (a call, the window lost): nothing is pressed, nothing flings.
 pub def void touchCancel(mut Runtime rt):
+    rt.press = nil
     rt.gesture = nil
 
 # Wheel / trackpad input: the delta (dx, dy) at (x, y) of the laid-out window `placed`. The deepest

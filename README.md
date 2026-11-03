@@ -728,3 +728,35 @@ The renderer paints rectangles (with rounded corners), text and images, so shape
 `Canvas(width, height)` is a fixed-size, clipping drawing surface; its children are stacked in the top-left corner (later over earlier) and each is placed with `At(x, y)` (a paint and hit-test translation, so it never changes sizes). Children are ordinary views: shapes, text, images, even controls. A `for ... with` loop of `At`s inside a `Canvas` works (data-driven charts).
 
 Not yet: diagonal lines, arbitrary paths, ellipses, gradients, hollow strokes (they need renderer commands, not a view-level fix). See `tests/canvas_test.br`.
+
+## Drag and drop
+
+The runtime owns the gesture. A press inside a `Draggable` that then moves a few points starts a drag carrying the `payload`; the pointer's release over a `DropTarget` delivers it. A chip with the `preview` text (default: the payload) follows the pointer over everything else, and Escape cancels the drag.
+
+- `Draggable(payload, preview = "")` wraps its child; the child is dimmed while it is dragged. A drag cancels the press that started it, so a `Button` inside is not activated by being dragged (a press without movement is still a click).
+- `DropTarget(onDrop, accepts = "", highlight = "#007aff30")` wraps its child; `onDrop(payload)` runs on a drop over it. Use `kind:data` payloads and `accepts = "kind"` to restrict what it takes; the child is tinted with `highlight` while any drag is over it.
+- Underneath: native `DragSource(bind value, payload, preview)`, `OnDragOver(bind value)` and `OnDrop(bind value, onActivate, accepts)` (layout- and paint-transparent wrappers; a drop writes the payload into `value` and then calls `onActivate`).
+
+Not yet: dragging between windows or from/to the operating system (files, text), touch drags (a finger drag scrolls), a custom preview view instead of the text chip, autoscroll near a scroll view's edge, keyboard- or accessibility-driven drags. See `tests/drag_drop_test.br`.
+
+## Gestures
+
+Three layout-transparent views (in `boring.ui`) turn a pointer or a finger into an action. They leave the press to the controls inside them, so a `Button` under an `OnTap` still works.
+
+```
+OnTap(count = 2, onActivate = ():
+    self.opened()):
+    Image(...)
+OnLongPress(minMs = 500, onActivate = ():
+    self.menu()):
+    Text(content = "Hold me")
+OnSwipe(value = dir, direction = "left", minDistance = 40, onActivate = ():
+    self.dismissed()):
+    Row(...)
+```
+
+- `OnTap`: a press and release within a few points of each other. `count` is the number of quick taps (400 ms apart at most, at one place) it waits for; it fires on the tap that reaches `count`, without delaying a single tap to rule out a double one.
+- `OnLongPress`: fires once the pointer has been held still for `minMs`. It needs the host clock, so call `setClock` at presses and `tickHover` on frames (`hoverWaiting` tells the host to keep ticking). The press is then spent: its release neither taps nor activates the control under it, and moving before the delay cancels it.
+- `OnSwipe`: on release after a move of at least `minDistance` points, writes the dominant direction (`left`, `right`, `up`, `down`) into the bound `value` and activates; with `direction` set only that direction counts.
+
+A finger (`touchDown` / `touchMove` / `touchUp`) feeds the same recognizers; a drag that ends as a swipe still scrolls on its way. Not done: pinch and rotation (they need a second pointer), tap-versus-double-tap disambiguation, velocity thresholds for swipes.

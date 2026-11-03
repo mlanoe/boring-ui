@@ -300,6 +300,29 @@ pub struct TouchGesture:
     pub var float vy = 0.0
     pub var bool dragging = false
 
+# A drag and drop gesture: pressed inside a `DragSource` (`active` false until the pointer moved a few points), then carrying its payload. `over` holds the
+# ids of the `OnDragOver` nodes the pointer is currently inside.
+pub struct DragState:
+    pub int source
+    pub string payload
+    pub string preview
+    pub float startX
+    pub float startY
+    pub float x
+    pub float y
+    pub bool active
+    pub [int] over
+
+# The primary press in progress inside at least one gesture view (`OnTap`, `OnLongPress`, `OnSwipe`): their ids, deepest first, where and when (host
+# clock, ms) it started, whether it has moved past the slop, and whether a long press already consumed it.
+pub struct PressState:
+    pub [int] nodes
+    pub float startX
+    pub float startY
+    pub float startMs
+    pub bool moved
+    pub bool longFired
+
 pub struct ThumbDrag:
     pub int node
     pub int generation
@@ -463,6 +486,15 @@ pub struct Runtime:
     pub var bool dragSelect = false
     # A scroll indicator's thumb being dragged (events.br): the scroller, and where along the thumb it was grabbed.
     pub var ThumbDrag? thumbDrag = nil
+    # The drag and drop gesture in progress, if any (see `DragState`).
+    pub var DragState? drag = nil
+    # The press in progress inside gesture views (see `PressState`), the host clock as last reported (`setClock`, `tickHover`), and the last tap (for `OnTap` counts).
+    pub var PressState? press = nil
+    pub var float nowMs = 0.0
+    pub var float tapMs = -10000.0
+    pub var float tapX = 0.0
+    pub var float tapY = 0.0
+    pub var int taps = 0
     # The touch in progress, if any (see `touchDown`).
     pub var TouchGesture? gesture = nil
     # Per-TextField undo/redo history, keyed by mounted id (generation-checked; dropped when the node unmounts).

@@ -144,7 +144,7 @@ def bool isTransparent(Mounted n):
 
 # Wrappers that forward all layout to their one child (they only add behaviour elsewhere).
 def [string] transparentKinds():
-    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition", "DefaultFocus", "Focused", "FocusedAs", "FocusScope", "FocusOrder", "Focusable", "FocusSection", "MatchedGeometry", "ScrollAnchor", "OnHover", "OnContext"]
+    ["Priority", "Background", "Clip", "AccessibilityLabel", "AccessibilityHint", "AccessibilityHeading", "AccessibilityHidden", "AccessibilityGroup", "OnMount", "OnUnmount", "OnTask", "Provide", "Border", "Opacity", "Shadow", "Offset", "Disabled", "DefaultAction", "AnimationScope", "Transition", "DefaultFocus", "Focused", "FocusedAs", "FocusScope", "FocusOrder", "Focusable", "FocusSection", "MatchedGeometry", "ScrollAnchor", "OnHover", "OnContext", "DragSource", "OnDragOver", "OnDrop", "OnTap", "OnLongPress", "OnSwipe"]
 
 # A stack's children with every `KeyedGroup` replaced by its items, in order.
 def [Mounted] flatten(Mounted n):
@@ -1393,6 +1393,9 @@ def Placed finishLayout(Runtime rt, Placed laidOut, float width, float height):
     if let hv = rt.hover:
         if rt.valid(hv):
             _ = markLive(placed, hv.id, [PropValue(key = "hovered", value = "true")])
+    if let d = rt.drag:
+        if d.active:
+            _ = markLive(placed, placed.id, [PropValue(key = "dragText", value = d.preview), PropValue(key = "dragX", value = "{d.x}"), PropValue(key = "dragY", value = "{d.y}")])
     if let c = rt.composition:
         var at = 0
         if let field = rt.find(c.node):

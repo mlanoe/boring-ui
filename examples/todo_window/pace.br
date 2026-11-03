@@ -121,6 +121,7 @@ def void pressWith(mut Motion m, mut Runtime rt, Builder host, int w, int h, int
     var mods = ""
     if shift:
         mods = "Range"
+    setClock(rt, (seconds as float) * 1000.0)
     _ = pointerDownClicks(rt, host, placedOf(rt, w, h), x as float, y as float, mods, m.clicks)
 
 # One finger (a touch host, or the right mouse button standing in for one on a desktop): see events.br `touchDown`.
