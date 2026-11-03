@@ -763,10 +763,6 @@ def [DesktopWindow] openedWin([DesktopWindow] wins, int id, bool open):
             out.push(w)
     raisedWin(out, id)
 
-# Written as a function of a plain string: `got.split(",")` on a state field transpiles to an `Arc<str>` pattern that rustc rejects.
-def [string] commaParts(string text):
-    text.split(",")
-
 def string titleOf([string] titles, int id):
     if id < titles.length:
         return titles[id]
@@ -798,7 +794,7 @@ pub view Desktop:
         self.apply(openedWin(normalized(wins, children.length), id, open))
 
     def moved(int id):
-        let parts = commaParts(got)
+        let parts = got.split(",")
         var dx = 0.0
         var dy = 0.0
         if parts.length == 2:
