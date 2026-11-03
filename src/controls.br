@@ -710,3 +710,135 @@ pub view Grid:
                                 children[r * across + c]
                             if r * across + c >= children.length:
                                 Spacer()   # a `Frame` needs a child: the short last row's empty cells
+
+# ── windows ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# `Desktop` hosts several windows inside one surface: each child is the content of one floating window, `titles[i]` its title. A window has a
+# title bar (drag it to move the window, ✕ closes it) and rises above the others when pressed; a closed window waits in a small dock at the
+# bottom, where its title brings it back. The windows are drawn in the one OS window the host has — a `Screen` is one native window.
+pub struct DesktopWindow:
+    pub int id
+    pub float x
+    pub float y
+    pub bool open
+
+def [DesktopWindow] defaultWins(int n):
+    mut out = [] as [DesktopWindow]
+    for i in 0..<n:
+        out.push(DesktopWindow(id = i, x = 24.0 + 36.0 * (i as float), y = 16.0 + 36.0 * (i as float), open = true))
+    out
+
+# The windows back to front; the defaults (cascaded) until the first change.
+def [DesktopWindow] normalized([DesktopWindow] wins, int n):
+    if wins.length == n:
+        return wins
+    defaultWins(n)
+
+def [DesktopWindow] raisedWin([DesktopWindow] wins, int id):
+    mut out = [] as [DesktopWindow]
+    mut top = [] as [DesktopWindow]
+    for w in wins:
+        if w.id == id:
+            top.push(w)
+        else:
+            out.push(w)
+    for w in top:
+        out.push(w)
+    out
+
+def [DesktopWindow] movedWin([DesktopWindow] wins, int id, float dx, float dy):
+    mut out = [] as [DesktopWindow]
+    for w in wins:
+        if w.id == id:
+            out.push(DesktopWindow(id = w.id, x = w.x + dx, y = w.y + dy, open = w.open))
+        else:
+            out.push(w)
+    out
+
+def [DesktopWindow] openedWin([DesktopWindow] wins, int id, bool open):
+    mut out = [] as [DesktopWindow]
+    for w in wins:
+        if w.id == id:
+            out.push(DesktopWindow(id = w.id, x = w.x, y = w.y, open = open))
+        else:
+            out.push(w)
+    raisedWin(out, id)
+
+# Written as a function of a plain string: `got.split(",")` on a state field transpiles to an `Arc<str>` pattern that rustc rejects.
+def [string] commaParts(string text):
+    text.split(",")
+
+def string titleOf([string] titles, int id):
+    if id < titles.length:
+        return titles[id]
+    "Window {id + 1}"
+
+pub view Desktop:
+    state [DesktopWindow] wins = []
+    state string got = ""
+
+    float width
+    float height
+    float windowWidth = 220.0
+    [string] titles
+    [View] children
+
+    # State arrays change in place (they cannot be reassigned): empty it, then fill it with the new order.
+    def apply([DesktopWindow] next):
+        mut all = [] as [int]
+        for i in 0..<wins.length:
+            all.push(i)
+        wins.removeIndices(all)
+        for w in next:
+            wins.push(w)
+
+    def raise(int id):
+        self.apply(raisedWin(normalized(wins, children.length), id))
+
+    def setOpen(int id, bool open):
+        self.apply(openedWin(normalized(wins, children.length), id, open))
+
+    def moved(int id):
+        let parts = commaParts(got)
+        var dx = 0.0
+        var dy = 0.0
+        if parts.length == 2:
+            dx = parts[0].parseFloat() else (0.0)
+            dy = parts[1].parseFloat() else (0.0)
+        self.apply(raisedWin(movedWin(normalized(wins, children.length), id, dx, dy), id))
+
+    body():
+        let list = normalized(wins, children.length)
+        Frame(width = width, height = height):
+            Clip:
+                Background(color = "#e4e8f0"):
+                    Fill(alignment = .TopLeading):
+                        Layer(alignment = .TopLeading):
+                            # the layer takes the desktop's whole size, so presses anywhere reach the windows
+                            Frame(width = width, height = height):
+                                Spacer(minLength = 0.0)
+                            for k in 0..<list.length with list[k].id:
+                                if list[k].open:
+                                    Offset(x = list[k].x, y = list[k].y):
+                                        OnTap(onActivate = ():
+                                            self.raise(list[k].id)):
+                                            Shadow(radius = 10.0, dy = 4.0):
+                                                Background(color = "#ffffff", radius = 8.0):
+                                                    Column(alignment = .Leading, spacing = 0.0):
+                                                        OnPan(value = got, onActivate = ():
+                                                            self.moved(list[k].id)):
+                                                            Background(color = "#d8dde8", radius = 8.0):
+                                                                Frame(width = windowWidth):
+                                                                    Row(alignment = .Center, spacing = 4.0):
+                                                                        Button(label = "✕", style = ButtonStyle.Plain, onActivate = ():
+                                                                            self.setOpen(list[k].id, false))
+                                                                        Text(content = titleOf(titles, list[k].id), bold = true)
+                                                                        Spacer(minLength = 0.0)
+                                                        Frame(width = windowWidth):
+                                                            Padding(insets = 8.0):
+                                                                children[list[k].id]
+                            Offset(x = 8.0, y = height - 30.0):
+                                Row(alignment = .Center, spacing = 6.0):
+                                    for k in 0..<list.length with list[k].id:
+                                        if !list[k].open:
+                                            Button(label = titleOf(titles, list[k].id), onActivate = ():
+                                                self.setOpen(list[k].id, true))

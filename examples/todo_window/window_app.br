@@ -31,6 +31,7 @@ view WindowApp:
     state int dd = 2
     state string bin = "-"
     state string gest = "-"
+    state int taps = 0
     state string swipeDir = ""
     state float cr = 0.0
     state float cg = 122.0
@@ -47,6 +48,9 @@ view WindowApp:
 
     def fruitDropped(string v):
         bin = v
+
+    def tapped():
+        taps += 1
 
     def gestured(string what):
         gest = what
@@ -106,6 +110,10 @@ view WindowApp:
                                             Border(color = "#8e8e93"):
                                                 Padding(insets = 8.0):
                                                     Text(content = "Drop here: {bin}")
+                                    Desktop(width = 340.0, height = 190.0, windowWidth = 150.0, titles = ["Notes", "Counter"]):
+                                        Text(content = "Drag my title bar")
+                                        Button(label = "Pressed {taps}", onActivate = ():
+                                            self.tapped())
                                     OnTap(onActivate = ():
                                         self.gestured("tap")):
                                         OnTap(count = 2, onActivate = ():

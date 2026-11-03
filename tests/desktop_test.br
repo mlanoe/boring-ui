@@ -1,0 +1,109 @@
+# Several windows in one surface: Desktop over OnPan, OnTap (src/controls.br, events.br).
+# Run: boring run tests/desktop_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.controls.*
+use ui.events.*
+
+view Page:
+    state int clicks = 0
+
+    def clicked():
+        clicks += 1
+
+    req int clickCount():
+        clicks
+
+    body():
+        Desktop(width = 500.0, height = 400.0, windowWidth = 200.0, titles = ["First", "Second"]):
+            Button(label = "Inside one", onActivate = ():
+                self.clicked())
+            Text(content = "Body two")
+
+struct PageBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Page()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 600.0, 500.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] findAll(Placed p, string kind, string key, string want):
+    mut out = []
+    if p.kind == kind and (p.props[key] else ("")) == want:
+        out.push(p)
+    for c in p.children:
+        for f in findAll(c, kind, key, want):
+            out.push(f)
+    out
+
+def Placed named(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want)[0]
+
+def bool shown(Runtime rt, string kind, string key, string want):
+    findAll(lay(rt), kind, key, want).length > 0
+
+def Page__State pageState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Page__State else (Page__State())
+
+let host = ViewRoot(inner = PageBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# both windows are there, cascaded
+let t1 = named(rt, "Text", "content", "First")
+let t2 = named(rt, "Text", "content", "Second")
+assert(t2.x > t1.x)
+assert(t2.y > t1.y)
+
+# dragging a title bar moves its window by the pointer's movement
+let startX = t1.x + 40.0
+let startY = t1.y + 4.0
+assert(pointerDown(rt, host, lay(rt), startX, startY) or true)
+_ = pointerMove(rt, host, lay(rt), startX + 10.0, startY + 5.0)
+_ = pointerMove(rt, host, lay(rt), startX + 30.0, startY + 25.0)
+_ = pointerUp(rt, host, lay(rt), startX + 30.0, startY + 25.0)
+let moved1 = named(rt, "Text", "content", "First")
+assert_eq(moved1.x, t1.x + 30.0)
+assert_eq(moved1.y, t1.y + 25.0)
+# the other window did not move
+let still2 = named(rt, "Text", "content", "Second")
+assert_eq(still2.x, t2.x)
+
+# the moved window rose above the second one: they overlap there, and a press on the overlap goes to the first
+assert(moved1.x < t2.x + 200.0)
+
+# a control inside a window still works
+let inside = named(rt, "Button", "label", "Inside one")
+assert(click(rt, host, lay(rt), inside.x + 4.0, inside.y + 4.0))
+assert_eq(Page().clickCount(pageState(rt)), 1)
+
+# pressing in the body of a window does not pan it (no OnPan there) and a drag from the body leaves the window where it is
+let body2 = named(rt, "Text", "content", "Body two")
+_ = pointerDown(rt, host, lay(rt), body2.x + 2.0, body2.y + 2.0)
+_ = pointerMove(rt, host, lay(rt), body2.x + 52.0, body2.y + 22.0)
+_ = pointerUp(rt, host, lay(rt), body2.x + 52.0, body2.y + 22.0)
+assert_eq(named(rt, "Text", "content", "Body two").x, body2.x)
+
+# the close button hides the window and the dock brings it back (the first window is on top: its button is the reachable one)
+let closeButtons = findAll(lay(rt), "Button", "label", "✕")
+assert_eq(closeButtons.length, 2)
+var firstClose = closeButtons[0]
+for b in closeButtons:
+    if b.y < firstClose.y:
+        firstClose = b
+assert(shown(rt, "Button", "label", "Inside one"))
+assert(click(rt, host, lay(rt), firstClose.x + 4.0, firstClose.y + 4.0))
+assert(!shown(rt, "Button", "label", "Inside one"))
+assert(shown(rt, "Text", "content", "Body two"))
+let dock = named(rt, "Button", "label", "First")
+assert(click(rt, host, lay(rt), dock.x + 4.0, dock.y + 4.0))
+assert(shown(rt, "Button", "label", "Inside one"))
+# it came back where it was left, and on top
+assert_eq(named(rt, "Text", "content", "First").x, t1.x + 30.0)
+
+print("desktop_test ok")

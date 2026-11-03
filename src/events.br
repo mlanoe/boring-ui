@@ -491,6 +491,7 @@ pub def bool pointerDown(mut Runtime rt, Builder host, Placed placed, float x, f
 pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float x, float y, string mods):
     rt.momentum = nil
     rt.glide = nil
+    rt.pan = nil
     if pressScrollbar(rt, host, placed, x, y):
         return true
     let path = hitTest(placed, x, y)
@@ -512,11 +513,14 @@ pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float 
                 _ = act(rt, host, h, "dismiss", "")
             return true
     beginPress(rt, path, x, y)
+    beginPan(rt, path, x, y)
     var i = path.length - 1
     while i >= 0:
         let id = path[i]
         if let node = rt.find(id):
             if isFocusable(node.kind) and !isDisabled(rt, id):
+                # a control inside the pan area keeps its press
+                rt.pan = nil
                 let h = Handle(id = node.id, generation = node.generation)
                 focusControl(rt, host, h)
                 rt.capture = h
@@ -853,6 +857,34 @@ def bool gestureUp(mut Runtime rt, Builder host, float x, float y):
                     break
     fired
 
+# ── pan ────────────────────────────────────────────────────────────────────────────────────────
+# `OnPan`: a press inside it that lands on no control starts a pan; every movement writes "dx,dy" (points since the last report) into its bound value
+# and activates it, until the release. A control inside keeps its own press (the press goes to the control, not to the pan).
+
+def void beginPan(mut Runtime rt, [int] path, float x, float y):
+    var i = path.length - 1
+    while i >= 0:
+        if let n = rt.find(path[i]):
+            if n.kind == "OnPan" and !isDisabled(rt, n.id):
+                rt.pan = PanState(node = n.id, lastX = x, lastY = y)
+                return
+        i -= 1
+
+def bool panMove(mut Runtime rt, Builder host, float x, float y):
+    let current = rt.pan
+    guard let p = current else:
+        return false
+    let dx = x - p.lastX
+    let dy = y - p.lastY
+    if dx == 0.0 and dy == 0.0:
+        return false
+    rt.pan = PanState(node = p.node, lastX = x, lastY = y)
+    if let h = rt.handle(p.node):
+        _ = act(rt, host, h, "setText", "{dx},{dy}")
+        _ = act(rt, host, h, "activate", "")
+    rt.invalidateRoot()
+    true
+
 # ── drag and drop ──────────────────────────────────────────────────────────────────────────────
 
 def string dragPreviewOf(Mounted source):
@@ -940,6 +972,8 @@ pub def bool pointerMove(mut Runtime rt, Builder host, Placed placed, float x, f
     markPressMoved(rt, x, y)
     if rt.thumbDrag != nil:
         return dragThumb(rt, host, placed, x, y)
+    if rt.pan != nil:
+        return panMove(rt, host, x, y)
     if rt.drag != nil:
         let moved = dragMove(rt, host, placed, x, y)
         if let d = rt.drag:
@@ -994,6 +1028,7 @@ pub def bool pointerLeave(mut Runtime rt, Builder host):
 # A pointer release: a Button activates and a Toggle toggles only when the pointer is still over the
 # control that captured it; released anywhere else it is a cancel. The capture always ends.
 pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, float y):
+    rt.pan = nil
     var busy = rt.thumbDrag != nil
     if let d = rt.drag:
         if d.active:
@@ -1039,6 +1074,7 @@ def bool releaseCapture(mut Runtime rt, Builder host, Placed placed, float x, fl
 
 # The platform cancelled the pointer (window lost, modal opened): the capture ends, nothing happens.
 pub def void pointerCancel(mut Runtime rt):
+    rt.pan = nil
     rt.press = nil
     rt.thumbDrag = nil
     rt.drag = nil

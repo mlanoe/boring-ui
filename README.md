@@ -760,3 +760,20 @@ OnSwipe(value = dir, direction = "left", minDistance = 40, onActivate = ():
 - `OnSwipe`: on release after a move of at least `minDistance` points, writes the dominant direction (`left`, `right`, `up`, `down`) into the bound `value` and activates; with `direction` set only that direction counts.
 
 A finger (`touchDown` / `touchMove` / `touchUp`) feeds the same recognizers; a drag that ends as a swipe still scrolls on its way. Not done: pinch and rotation (they need a second pointer), tap-versus-double-tap disambiguation, velocity thresholds for swipes.
+
+## Windows in one surface
+
+`Desktop` hosts several windows inside the one OS window a host has (a `Screen` is a single native window, so real extra OS windows need host support in the compiler; this is the in-surface version).
+
+```
+Desktop(width = 480.0, height = 300.0, windowWidth = 200.0, titles = ["Notes", "Counter"]):
+    Text(content = "First window's content")
+    Button(label = "Second window's content", onActivate = ():
+        self.tapped())
+```
+
+Each child is the content of one window and `titles[i]` its title (a missing title reads "Window n"). Windows start cascaded. Drag a title bar to move its window; ✕ closes it, and a closed window waits in a dock at the bottom whose button brings it back where it was left. Pressing anywhere in a window raises it above the others. Window state (position, order, open) lives in the `Desktop`; each window's content keeps its own state while windows are raised.
+
+It is built on a new low-level view, `OnPan`: a press inside it that lands on no control starts a pan; every movement writes "dx,dy" (points since the last report) into its bound string `value` and runs `onActivate`, until the release. A control inside (the ✕ button) keeps its own press.
+
+Not done: moving a window by a finger (touch drags scroll), resizing, minimizing, keyboard window switching, windows larger than the desktop area being clamped.

@@ -323,6 +323,12 @@ pub struct PressState:
     pub bool moved
     pub bool longFired
 
+# An `OnPan` being dragged: its node id and where the pointer was at the last report.
+pub struct PanState:
+    pub int node
+    pub float lastX
+    pub float lastY
+
 pub struct ThumbDrag:
     pub int node
     pub int generation
@@ -495,6 +501,8 @@ pub struct Runtime:
     pub var float tapX = 0.0
     pub var float tapY = 0.0
     pub var int taps = 0
+    # The `OnPan` drag in progress, if any (see `PanState`).
+    pub var PanState? pan = nil
     # The touch in progress, if any (see `touchDown`).
     pub var TouchGesture? gesture = nil
     # Per-TextField undo/redo history, keyed by mounted id (generation-checked; dropped when the node unmounts).
