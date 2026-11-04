@@ -229,8 +229,8 @@ struct ThemedRoot as ViewBuilder:
     Slot<bool>'actor busy
     Slot<ScreenInfo>'actor screenInfo
     req View buildView(mut Runtime rt):
-        Provide(value = theme, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, onBusy = (v):
-            busy.value = v)])
+        Provide(value = theme, children = [SafeArea(info = screenInfo.value, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, onBusy = (v):
+            busy.value = v)])])
 
 mut cache = GlyphCache(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))
 let cells = BusyCells()
@@ -309,7 +309,7 @@ kernel:
             touch(pace)
         let busyRebuilt = syncBusy(pace, rt, host, cells, screen.time)
         let hoverRebuilt = syncHover(pace, rt, host, screen.time)
-        let screenRebuilt = syncScreen(pace, rt, host, cells, pw, ph)
+        let screenRebuilt = syncScreen(pace, rt, host, cells, pw, ph, screen.safeTop as float / scale, screen.safeLeft as float / scale, screen.safeBottom as float / scale, screen.safeRight as float / scale)
         let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt
         let eventful = rebuilt or served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
         let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)
@@ -331,6 +331,8 @@ kernel:
             screen.requestRedraw()
         if !quiet:
             trackCaret(pace, rt, pw, ph)
+        # the soft keyboard of a phone follows the focus: up while a text field has it
+        screen.setImeAllowed(textFieldFocused(rt))
         screen.setImeArea((pace.caretX as float * scale) as int, (pace.caretY as float * scale) as int, (2.0 * scale) as int, (16.0 * scale) as int)
         if screen.meta and screen.key("q"):
             break

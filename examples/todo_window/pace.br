@@ -192,9 +192,10 @@ def bool syncHover(mut Motion m, mut Runtime rt, Builder host, float32 seconds):
     rebuilt
 
 # Hands the root view the window's size class and insets (the window is a phone-sized one when it is narrow): the root is rebuilt only when
-# something a layout can see changed. True when it was, so the frame must be painted. A host that knows a safe area or a keyboard fills it in.
-def bool syncScreen(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, int w, int h):
-    let now = ScreenInfo(width = w as float, height = h as float)
+# something a layout can see changed. True when it was, so the frame must be painted. The insets of the safe area are in points; the software
+# keyboard's height is not known to the host yet.
+def bool syncScreen(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, int w, int h, float top, float left, float bottom, float right):
+    let now = ScreenInfo(width = w as float, height = h as float, safeTop = top, safeLeft = left, safeBottom = bottom, safeRight = right)
     if !screenChanged(cells.screenInfo.value, now):
         return false
     cells.screenInfo.value = now

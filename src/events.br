@@ -412,6 +412,12 @@ def Handle? focusedField(Runtime rt):
                     return f
     nil
 
+# Whether a text field has the keyboard focus (a phone's soft keyboard is up exactly then).
+pub def bool textFieldFocused(Runtime rt):
+    if let f = focusedField(rt):
+        return true
+    false
+
 # ── pointer ───────────────────────────────────────────────────────────────────────────────────
 
 # The grapheme index of the text field `node` (laid out as `at`) under pointer x. The field is scrolled by what keeps its
