@@ -3,10 +3,9 @@
 # .app under main_wgpu/ios and launches it. Usage: ./ios_sim.sh [device]   (a simulator name or UDID; the booted one by default)
 # Needs Xcode (simctl, vtool, codesign) and a booted simulator (`xcrun simctl boot <device>`).
 #
-# Two workarounds, both for the simulator only (see "Mobile adaptation" in the README):
-#  - the binary is relabelled to the iOS 17 SDK: winit 0.30 does not adopt UIScene, which an app linked against a newer
-#    SDK must, so iOS refuses it otherwise. This is not an option for a device or the App Store;
-#  - Info.plist declares an empty UILaunchScreen: without one iOS runs the app in a 320x480 compatibility mode.
+# The Info.plist declares what iOS needs of a recent app: a scene manifest naming BoringSceneDelegate (the class the generated
+# host registers, since winit 0.30 does not adopt the UIScene life cycle) and an empty UILaunchScreen (without one iOS runs the
+# app in a 320x480 compatibility mode). See "Mobile adaptation" in the README and the iOS note in boring's docs/gpu-display.md.
 # If nothing shows, turn on I/O > Keyboard > "Show On-Screen Keyboard" in the Simulator: the soft keyboard only comes up
 # for a focused text field when it is on.
 set -euo pipefail
@@ -40,10 +39,18 @@ cat > "$app/Info.plist" <<'PLIST'
 <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>
 <key>UIRequiresFullScreen</key><true/>
 <key>UILaunchScreen</key><dict/>
+<key>UIApplicationSceneManifest</key><dict>
+  <key>UIApplicationSupportsMultipleScenes</key><false/>
+  <key>UISceneConfigurations</key><dict>
+    <key>UIWindowSceneSessionRoleApplication</key><array><dict>
+      <key>UISceneConfigurationName</key><string>Default Configuration</string>
+      <key>UISceneDelegateClassName</key><string>BoringSceneDelegate</string>
+    </dict></array>
+  </dict>
+</dict>
 </dict></plist>
 PLIST
 
-out=$(xcrun vtool -set-build-version iossim 17.0 17.0 -replace -output "$app/main" "$app/main" 2>&1) || { echo "$out" >&2; exit 1; }
 codesign -f -s - "$app" 2>/dev/null
 
 xcrun simctl terminate "$device" com.boring.todo 2>/dev/null || true
