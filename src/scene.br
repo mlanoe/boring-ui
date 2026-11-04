@@ -243,7 +243,8 @@ def paintNode(Placed p, mut [Command] out):
         let box = p.theme.metric(MetricRole.ToggleSize)
         let gap = p.theme.metric(MetricRole.ControlPadding)
         mut mark = Command(kind = "FillRect", x = p.x, y = p.y, w = box, h = box, text = "", color = state, node = p.id)
-        mark.radius = box / 2.0
+        let boxRadius = p.theme.metric(MetricRole.ToggleRadius)
+        mark.radius = boxRadius
         if state == "on":
             mark.hex = p.theme.color(ColorRole.Accent)
         else:
@@ -253,12 +254,12 @@ def paintNode(Placed p, mut [Command] out):
             mut ring = Command(kind = "StrokeRect", x = p.x, y = p.y, w = box, h = box, text = "", color = "off", node = p.id)
             ring.hex = p.theme.color(ColorRole.ControlBorder)
             ring.value = 1.5
-            ring.radius = box / 2.0
+            ring.radius = boxRadius
             out.push(ring)
         if propOrLive(p, "hovered", "false") == "true":
             mut shade = Command(kind = "FillRect", x = p.x, y = p.y, w = box, h = box, text = "", color = "hover", node = p.id)
             shade.hex = p.theme.color(ColorRole.ShadowColor)
-            shade.radius = box / 2.0
+            shade.radius = boxRadius
             out.push(shade)
         # the label is set at the body size it was measured at (layout), centred on the row; not at the row's height
         let labelSize = p.theme.fontSizeNamed("Body")
@@ -332,7 +333,7 @@ def paintNode(Placed p, mut [Command] out):
         ring.hex = p.theme.color(ColorRole.FocusRing)
         ring.value = width
         if p.kind == "Toggle":
-            ring.radius = (p.theme.metric(MetricRole.ToggleSize) + 2.0 * width) / 2.0
+            ring.radius = p.theme.metric(MetricRole.ToggleRadius) + width
         elif p.kind == "Slider":
             ring.radius = (p.h + 2.0 * width) / 2.0
         else:
@@ -401,6 +402,14 @@ def void paintDrag(Placed root, mut [Command] out):
     mut draw = cmd("DrawText", label, text, "")
     draw.hex = root.theme.color(ColorRole.PrimaryText)
     out.push(draw)
+
+# The window background of a laid-out tree. The root of a themed application is the `Provide` that installs the theme and it still
+# sees the theme outside it (the default light one), so it is the provided node's theme, one level down, that holds the system's
+# appearance. (A tree whose root is not a `Provide` just uses its own theme.)
+pub def string windowBackground(Placed root):
+    if root.kind == "Provide" and root.children.length > 0:
+        return root.children[0].theme.colorNamed("WindowBackground")
+    root.theme.colorNamed("WindowBackground")
 
 pub def [Command] displayList(Placed root):
     mut [Command] out = []

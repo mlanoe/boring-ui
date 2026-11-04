@@ -69,7 +69,7 @@ def [Bitmap] loadImages():
 def Encoded encodeFrame(Placed placed, [Bitmap] images, mut GlyphCache cache, float scale, int w, int h):
     # the Todo paints no window background of its own: put the theme's under it (opaque pixels, not transparent), over
     # the whole window in physical pixels; the layout itself is in points, so its list is multiplied by the scale
-    mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = w as float, h = h as float, hex = placed.theme.colorNamed("WindowBackground"))]
+    mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = w as float, h = h as float, hex = windowBackground(placed))]
     for c in scaled(displayList(placed), scale):
         list.push(c)
     # the text is shaped with the real font: every DrawText becomes glyphs from the cache's atlas

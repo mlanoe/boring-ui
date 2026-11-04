@@ -51,6 +51,8 @@ pub enum MetricRole:
     ControlBorderWidth
     FocusRingWidth
     ToggleFocusRingWidth
+    # Corner radius of a toggle's box; the renderer clamps it to half the side, so the default is a circle.
+    ToggleRadius
     SeparatorThickness
     MinimumHitSize
     ScrollbarThickness
@@ -211,6 +213,8 @@ def float systemMetric(string role):
         return 2.0
     if role == "ToggleFocusRingWidth":
         return 2.0
+    if role == "ToggleRadius":
+        return 1000.0
     if role == "SeparatorThickness":
         return 1.0
     if role == "MinimumHitSize":
@@ -557,6 +561,58 @@ pub def Theme macThemeOn(Theme base):
     t = t.withMetric(MetricRole.StackSpacing, 10.0)
     t = t.withMetric(MetricRole.SheetCornerRadius, 12.0)
     t = t.withMetric(MetricRole.ToggleFocusRingWidth, 0.0)
+    t = t.withButtonStyle(ButtonRole.Destructive, "Danger")
+    t
+
+# A Fluent 2 (Windows 11) flavoured theme, built only from overrides like `macThemeOn`: the brand blue, neutral grays, 4-pt corners,
+# 32-pt controls, a square-cornered checkbox, 14-pt body text, a red `Danger` for destructive buttons, and the dark appearance's own
+# palette (Fluent's dark neutrals and lighter brand blue). The controls' SHAPE beyond colour, radius and size (the field's accent
+# underline, the switch form of a toggle) needs the custom control styles that are not built yet.
+pub def Theme fluentTheme():
+    fluentThemeOn(Theme(name = "fluent"))
+
+pub def Theme fluentThemeOn(Theme base):
+    var t = base
+    t = t.withColorVariant(ColorRole.WindowBackground, "light", "#F5F5F5")
+    t = t.withColorVariant(ColorRole.Surface, "light", "#FFFFFF")
+    t = t.withColorVariant(ColorRole.ElevatedSurface, "light", "#FFFFFF")
+    t = t.withColorVariant(ColorRole.PrimaryText, "light", "#242424")
+    t = t.withColorVariant(ColorRole.SecondaryText, "light", "#616161")
+    t = t.withColorVariant(ColorRole.PlaceholderText, "light", "#707070")
+    t = t.withColorVariant(ColorRole.DisabledText, "light", "#BDBDBD")
+    t = t.withColorVariant(ColorRole.Accent, "light", "#0F6CBD")
+    t = t.withColorVariant(ColorRole.FocusRing, "light", "#242424")
+    t = t.withColorVariant(ColorRole.Danger, "light", "#C50F1F")
+    t = t.withColorVariant(ColorRole.ControlBorder, "light", "#D1D1D1")
+    t = t.withColorVariant(ColorRole.Separator, "light", "#E0E0E0")
+    t = t.withColorVariant(ColorRole.Selection, "light", "#CFE4FA")
+    t = t.withColorVariant(ColorRole.WindowBackground, "dark", "#1F1F1F")
+    t = t.withColorVariant(ColorRole.Surface, "dark", "#292929")
+    t = t.withColorVariant(ColorRole.ElevatedSurface, "dark", "#333333")
+    t = t.withColorVariant(ColorRole.PrimaryText, "dark", "#FFFFFF")
+    t = t.withColorVariant(ColorRole.SecondaryText, "dark", "#D6D6D6")
+    t = t.withColorVariant(ColorRole.PlaceholderText, "dark", "#ADADAD")
+    t = t.withColorVariant(ColorRole.DisabledText, "dark", "#5C5C5C")
+    t = t.withColorVariant(ColorRole.Accent, "dark", "#479EF5")
+    t = t.withColorVariant(ColorRole.OnAccent, "dark", "#0A0A0A")
+    t = t.withColorVariant(ColorRole.FocusRing, "dark", "#FFFFFF")
+    t = t.withColorVariant(ColorRole.Danger, "dark", "#DC626D")
+    t = t.withColorVariant(ColorRole.ControlBorder, "dark", "#666666")
+    t = t.withColorVariant(ColorRole.Separator, "dark", "#525252")
+    t = t.withColorVariant(ColorRole.Selection, "dark", "#0F548C")
+    t = t.withFontSize(FontRole.Title, 28.0)
+    t = t.withFontSize(FontRole.Headline, 20.0)
+    t = t.withFontSize(FontRole.Body, 14.0)
+    t = t.withFontSize(FontRole.Label, 14.0)
+    t = t.withFontSize(FontRole.Caption, 12.0)
+    t = t.withMetric(MetricRole.ControlPadding, 6.0)
+    t = t.withMetric(MetricRole.TextFieldHeight, 32.0)
+    t = t.withMetric(MetricRole.TextFieldWidth, 200.0)
+    t = t.withMetric(MetricRole.ToggleSize, 20.0)
+    t = t.withMetric(MetricRole.ToggleRadius, 4.0)
+    t = t.withMetric(MetricRole.ControlRadius, 4.0)
+    t = t.withMetric(MetricRole.StackSpacing, 8.0)
+    t = t.withMetric(MetricRole.SheetCornerRadius, 8.0)
     t = t.withButtonStyle(ButtonRole.Destructive, "Danger")
     t
 

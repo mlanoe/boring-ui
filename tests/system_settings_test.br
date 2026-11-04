@@ -1,6 +1,10 @@
 # `themeFromSystem` / `macThemeFromSystem` (src/system_settings.br): settings in, theme out.
 # Run: boring run tests/system_settings_test.br
 
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
 use ui.theme.*
 use ui.system_settings.*
 
@@ -38,5 +42,37 @@ assert_eq(macDark.color(ColorRole.Danger), "#FF453A")
 assert_eq(macDark.color(ColorRole.SecondaryText), "#A1A1A6")
 assert_eq(macDark.metric(MetricRole.ControlRadius), 8.0)
 assert_eq(themeProblems(macDark).length, 0)
+
+# the Fluent theme: 4-pt corners and a square checkbox in light; its own dark palette (and the brand blue) in dark
+let fluentLight = fluentThemeFromSystem(Theme(), none)
+assert_eq(fluentLight.color(ColorRole.Accent), "#0F6CBD")
+assert_eq(fluentLight.color(ColorRole.WindowBackground), "#F5F5F5")
+assert_eq(fluentLight.metric(MetricRole.ControlRadius), 4.0)
+assert_eq(fluentLight.metric(MetricRole.ToggleRadius), 4.0)
+assert_eq(fluentLight.fontSizeNamed("Body"), 14.0)
+let fluentDark = fluentThemeFromSystem(Theme(), SystemSettings(dark = true))
+assert_eq(fluentDark.color(ColorRole.WindowBackground), "#1F1F1F")
+assert_eq(fluentDark.color(ColorRole.Accent), "#479EF5")
+assert_eq(fluentDark.color(ColorRole.OnAccent), "#0A0A0A")
+assert_eq(themeProblems(fluentDark).length, 0)
+assert_eq(themeProblems(fluentLight).length, 0)
+# the other themes keep a round toggle
+assert_eq(macLight.metric(MetricRole.ToggleRadius), 1000.0)
+
+# the window background comes from the provided theme, not from the Provide node's own (outer, default) one
+struct Probe as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [Text("x")])
+
+def string backgroundOf(Theme t):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Probe(theme = t)))
+    let placed = layout(rt, 100.0, 100.0) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+    windowBackground(placed)
+
+assert_eq(backgroundOf(fluentThemeFromSystem(Theme(), SystemSettings(dark = true))), "#1F1F1F")
+assert_eq(backgroundOf(fluentThemeFromSystem(Theme(), none)), "#F5F5F5")
+assert_eq(backgroundOf(themeFromSystem(Theme(), SystemSettings(dark = true))), "#1C1C1E")
 
 print "system settings ok"

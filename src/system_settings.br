@@ -35,3 +35,7 @@ pub def Theme themeFromSystem(Theme base, SystemSettings s):
 # The `macThemeOn` theme following the system (a host that has not read any setting gets the light theme).
 pub def Theme macThemeFromSystem(Theme base, SystemSettings s):
     themeFromSystem(macThemeOn(base), s)
+
+# The `fluentThemeOn` theme following the system.
+pub def Theme fluentThemeFromSystem(Theme base, SystemSettings s):
+    themeFromSystem(fluentThemeOn(base), s)
