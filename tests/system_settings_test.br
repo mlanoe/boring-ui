@@ -1,0 +1,42 @@
+# `themeFromSystem` / `macThemeFromSystem` (src/system_settings.br): settings in, theme out.
+# Run: boring run tests/system_settings_test.br
+
+use ui.theme.*
+use ui.system_settings.*
+
+let none = SystemSettings()
+let plain = themeFromSystem(Theme(), none)
+assert_eq(plain.color(ColorRole.WindowBackground), "#FFFFFF")
+assert(!plain.dark)
+
+# dark appearance switches the base
+let dark = themeFromSystem(Theme(), SystemSettings(dark = true))
+assert(dark.dark)
+assert_eq(dark.color(ColorRole.WindowBackground), "#1C1C1E")
+
+# the accent replaces the accent and the focus ring in every appearance, and a bad one is ignored
+let tinted = themeFromSystem(Theme(), SystemSettings(dark = true, accent = "#FF9500"))
+assert_eq(tinted.color(ColorRole.Accent), "#FF9500")
+assert_eq(tinted.color(ColorRole.FocusRing), "#FF9500")
+assert_eq(themeFromSystem(Theme(), SystemSettings(accent = "orange")).color(ColorRole.Accent), "#0A84FF")
+
+# contrast and text scale
+let big = themeFromSystem(Theme(), SystemSettings(contrast = true, textScale = 1.5))
+assert(big.contrast)
+assert_eq(big.textScale, 1.5)
+assert_eq(themeFromSystem(Theme(), SystemSettings(textScale = 0.0)).textScale, 1.0)
+assert_eq(themeFromSystem(Theme(), SystemSettings(textScale = 9.0)).textScale, 1.0)
+
+# the mac theme: its light grays do not leak into the dark appearance
+let macLight = macThemeFromSystem(Theme(), none)
+assert_eq(macLight.color(ColorRole.Surface), "#F2F2F7")
+assert_eq(macLight.color(ColorRole.Accent), "#007AFF")
+let macDark = macThemeFromSystem(Theme(), SystemSettings(dark = true))
+assert_eq(macDark.color(ColorRole.Surface), "#2C2C2E")
+assert_eq(macDark.color(ColorRole.Accent), "#0A84FF")
+assert_eq(macDark.color(ColorRole.Danger), "#FF453A")
+assert_eq(macDark.color(ColorRole.SecondaryText), "#A1A1A6")
+assert_eq(macDark.metric(MetricRole.ControlRadius), 8.0)
+assert_eq(themeProblems(macDark).length, 0)
+
+print "system settings ok"

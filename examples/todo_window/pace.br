@@ -8,6 +8,7 @@ use ui.anim.*
 use ui.animator.*
 use ui.events.*
 use ui.mobile.*
+use ui.system_settings.*
 
 def Placed placedOf(Runtime rt, int w, int h):
     layout(rt, w as float, h as float) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
@@ -164,6 +165,7 @@ struct BusyCells:
     Slot<float>'actor phase = Slot(value = 0.0)
     Slot<bool>'actor busy = Slot(value = false)
     Slot<ScreenInfo>'actor screenInfo = Slot(value = ScreenInfo())
+    Slot<SystemSettings>'actor settings = Slot(value = SystemSettings())
 
 # The indeterminate bar's phase (0...1) at `seconds`: one sweep every 1.4 s.
 def float phaseAt(float32 seconds):
@@ -199,6 +201,19 @@ def bool syncScreen(mut Motion m, mut Runtime rt, Builder host, BusyCells cells,
     if !screenChanged(cells.screenInfo.value, now):
         return false
     cells.screenInfo.value = now
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
+
+# Hands the root view the system's appearance (read by the host, see host_settings.br): the root is rebuilt, so the theme is derived again, only
+# when the appearance changed. True when it was, so the frame must be painted.
+def bool syncSystem(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, SystemSettings now):
+    let before = cells.settings.value
+    if before.dark == now.dark and before.contrast == now.contrast and before.accent == now.accent and before.textScale == now.textScale:
+        return false
+    cells.settings.value = now
     rt.beginEvent()
     rt.invalidateRoot()
     rt.endEvent(host)

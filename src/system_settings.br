@@ -1,0 +1,37 @@
+# What the operating system says about appearance, applied to a theme (docs/design-notes/boring-ui-draft.md,
+# "Theme value and inheritance": `Theme.system()` follows the platform light/dark appearance, accent and text scale).
+#
+# Deliberately split in two: THIS file is the pure, testable half (settings value in, theme out, no platform call), and a
+# host reads the platform and builds a `SystemSettings` (macOS `NSApp.effectiveAppearance` / accent colour, Windows
+# `UISettings`, the XDG settings portal). A host that can read nothing passes `SystemSettings()`: the base theme, unchanged.
+
+use ui.theme.*
+
+pub struct SystemSettings:
+    # Dark appearance.
+    pub bool dark = false
+    # Increased contrast ("Increase contrast" / high-contrast mode).
+    pub bool contrast = false
+    # The user's accent colour as `#RRGGBB[AA]`, "" = the theme's own accent.
+    pub string accent = ""
+    # Text size preference as a multiplier (1.0 = default).
+    pub float textScale = 1.0
+
+# `base` (its measurer, metrics and style overrides) with the system's appearance applied: the dark base when `dark`, the
+# high-contrast palette when `contrast`, the accent for the accent and the focus ring, and the text scale. An invalid
+# accent or a text scale outside (0, 5] is ignored rather than reaching `Theme.validate`.
+pub def Theme themeFromSystem(Theme base, SystemSettings s):
+    var t = base
+    if s.dark:
+        t = t.asDark()
+    t = t.withContrast(s.contrast)
+    if s.textScale > 0.0 and s.textScale <= 5.0:
+        t = t.withTextScale(s.textScale)
+    if s.accent != "" and isHexColor(s.accent):
+        t = t.withColor(ColorRole.Accent, s.accent)
+        t = t.withColor(ColorRole.FocusRing, s.accent)
+    t
+
+# The `macThemeOn` theme following the system (a host that has not read any setting gets the light theme).
+pub def Theme macThemeFromSystem(Theme base, SystemSettings s):
+    themeFromSystem(macThemeOn(base), s)

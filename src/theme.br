@@ -532,14 +532,18 @@ pub def Theme macTheme():
 # The same overrides on top of `base` (to keep its text measurer, e.g. a real font engine's).
 pub def Theme macThemeOn(Theme base):
     var t = base
-    t = t.withColor(ColorRole.Accent, "#007AFF")
-    t = t.withColor(ColorRole.FocusRing, "#007AFF")
-    t = t.withColor(ColorRole.Danger, "#FF3B30")
-    t = t.withColor(ColorRole.Surface, "#F2F2F7")
-    t = t.withColor(ColorRole.ControlBorder, "#D1D1D6")
-    t = t.withColor(ColorRole.Separator, "#E5E5EA")
-    t = t.withColor(ColorRole.SecondaryText, "#8E8E93")
-    t = t.withColor(ColorRole.PlaceholderText, "#AEAEB2")
+    # The grays are the LIGHT appearance's: the dark base (and `asDark`) keeps its own, so these must not apply to every variant.
+    t = t.withColorVariant(ColorRole.Accent, "light", "#007AFF")
+    t = t.withColorVariant(ColorRole.FocusRing, "light", "#007AFF")
+    t = t.withColorVariant(ColorRole.Danger, "light", "#FF3B30")
+    t = t.withColorVariant(ColorRole.Accent, "dark", "#0A84FF")
+    t = t.withColorVariant(ColorRole.FocusRing, "dark", "#0A84FF")
+    t = t.withColorVariant(ColorRole.Danger, "dark", "#FF453A")
+    t = t.withColorVariant(ColorRole.Surface, "light", "#F2F2F7")
+    t = t.withColorVariant(ColorRole.ControlBorder, "light", "#D1D1D6")
+    t = t.withColorVariant(ColorRole.Separator, "light", "#E5E5EA")
+    t = t.withColorVariant(ColorRole.SecondaryText, "light", "#8E8E93")
+    t = t.withColorVariant(ColorRole.PlaceholderText, "light", "#AEAEB2")
     t = t.withFontSize(FontRole.Title, 22.0)
     t = t.withFontSize(FontRole.Headline, 15.0)
     t = t.withFontSize(FontRole.Body, 13.0)

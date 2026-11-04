@@ -1,0 +1,12 @@
+# The platform half of src/system_settings.br: what this machine says about its appearance. `dark-light` reads the light/dark
+# choice on macOS, Windows and Linux (it reports "default" when there is none, which is light). The accent colour and the text
+# size are not read yet (no cross-platform source): `SystemSettings` keeps their defaults, so the theme's own accent and scale apply.
+#
+# Needs `dark-light` in this project's boring.toml [dependencies].
+
+use dark_light.detect
+use dark_light.Mode
+use ui.system_settings.*
+
+pub def SystemSettings readSystemSettings():
+    SystemSettings(dark = detect() == Mode.Dark)
