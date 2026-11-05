@@ -648,6 +648,57 @@ pub def Theme fluentThemeOn(Theme base):
     t = t.withControlStyle("TextField", "Underlined")
     t
 
+# A GNOME / libadwaita (Adwaita) flavoured theme, built only from overrides like `macThemeOn` and `fluentThemeOn`: the GNOME blue accent,
+# the palette's warm grays, 6-pt corners, 34-pt controls, a rounded-square check mark, 15-pt body text, a red `Danger` for destructive
+# buttons, and the dark appearance's own palette. Like Fluent, only colours, radii and sizes: the shape of a few controls (the pill
+# switch, the flat header bar) is the custom styles' job.
+pub def Theme adwaitaTheme():
+    adwaitaThemeOn(Theme(name = "adwaita"))
+
+pub def Theme adwaitaThemeOn(Theme base):
+    var t = base
+    t = t.withColorVariant(ColorRole.WindowBackground, "light", "#FAFAFA")
+    t = t.withColorVariant(ColorRole.Surface, "light", "#F6F5F4")
+    t = t.withColorVariant(ColorRole.ElevatedSurface, "light", "#FFFFFF")
+    t = t.withColorVariant(ColorRole.PrimaryText, "light", "#323232")
+    t = t.withColorVariant(ColorRole.SecondaryText, "light", "#77767B")
+    t = t.withColorVariant(ColorRole.PlaceholderText, "light", "#9A9996")
+    t = t.withColorVariant(ColorRole.DisabledText, "light", "#B8B7B4")
+    t = t.withColorVariant(ColorRole.Accent, "light", "#3584E4")
+    t = t.withColorVariant(ColorRole.FocusRing, "light", "#3584E4")
+    t = t.withColorVariant(ColorRole.Danger, "light", "#E01B24")
+    t = t.withColorVariant(ColorRole.ControlBorder, "light", "#D0CFCC")
+    t = t.withColorVariant(ColorRole.Separator, "light", "#E4E3E0")
+    t = t.withColorVariant(ColorRole.Selection, "light", "#C2DAF7")
+    t = t.withColorVariant(ColorRole.WindowBackground, "dark", "#242424")
+    t = t.withColorVariant(ColorRole.Surface, "dark", "#303030")
+    t = t.withColorVariant(ColorRole.ElevatedSurface, "dark", "#383838")
+    t = t.withColorVariant(ColorRole.PrimaryText, "dark", "#FFFFFF")
+    t = t.withColorVariant(ColorRole.SecondaryText, "dark", "#9A9996")
+    t = t.withColorVariant(ColorRole.PlaceholderText, "dark", "#77767B")
+    t = t.withColorVariant(ColorRole.DisabledText, "dark", "#5E5C64")
+    t = t.withColorVariant(ColorRole.Accent, "dark", "#3584E4")
+    t = t.withColorVariant(ColorRole.FocusRing, "dark", "#78AEED")
+    t = t.withColorVariant(ColorRole.Danger, "dark", "#C01C28")
+    t = t.withColorVariant(ColorRole.ControlBorder, "dark", "#4A4A4A")
+    t = t.withColorVariant(ColorRole.Separator, "dark", "#3D3D3D")
+    t = t.withColorVariant(ColorRole.Selection, "dark", "#2B4A71")
+    t = t.withFontSize(FontRole.Title, 26.0)
+    t = t.withFontSize(FontRole.Headline, 20.0)
+    t = t.withFontSize(FontRole.Body, 15.0)
+    t = t.withFontSize(FontRole.Label, 14.0)
+    t = t.withFontSize(FontRole.Caption, 12.0)
+    t = t.withMetric(MetricRole.ControlPadding, 9.5)
+    t = t.withMetric(MetricRole.TextFieldHeight, 34.0)
+    t = t.withMetric(MetricRole.TextFieldWidth, 200.0)
+    t = t.withMetric(MetricRole.ToggleSize, 18.0)
+    t = t.withMetric(MetricRole.ToggleRadius, 4.0)
+    t = t.withMetric(MetricRole.ControlRadius, 6.0)
+    t = t.withMetric(MetricRole.StackSpacing, 12.0)
+    t = t.withMetric(MetricRole.SheetCornerRadius, 12.0)
+    t = t.withButtonStyle(ButtonRole.Destructive, "Danger")
+    t
+
 # The `Theme` nearest in a provider scope (nearest first), or the system theme.
 pub def Theme themeIn([EnvValue] scope):
     for v in scope:

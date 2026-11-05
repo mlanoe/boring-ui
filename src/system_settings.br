@@ -30,8 +30,11 @@ pub def Theme themeFromSystem(Theme base, SystemSettings s):
     if s.textScale > 0.0 and s.textScale <= 5.0:
         t = t.withTextScale(s.textScale)
     if s.accent != "" and isHexColor(s.accent):
-        t = t.withColor(ColorRole.Accent, s.accent)
-        t = t.withColor(ColorRole.FocusRing, s.accent)
+        # In both appearances, as variant overrides: a platform theme's own `light` / `dark` accent outranks an every-variant one.
+        t = t.withColorVariant(ColorRole.Accent, "light", s.accent)
+        t = t.withColorVariant(ColorRole.Accent, "dark", s.accent)
+        t = t.withColorVariant(ColorRole.FocusRing, "light", s.accent)
+        t = t.withColorVariant(ColorRole.FocusRing, "dark", s.accent)
     t
 
 # The `macThemeOn` theme following the system (a host that has not read any setting gets the light theme).
@@ -42,11 +45,17 @@ pub def Theme macThemeFromSystem(Theme base, SystemSettings s):
 pub def Theme fluentThemeFromSystem(Theme base, SystemSettings s):
     themeFromSystem(fluentThemeOn(base), s)
 
-# The theme that looks like the platform, following the system: the mac theme on macOS and iOS, Fluent on Windows, and the built-in
-# one elsewhere (Linux and Android have no theme of their own yet), each with the appearance applied.
+# The `adwaitaThemeOn` theme following the system.
+pub def Theme adwaitaThemeFromSystem(Theme base, SystemSettings s):
+    themeFromSystem(adwaitaThemeOn(base), s)
+
+# The theme that looks like the platform, following the system: the mac theme on macOS and iOS, Fluent on Windows, Adwaita on Linux,
+# and the built-in one elsewhere (Android has no theme of its own yet), each with the appearance applied.
 pub def Theme platformThemeFromSystem(Theme base, SystemSettings s):
     if s.platform == "macos" or s.platform == "ios":
         return macThemeFromSystem(base, s)
     if s.platform == "windows":
         return fluentThemeFromSystem(base, s)
+    if s.platform == "linux":
+        return adwaitaThemeFromSystem(base, s)
     themeFromSystem(base, s)

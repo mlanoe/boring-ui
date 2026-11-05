@@ -80,7 +80,26 @@ assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "macos")).c
 assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "ios")).color(ColorRole.Accent), "#007AFF")
 assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "windows")).color(ColorRole.Accent), "#0F6CBD")
 assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "windows", dark = true)).color(ColorRole.Accent), "#479EF5")
-assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "linux")).color(ColorRole.Accent), "#0A84FF")
+assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "linux")).color(ColorRole.Accent), "#3584E4")
+assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "android")).color(ColorRole.Accent), "#0A84FF")
 assert_eq(platformThemeFromSystem(Theme(), none).color(ColorRole.Accent), "#0A84FF")
+
+# the Adwaita theme: GNOME blue, 6-pt corners, 34-pt controls; its own dark palette; a system accent still wins
+let adwLight = adwaitaThemeFromSystem(Theme(), none)
+assert_eq(adwLight.color(ColorRole.WindowBackground), "#FAFAFA")
+assert_eq(adwLight.metric(MetricRole.ControlRadius), 6.0)
+assert_eq(adwLight.metric(MetricRole.TextFieldHeight), 34.0)
+assert_eq(adwLight.fontSizeNamed("Body"), 15.0)
+let adwDark = adwaitaThemeFromSystem(Theme(), SystemSettings(dark = true))
+assert_eq(adwDark.color(ColorRole.WindowBackground), "#242424")
+assert_eq(adwDark.color(ColorRole.FocusRing), "#78AEED")
+assert_eq(adwaitaThemeFromSystem(Theme(), SystemSettings(accent = "#E66100")).color(ColorRole.Accent), "#E66100")
+assert_eq(adwaitaThemeFromSystem(Theme(), SystemSettings(accent = "#E66100", dark = true)).color(ColorRole.FocusRing), "#E66100")
+# the system accent outranks the platform themes' own light/dark accents (mac, Fluent too)
+assert_eq(macThemeFromSystem(Theme(), SystemSettings(accent = "#F74F9E")).color(ColorRole.Accent), "#F74F9E")
+assert_eq(macThemeFromSystem(Theme(), SystemSettings(accent = "#F74F9E", dark = true)).color(ColorRole.Accent), "#F74F9E")
+assert_eq(fluentThemeFromSystem(Theme(), SystemSettings(accent = "#F74F9E")).color(ColorRole.Accent), "#F74F9E")
+assert_eq(themeProblems(adwDark).length, 0)
+assert_eq(themeProblems(adwLight).length, 0)
 
 print "system settings ok"
