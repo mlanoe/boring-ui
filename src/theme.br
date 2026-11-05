@@ -18,9 +18,12 @@
 # live in entry lists rather than dictionaries (dictionary iteration differs under `boring build`).
 # Variants: a color override may be for one appearance (`light`, `dark`, `contrast`) or for all; `contrast` also
 # switches the built-in base to its increased-contrast palettes, and `textScale` multiplies every font size.
-# Not here yet: adaptive spacing pairs, custom style traits (`<View> body(Context)`), inherited `.buttonStyle(...)` providers.
+# Control looks: the built-in named styles (`controlStyle`: Outlined / Underlined fields, Box / Switch toggles, the button styles) and application-written ones
+# (`ControlStyle` below, installed with `withStyle`: a struct that paints a control's presentation as display-list commands).
+# Not here yet: adaptive spacing pairs, styles that return a view subtree (`<View> body(Context)`), per-control `.style(...)` and inherited `.buttonStyle(...)` providers.
 
 use boring.ui.*
+use render.display_list.*
 
 pub enum ColorRole:
     WindowBackground
@@ -346,6 +349,45 @@ pub struct FixtureMeasurer as TextMeasurer:
         let cell = size / 2.0
         [(s.graphemeSlice(0, lo).displayWidth as float) * cell, (s.graphemeSlice(0, hi).displayWidth as float) * cell]
 
+# ── custom control styles ────────────────────────────────────────────────────────────────────────────────────
+
+# What a style is told about the control it paints: its kind, node and bounds (a toggle's: the mark's box), the label, the button role
+# ("Normal", "Destructive", "Cancel"), the toggle's value, and the interaction state. Read-only; the theme gives it every token.
+pub struct StyleContext:
+    pub string kind
+    pub int node = -1
+    pub float x = 0.0
+    pub float y = 0.0
+    pub float w = 0.0
+    pub float h = 0.0
+    pub string label = ""
+    pub string role = "Normal"
+    pub bool on = false
+    pub bool hovered = false
+    pub bool focused = false
+    pub Theme theme
+
+# The look of one kind of control, written by the application: an ordinary struct implementing this trait and installed with
+# `Theme.withStyle`. It paints the control's own PRESENTATION (face, border, mark, underline: display-list commands over the
+# context's bounds); the control keeps its label or text, caret, selection, focus, events and accessibility, so a style cannot
+# change what the control does. `name` identifies the style and its parameters (two styles with the same kind and name are the same
+# style to the layout cache).
+pub trait ControlStyle:
+    # The kind of control it styles: "Button", "Toggle" or "TextField".
+    req string kind()
+    req string name()
+    # The commands that paint the control's presentation; the host stamps their `node`.
+    req [Command] paint(StyleContext c)
+    # A toggle's mark width (the label follows it); other kinds ignore it. Default: a square the height of the mark.
+    req float markWidth(StyleContext c):
+        c.h
+    # The label / text colour as `#RRGGBB[AA]`; "" keeps the theme's.
+    req string textColor(StyleContext c):
+        ""
+    # Whether the host also draws the standard focus ring (a style that shows focus itself says false).
+    req bool focusRing(StyleContext c):
+        true
+
 pub struct Theme as EnvValue:
     pub string name = "system"
     pub bool dark = false
@@ -359,6 +401,8 @@ pub struct Theme as EnvValue:
     pub [StyleEntry] buttonStyles = []
     # Built-in look per control kind (`TextField`: Outlined / Underlined, `Toggle`: Box / Switch); see `controlStyle`.
     pub [StyleEntry] controlStyles = []
+    # Application-written styles (`ControlStyle`), at most one per kind (see `withStyle`).
+    pub [ControlStyle'shared] customStyles = []
     # The text metrics layout and painting use; the fixture font unless the application installs a real engine's.
     pub TextMeasurer'shared measurer = FixtureMeasurer()
 
@@ -443,7 +487,7 @@ pub struct Theme as EnvValue:
             if e.role != key or e.scheme != scheme:
                 next.push(e)
         next.push(ColorEntry(role = key, hex = hex, scheme = scheme))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = next, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, measurer = measurer)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = next, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = customStyles, measurer = measurer)
 
     pub req Theme withMetric(MetricRole role, float value):
         let key = "{role}"
@@ -452,7 +496,7 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(MetricEntry(role = key, value = value))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = next, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, measurer = measurer)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = next, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = customStyles, measurer = measurer)
 
     pub req Theme withFontSize(FontRole role, float size):
         let key = "{role}"
@@ -461,7 +505,7 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(MetricEntry(role = key, value = size))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = next, buttonStyles = buttonStyles, controlStyles = controlStyles, measurer = measurer)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = next, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = customStyles, measurer = measurer)
 
     # The built-in look of a control kind: `TextField` is `Outlined` (the default) or `Underlined` (an accent line under the focused
     # field, no focus ring), `Toggle` is `Box` (the default, a check box or round mark) or `Switch` (a track and a thumb, twice as wide).
@@ -477,7 +521,31 @@ pub struct Theme as EnvValue:
             if e.role != control:
                 next.push(e)
         next.push(StyleEntry(role = control, style = style))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = next, measurer = measurer)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = next, customStyles = customStyles, measurer = measurer)
+
+    # Installs `style` for its kind (a style already installed for that kind is replaced).
+    pub req Theme withStyle(ControlStyle'shared style):
+        mut next = []
+        for e in customStyles:
+            if e.kind() != style.kind():
+                next.push(e)
+        next.push(style)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = next, measurer = measurer)
+
+    # The installed custom style for a kind: one element, or none.
+    pub req [ControlStyle'shared] stylesFor(string control):
+        mut found = []
+        for e in customStyles:
+            if e.kind() == control:
+                found.push(e)
+        found
+
+    # The installed styles' kinds and names in one string: what `sameTheme` compares (a trait object has no equality of its own).
+    pub req string customStyleKey():
+        var key = ""
+        for e in customStyles:
+            key = "{key}|{e.kind()}={e.name()}"
+        key
 
     pub req Theme withButtonStyle(ButtonRole role, string style):
         let key = "{role}"
@@ -486,19 +554,19 @@ pub struct Theme as EnvValue:
             if e.role != key:
                 next.push(e)
         next.push(StyleEntry(role = key, style = style))
-        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = next, controlStyles = controlStyles, measurer = measurer)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = next, controlStyles = controlStyles, customStyles = customStyles, measurer = measurer)
 
     # The built-in dark base with the same overrides.
     pub req Theme asDark():
-        Theme(name = "{name}.dark", dark = true, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, measurer = measurer)
+        Theme(name = "{name}.dark", dark = true, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = customStyles, measurer = measurer)
 
     # Increased contrast on or off, keeping the overrides.
     pub req Theme withContrast(bool on):
-        Theme(name = name, dark = dark, contrast = on, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, measurer = measurer)
+        Theme(name = name, dark = dark, contrast = on, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = customStyles, measurer = measurer)
 
     # The accessibility text scale (1.0 = none): every font size, hence every text measurement, is multiplied.
     pub req Theme withTextScale(float scale):
-        Theme(name = name, dark = dark, contrast = contrast, textScale = scale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, measurer = measurer)
+        Theme(name = name, dark = dark, contrast = contrast, textScale = scale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = customStyles, measurer = measurer)
 
     # Validation (run once when a theme is installed): colors are `#RRGGBB` / `#RRGGBBAA`, metrics are
     # finite and non-negative, font sizes are positive, style names are built in. Empty = valid.
@@ -520,6 +588,9 @@ pub struct Theme as EnvValue:
         for e in buttonStyles:
             if !isBuiltInStyle(e.style):
                 problems.push("button style for {e.role}: '{e.style}' is not Primary, Secondary, Plain, Compact or Danger")
+        for e in customStyles:
+            if e.kind() != "Button" and e.kind() != "Toggle" and e.kind() != "TextField":
+                problems.push("custom style '{e.name()}': '{e.kind()}' is not Button, Toggle or TextField")
         for e in controlStyles:
             if !isControlStyle(e.role, e.style):
                 problems.push("control style for {e.role}: '{e.style}' is not a built-in style of that control")

@@ -19,7 +19,7 @@ pub struct Command:
     pub float h
     pub string text = ""
     pub string color = ""
-    pub int node = -1
+    pub var int node = -1
     # `DrawGlyph`: the index of the glyph in the atlas.
     pub int glyph = -1
     # `DrawText`: 0 regular, 1 bold, 2 italic, 3 bold italic (which cut of the font the text engine sets it in).

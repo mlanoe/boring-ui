@@ -70,6 +70,20 @@ def int textStyleOf(Placed p):
         style += 2
     style
 
+# The context an application-written style (`ControlStyle`) is told about the control `p` (a toggle's is the mark's box: see `toggleContext`).
+def StyleContext styleContextOf(Placed p, string kind):
+    StyleContext(kind = kind, node = p.id, x = p.x, y = p.y, w = p.w, h = p.h, label = (p.props["label"] else ("")), role = (p.props["role"] else ("Normal")), on = (p.props["value"] else ("false")) == "true", hovered = propOrLive(p, "hovered", "false") == "true", focused = propOrLive(p, "focused", "false") == "true", theme = p.theme)
+
+def StyleContext toggleContext(Placed p, float markW, float markH):
+    StyleContext(kind = "Toggle", node = p.id, x = p.x, y = p.y, w = markW, h = markH, label = (p.props["label"] else ("")), on = (p.props["value"] else ("false")) == "true", hovered = propOrLive(p, "hovered", "false") == "true", focused = propOrLive(p, "focused", "false") == "true", theme = p.theme)
+
+# What a custom style paints, each command stamped with the control's node.
+def void pushStyled(ControlStyle'shared style, StyleContext ctx, mut [Command] out):
+    for c in style.paint(ctx):
+        mut stamped = c
+        stamped.node = ctx.node
+        out.push(stamped)
+
 def paintNode(Placed p, mut [Command] out):
     # A presented sheet paints in the presentation layer, after everything else (see `displayList`).
     if p.kind == "Sheet":
@@ -100,12 +114,15 @@ def paintNode(Placed p, mut [Command] out):
         let spec = buttonSpec(buttonStyleOf(p.theme, p.props))
         let pad = buttonPaddingOf(p.theme, p.props)
         let body = p.theme.fontSizeNamed("Body")
-        if spec.filled:
+        let customButton = p.theme.stylesFor("Button")
+        if customButton.length > 0:
+            pushStyled(customButton[0], styleContextOf(p, "Button"), out)
+        elif spec.filled:
             mut face = cmd("FillRect", p, "", "button")
             face.hex = p.theme.colorNamed(spec.background)
             face.radius = p.theme.metric(MetricRole.ControlRadius)
             out.push(face)
-        if propOrLive(p, "hovered", "false") == "true":
+        if customButton.length == 0 and propOrLive(p, "hovered", "false") == "true":
             # the pointer is over it: a translucent shade over the face, under the label
             mut shade = cmd("FillRect", p, "", "hover")
             shade.hex = p.theme.color(ColorRole.ShadowColor)
@@ -114,24 +131,32 @@ def paintNode(Placed p, mut [Command] out):
         let label = p.props["label"] else ("")
         mut text = Command(kind = "DrawText", x = p.x + pad, y = p.y + pad, w = p.w - 2.0 * pad, h = body, text = label, color = "", node = p.id)
         text.hex = p.theme.colorNamed(spec.text)
+        if customButton.length > 0:
+            let tone = customButton[0].textColor(styleContextOf(p, "Button"))
+            if tone != "":
+                text.hex = tone
         out.push(text)
     if p.kind == "TextField":
         let value = p.props["value"] else ("")
-        mut field = cmd("FillRect", p, "", "field")
-        field.hex = p.theme.color(ColorRole.ElevatedSurface)
-        field.radius = p.theme.metric(MetricRole.ControlRadius)
-        out.push(field)
-        mut edge = cmd("StrokeRect", p, "", "fieldBorder")
-        edge.hex = p.theme.color(ColorRole.ControlBorder)
-        edge.value = p.theme.metric(MetricRole.ControlBorderWidth)
-        edge.radius = p.theme.metric(MetricRole.ControlRadius)
-        out.push(edge)
-        if p.theme.controlStyle("TextField") == "Underlined" and propOrLive(p, "focused", "false") == "true":
-            # an accent line along the bottom edge while focused (it stands in for the focus ring), inset by the corner radius
-            let inset = p.theme.metric(MetricRole.ControlRadius)
-            mut line = Command(kind = "FillRect", x = p.x + inset, y = p.y + p.h - 2.0, w = p.w - 2.0 * inset, h = 2.0, text = "", color = "underline", node = p.id)
-            line.hex = p.theme.color(ColorRole.Accent)
-            out.push(line)
+        let customField = p.theme.stylesFor("TextField")
+        if customField.length > 0:
+            pushStyled(customField[0], styleContextOf(p, "TextField"), out)
+        else:
+            mut field = cmd("FillRect", p, "", "field")
+            field.hex = p.theme.color(ColorRole.ElevatedSurface)
+            field.radius = p.theme.metric(MetricRole.ControlRadius)
+            out.push(field)
+            mut edge = cmd("StrokeRect", p, "", "fieldBorder")
+            edge.hex = p.theme.color(ColorRole.ControlBorder)
+            edge.value = p.theme.metric(MetricRole.ControlBorderWidth)
+            edge.radius = p.theme.metric(MetricRole.ControlRadius)
+            out.push(edge)
+            if p.theme.controlStyle("TextField") == "Underlined" and propOrLive(p, "focused", "false") == "true":
+                # an accent line along the bottom edge while focused (it stands in for the focus ring), inset by the corner radius
+                let inset = p.theme.metric(MetricRole.ControlRadius)
+                mut line = Command(kind = "FillRect", x = p.x + inset, y = p.y + p.h - 2.0, w = p.w - 2.0 * inset, h = 2.0, text = "", color = "underline", node = p.id)
+                line.hex = p.theme.color(ColorRole.Accent)
+                out.push(line)
         # the text, selection, caret and composition stay inside the field: a value longer than the field is cut at its edge
         # (there is no horizontal scrolling yet; the caret of a value that long is cut with it)
         out.push(Command(kind = "PushClip", x = p.x + 2.0, y = p.y, w = p.w - 4.0, h = p.h, text = "", color = "", node = p.id))
@@ -191,6 +216,10 @@ def paintNode(Placed p, mut [Command] out):
         # (the command's width is the text's own: the field's origin already places it, so a right-to-left line is not aligned twice)
         mut text = Command(kind = "DrawText", x = originX, y = lineY, w = p.theme.measurer.width(shownText, bodyHeight), h = p.theme.fontSizeNamed("Body"), text = shownText, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
+        if customField.length > 0:
+            let tone = customField[0].textColor(styleContextOf(p, "TextField"))
+            if tone != "":
+                text.hex = tone
         out.push(text)
         if focusedField:
             # a one-pixel bar before the grapheme at `caret`; while composing, at the cursor inside the marked text
@@ -248,61 +277,66 @@ def paintNode(Placed p, mut [Command] out):
         let label = p.props["label"] else ("")
         let box = p.theme.metric(MetricRole.ToggleSize)
         let gap = p.theme.metric(MetricRole.ControlPadding)
-        let isSwitch = p.theme.controlStyle("Toggle") == "Switch"
+        let customToggle = p.theme.stylesFor("Toggle")
         var markW = box
-        if isSwitch:
+        if customToggle.length > 0:
             markW = toggleWidth(p.theme)
-        var boxRadius = p.theme.metric(MetricRole.ToggleRadius)
-        if isSwitch:
-            boxRadius = box / 2.0
-        mut mark = Command(kind = "FillRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = state, node = p.id)
-        mark.radius = boxRadius
-        if state == "on":
-            mark.hex = p.theme.color(ColorRole.Accent)
+            pushStyled(customToggle[0], toggleContext(p, markW, box), out)
         else:
-            mark.hex = p.theme.color(ColorRole.ElevatedSurface)
-        out.push(mark)
-        if state == "off":
-            mut ring = Command(kind = "StrokeRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = "off", node = p.id)
-            ring.hex = p.theme.color(ColorRole.ControlBorder)
-            ring.value = 1.5
+            let isSwitch = p.theme.controlStyle("Toggle") == "Switch"
             if isSwitch:
-                ring.value = 1.0
-            ring.radius = boxRadius
-            out.push(ring)
-        if state == "on" and !isSwitch:
-            # the check mark: two round-ended segments (down to the elbow, then up to the right) in the text-on-accent colour, sized to the box
-            let tickWidth = maxOf(1.5, 0.12 * box)
-            mut shortArm = Command(kind = "DrawLine", x = p.x + 0.27 * box, y = p.y + 0.52 * box, w = 0.0, h = 0.0, text = "", color = "check", node = p.id)
-            shortArm.dx = 0.16 * box
-            shortArm.dy = 0.17 * box
-            shortArm.value = tickWidth
-            shortArm.hex = p.theme.color(ColorRole.OnAccent)
-            out.push(shortArm)
-            mut longArm = Command(kind = "DrawLine", x = p.x + 0.43 * box, y = p.y + 0.69 * box, w = 0.0, h = 0.0, text = "", color = "check", node = p.id)
-            longArm.dx = 0.32 * box
-            longArm.dy = -0.36 * box
-            longArm.value = tickWidth
-            longArm.hex = p.theme.color(ColorRole.OnAccent)
-            out.push(longArm)
-        if isSwitch:
-            # the thumb: a disc inset 3 from the track's ends, at the right end when on (on the accent: the text-on-accent colour)
-            let d = box - 6.0
-            var thumbX = p.x + 3.0
+                markW = toggleWidth(p.theme)
+            var boxRadius = p.theme.metric(MetricRole.ToggleRadius)
+            if isSwitch:
+                boxRadius = box / 2.0
+            mut mark = Command(kind = "FillRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = state, node = p.id)
+            mark.radius = boxRadius
             if state == "on":
-                thumbX = p.x + markW - 3.0 - d
-            mut thumb = Command(kind = "FillRect", x = thumbX, y = p.y + 3.0, w = d, h = d, text = "", color = "thumb", node = p.id)
-            if state == "on":
-                thumb.hex = p.theme.color(ColorRole.OnAccent)
+                mark.hex = p.theme.color(ColorRole.Accent)
             else:
-                thumb.hex = p.theme.color(ColorRole.SecondaryText)
-            thumb.radius = d / 2.0
-            out.push(thumb)
-        if propOrLive(p, "hovered", "false") == "true":
-            mut shade = Command(kind = "FillRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = "hover", node = p.id)
-            shade.hex = p.theme.color(ColorRole.ShadowColor)
-            shade.radius = boxRadius
-            out.push(shade)
+                mark.hex = p.theme.color(ColorRole.ElevatedSurface)
+            out.push(mark)
+            if state == "off":
+                mut ring = Command(kind = "StrokeRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = "off", node = p.id)
+                ring.hex = p.theme.color(ColorRole.ControlBorder)
+                ring.value = 1.5
+                if isSwitch:
+                    ring.value = 1.0
+                ring.radius = boxRadius
+                out.push(ring)
+            if state == "on" and !isSwitch:
+                # the check mark: two round-ended segments (down to the elbow, then up to the right) in the text-on-accent colour, sized to the box
+                let tickWidth = maxOf(1.5, 0.12 * box)
+                mut shortArm = Command(kind = "DrawLine", x = p.x + 0.27 * box, y = p.y + 0.52 * box, w = 0.0, h = 0.0, text = "", color = "check", node = p.id)
+                shortArm.dx = 0.16 * box
+                shortArm.dy = 0.17 * box
+                shortArm.value = tickWidth
+                shortArm.hex = p.theme.color(ColorRole.OnAccent)
+                out.push(shortArm)
+                mut longArm = Command(kind = "DrawLine", x = p.x + 0.43 * box, y = p.y + 0.69 * box, w = 0.0, h = 0.0, text = "", color = "check", node = p.id)
+                longArm.dx = 0.32 * box
+                longArm.dy = -0.36 * box
+                longArm.value = tickWidth
+                longArm.hex = p.theme.color(ColorRole.OnAccent)
+                out.push(longArm)
+            if isSwitch:
+                # the thumb: a disc inset 3 from the track's ends, at the right end when on (on the accent: the text-on-accent colour)
+                let d = box - 6.0
+                var thumbX = p.x + 3.0
+                if state == "on":
+                    thumbX = p.x + markW - 3.0 - d
+                mut thumb = Command(kind = "FillRect", x = thumbX, y = p.y + 3.0, w = d, h = d, text = "", color = "thumb", node = p.id)
+                if state == "on":
+                    thumb.hex = p.theme.color(ColorRole.OnAccent)
+                else:
+                    thumb.hex = p.theme.color(ColorRole.SecondaryText)
+                thumb.radius = d / 2.0
+                out.push(thumb)
+            if propOrLive(p, "hovered", "false") == "true":
+                mut shade = Command(kind = "FillRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = "hover", node = p.id)
+                shade.hex = p.theme.color(ColorRole.ShadowColor)
+                shade.radius = boxRadius
+                out.push(shade)
         # the label is set at the body size it was measured at (layout), centred on the row; not at the row's height
         let labelSize = p.theme.fontSizeNamed("Body")
         mut text = Command(kind = "DrawText", x = p.x + markW + gap, y = p.y + (p.h - labelSize) / 2.0, w = p.w - markW - gap, h = labelSize, text = label, color = "", node = p.id)
@@ -355,6 +389,10 @@ def paintNode(Placed p, mut [Command] out):
         ringWidth = p.theme.metric(MetricRole.ToggleFocusRingWidth)
     if p.kind == "TextField" and p.theme.controlStyle("TextField") == "Underlined":
         ringWidth = 0.0
+    if p.kind == "Button" or p.kind == "Toggle" or p.kind == "TextField":
+        let ringStyles = p.theme.stylesFor(p.kind)
+        if ringStyles.length > 0 and !ringStyles[0].focusRing(styleContextOf(p, p.kind)):
+            ringWidth = 0.0
     if (p.kind == "Button" or p.kind == "Toggle" or p.kind == "TextField" or p.kind == "Slider") and propOrLive(p, "focused", "false") == "true" and ringWidth > 0.0:
         # The focus ring sits just outside the control's bounds, over the control and its own children.
         let width = ringWidth

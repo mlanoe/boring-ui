@@ -1,0 +1,172 @@
+# Application-written control styles (src/theme.br `ControlStyle`, `Theme.withStyle`): a struct implementing the trait paints a control's
+# presentation through the whole pipeline; the control keeps its label, focus and events. Run: boring run tests/trait_styles_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+use ui.theme.*
+use render.display_list.*
+
+# a pill-shaped button in a tint, with white text
+struct PillButton as ControlStyle:
+    pub string tint
+
+    pub req string kind():
+        "Button"
+
+    pub req string name():
+        "PillButton({tint})"
+
+    pub req [Command] paint(StyleContext c):
+        [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "pill", hex = tint, radius = c.h / 2.0)]
+
+    pub req string textColor(StyleContext c):
+        "#FFFFFF"
+
+# a toggle drawn as a 30-wide bar, lit while on; it shows focus itself, so the standard ring is off
+struct BarToggle as ControlStyle:
+    pub req string kind():
+        "Toggle"
+
+    pub req string name():
+        "BarToggle"
+
+    pub req [Command] paint(StyleContext c):
+        var tone = "#999999"
+        if c.on:
+            tone = "#22AA22"
+        [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "bar", hex = tone)]
+
+    pub req float markWidth(StyleContext c):
+        30.0
+
+    pub req bool focusRing(StyleContext c):
+        false
+
+# a text field that is only an underline
+struct LineField as ControlStyle:
+    pub req string kind():
+        "TextField"
+
+    pub req string name():
+        "LineField"
+
+    pub req [Command] paint(StyleContext c):
+        [Command(kind = "FillRect", x = c.x, y = c.y + c.h - 1.0, w = c.w, h = 1.0, color = "line", hex = "#336699")]
+
+# a style for a kind that does not exist
+struct Bogus as ControlStyle:
+    pub req string kind():
+        "Slider"
+
+    pub req string name():
+        "Bogus"
+
+    pub req [Command] paint(StyleContext c):
+        []
+
+def noop():
+    pass
+
+view Panel:
+    state bool on = true
+    state string text = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Button(label = "Go", onActivate = noop)
+            Toggle(value = on, label = "on")
+            TextField(value = text, label = "name", placeholder = "")
+
+struct PanelRoot as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [Panel()])
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Command] named(Runtime rt, string color):
+    mut [Command] out = []
+    for c in displayList(must(layout(rt, 300.0, 200.0))):
+        if c.color == color:
+            out.push(c)
+    out
+
+def Runtime started(Theme t):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = PanelRoot(theme = t)))
+    rt
+
+# ── installing, replacing, naming ──────────────────────────────────────────────────────────────
+
+let plain = Theme()
+assert_eq(plain.stylesFor("Button").length, 0)
+let pill = plain.withStyle(PillButton(tint = "#C0392B"))
+assert_eq(pill.stylesFor("Button").length, 1)
+assert_eq(pill.stylesFor("Toggle").length, 0)
+assert_eq(pill.customStyleKey(), "|Button=PillButton(#C0392B)")
+# a second style of the same kind replaces the first
+let again = pill.withStyle(PillButton(tint = "#2980B9"))
+assert_eq(again.stylesFor("Button").length, 1)
+assert_eq(again.customStyleKey(), "|Button=PillButton(#2980B9)")
+# the layout cache sees a different style as a different theme
+assert(!sameTheme(pill, again), "another tint is another theme")
+assert(sameTheme(pill, plain.withStyle(PillButton(tint = "#C0392B"))), "the same style is the same theme")
+# the other builders keep the styles
+assert_eq(pill.withColor(ColorRole.Accent, "#FF9500").stylesFor("Button").length, 1)
+assert_eq(pill.asDark().stylesFor("Button").length, 1)
+# validation
+assert_eq(themeProblems(pill).length, 0)
+assert_eq(themeProblems(plain.withStyle(Bogus())).length, 1)
+
+# ── a custom button: the style's face replaces the built-in one, the host keeps the label ───────────
+
+let pillRt = started(pill)
+let faces = named(pillRt, "pill")
+assert_eq(faces.length, 1)
+assert_eq(faces[0].hex, "#C0392B")
+assert(faces[0].node >= 0, "the host stamps the node")
+assert_eq(faces[0].radius, faces[0].h / 2.0)
+assert_eq(named(pillRt, "button").length, 0)         # no built-in face
+mut labels = [] as [Command]
+for c in displayList(must(layout(pillRt, 300.0, 200.0))):
+    if c.kind == "DrawText" and c.text == "Go":
+        labels.push(c)
+assert_eq(labels.length, 1)
+assert_eq(labels[0].hex, "#FFFFFF")                   # the style's text colour
+# the other controls are untouched
+assert_eq(named(pillRt, "field").length, 1)
+
+# ── a custom toggle: its mark width drives the layout, the label follows it, no focus ring ──────────
+
+let barRt = started(plain.withStyle(BarToggle()))
+let bars = named(barRt, "bar")
+assert_eq(bars.length, 1)
+assert_eq(bars[0].w, 30.0)
+assert_eq(bars[0].h, 20.0)                             # the ToggleSize
+assert_eq(bars[0].hex, "#22AA22")                      # on
+var barLabelX = -1.0
+for c in displayList(must(layout(barRt, 300.0, 200.0))):
+    if c.kind == "DrawText" and c.text == "on":
+        barLabelX = c.x
+assert_eq(barLabelX, bars[0].x + 30.0 + plain.metric(MetricRole.ControlPadding))
+# built-in toggle styling is gone for this kind
+assert_eq(named(barRt, "on").length, 0)
+let barHost = ViewRoot(inner = PanelRoot(theme = plain.withStyle(BarToggle())))
+mut focusRt = Runtime()
+focusRt.start(barHost)
+assert(keyPress(focusRt, barHost, "Tab"))             # the button first
+assert(keyPress(focusRt, barHost, "Tab"))             # then the toggle
+assert_eq(named(focusRt, "focus").length, 0)           # the style said no standard ring
+
+# ── a custom field: its paint replaces the face and border; the text is still the host's ─────────────
+
+let lineRt = started(plain.withStyle(LineField()))
+assert_eq(named(lineRt, "line").length, 1)
+assert_eq(named(lineRt, "field").length, 0)
+assert_eq(named(lineRt, "fieldBorder").length, 0)
+
+print "trait styles ok"
