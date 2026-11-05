@@ -126,6 +126,12 @@ def paintNode(Placed p, mut [Command] out):
         edge.value = p.theme.metric(MetricRole.ControlBorderWidth)
         edge.radius = p.theme.metric(MetricRole.ControlRadius)
         out.push(edge)
+        if p.theme.controlStyle("TextField") == "Underlined" and propOrLive(p, "focused", "false") == "true":
+            # an accent line along the bottom edge while focused (it stands in for the focus ring), inset by the corner radius
+            let inset = p.theme.metric(MetricRole.ControlRadius)
+            mut line = Command(kind = "FillRect", x = p.x + inset, y = p.y + p.h - 2.0, w = p.w - 2.0 * inset, h = 2.0, text = "", color = "underline", node = p.id)
+            line.hex = p.theme.color(ColorRole.Accent)
+            out.push(line)
         # the text, selection, caret and composition stay inside the field: a value longer than the field is cut at its edge
         # (there is no horizontal scrolling yet; the caret of a value that long is cut with it)
         out.push(Command(kind = "PushClip", x = p.x + 2.0, y = p.y, w = p.w - 4.0, h = p.h, text = "", color = "", node = p.id))
@@ -242,8 +248,14 @@ def paintNode(Placed p, mut [Command] out):
         let label = p.props["label"] else ("")
         let box = p.theme.metric(MetricRole.ToggleSize)
         let gap = p.theme.metric(MetricRole.ControlPadding)
-        mut mark = Command(kind = "FillRect", x = p.x, y = p.y, w = box, h = box, text = "", color = state, node = p.id)
-        let boxRadius = p.theme.metric(MetricRole.ToggleRadius)
+        let isSwitch = p.theme.controlStyle("Toggle") == "Switch"
+        var markW = box
+        if isSwitch:
+            markW = toggleWidth(p.theme)
+        var boxRadius = p.theme.metric(MetricRole.ToggleRadius)
+        if isSwitch:
+            boxRadius = box / 2.0
+        mut mark = Command(kind = "FillRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = state, node = p.id)
         mark.radius = boxRadius
         if state == "on":
             mark.hex = p.theme.color(ColorRole.Accent)
@@ -251,19 +263,34 @@ def paintNode(Placed p, mut [Command] out):
             mark.hex = p.theme.color(ColorRole.ElevatedSurface)
         out.push(mark)
         if state == "off":
-            mut ring = Command(kind = "StrokeRect", x = p.x, y = p.y, w = box, h = box, text = "", color = "off", node = p.id)
+            mut ring = Command(kind = "StrokeRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = "off", node = p.id)
             ring.hex = p.theme.color(ColorRole.ControlBorder)
             ring.value = 1.5
+            if isSwitch:
+                ring.value = 1.0
             ring.radius = boxRadius
             out.push(ring)
+        if isSwitch:
+            # the thumb: a disc inset 3 from the track's ends, at the right end when on (on the accent: the text-on-accent colour)
+            let d = box - 6.0
+            var thumbX = p.x + 3.0
+            if state == "on":
+                thumbX = p.x + markW - 3.0 - d
+            mut thumb = Command(kind = "FillRect", x = thumbX, y = p.y + 3.0, w = d, h = d, text = "", color = "thumb", node = p.id)
+            if state == "on":
+                thumb.hex = p.theme.color(ColorRole.OnAccent)
+            else:
+                thumb.hex = p.theme.color(ColorRole.SecondaryText)
+            thumb.radius = d / 2.0
+            out.push(thumb)
         if propOrLive(p, "hovered", "false") == "true":
-            mut shade = Command(kind = "FillRect", x = p.x, y = p.y, w = box, h = box, text = "", color = "hover", node = p.id)
+            mut shade = Command(kind = "FillRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = "hover", node = p.id)
             shade.hex = p.theme.color(ColorRole.ShadowColor)
             shade.radius = boxRadius
             out.push(shade)
         # the label is set at the body size it was measured at (layout), centred on the row; not at the row's height
         let labelSize = p.theme.fontSizeNamed("Body")
-        mut text = Command(kind = "DrawText", x = p.x + box + gap, y = p.y + (p.h - labelSize) / 2.0, w = p.w - box - gap, h = labelSize, text = label, color = "", node = p.id)
+        mut text = Command(kind = "DrawText", x = p.x + markW + gap, y = p.y + (p.h - labelSize) / 2.0, w = p.w - markW - gap, h = labelSize, text = label, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
         out.push(text)
     if p.kind == "Clip" or p.kind == "Scroll" or (p.kind == "List" or p.kind == "MultiList"):
@@ -311,6 +338,8 @@ def paintNode(Placed p, mut [Command] out):
     var ringWidth = p.theme.metric(MetricRole.FocusRingWidth)
     if p.kind == "Toggle":
         ringWidth = p.theme.metric(MetricRole.ToggleFocusRingWidth)
+    if p.kind == "TextField" and p.theme.controlStyle("TextField") == "Underlined":
+        ringWidth = 0.0
     if (p.kind == "Button" or p.kind == "Toggle" or p.kind == "TextField" or p.kind == "Slider") and propOrLive(p, "focused", "false") == "true" and ringWidth > 0.0:
         # The focus ring sits just outside the control's bounds, over the control and its own children.
         let width = ringWidth

@@ -221,7 +221,7 @@ let fontsDir = "../../../text/fonts"
 let sansFont = sansFontFrom(fontsDir)
 if sansFont.length == 0:
     print "no sans font found on this machine (see text/src/fonts.br): text will not be drawn"
-# the base theme (measurer only): the mac theme and the system's appearance are applied on top in `ThemedRoot`, each time the root is built
+# the base theme (measurer only): the platform's theme (mac, Fluent) and the system's appearance are applied on top in `ThemedRoot`, each time the root is built
 let theme = (Theme(measurer = EngineMeasurer(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))))
 
 # `phase` and `busy` are cells the loop writes (the indeterminate bar of the controls panel): the builder reads them
@@ -233,7 +233,7 @@ struct ThemedRoot as ViewBuilder:
     Slot<ScreenInfo>'actor screenInfo
     Slot<SystemSettings>'actor settings
     req View buildView(mut Runtime rt):
-        Provide(value = macThemeFromSystem(theme, settings.value), children = [SafeArea(info = screenInfo.value, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, onBusy = (v):
+        Provide(value = platformThemeFromSystem(theme, settings.value), children = [SafeArea(info = screenInfo.value, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, onBusy = (v):
             busy.value = v)])])
 
 mut cache = GlyphCache(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))
@@ -316,7 +316,9 @@ kernel:
         let hoverRebuilt = syncHover(pace, rt, host, screen.time)
         let screenRebuilt = syncScreen(pace, rt, host, cells, pw, ph, screen.safeTop as float / scale, screen.safeLeft as float / scale, screen.safeBottom as float / scale, screen.safeRight as float / scale)
         # the system's light/dark choice is read again when the window regains focus (a change is made in System Settings, then the user comes back)
-        let systemRebuilt = screen.focus_gained and syncSystem(pace, rt, host, cells, readSystemSettings())
+        var systemRebuilt = false
+        if screen.focus_gained:
+            systemRebuilt = syncSystem(pace, rt, host, cells, readSystemSettings())
         let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt or systemRebuilt
         let eventful = rebuilt or served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
         let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)

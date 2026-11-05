@@ -75,4 +75,12 @@ assert_eq(backgroundOf(fluentThemeFromSystem(Theme(), SystemSettings(dark = true
 assert_eq(backgroundOf(fluentThemeFromSystem(Theme(), none)), "#F5F5F5")
 assert_eq(backgroundOf(themeFromSystem(Theme(), SystemSettings(dark = true))), "#1C1C1E")
 
+# the platform picks the theme: mac on macOS / iOS, Fluent on Windows, the base elsewhere
+assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "macos")).color(ColorRole.Accent), "#007AFF")
+assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "ios")).color(ColorRole.Accent), "#007AFF")
+assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "windows")).color(ColorRole.Accent), "#0F6CBD")
+assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "windows", dark = true)).color(ColorRole.Accent), "#479EF5")
+assert_eq(platformThemeFromSystem(Theme(), SystemSettings(platform = "linux")).color(ColorRole.Accent), "#0A84FF")
+assert_eq(platformThemeFromSystem(Theme(), none).color(ColorRole.Accent), "#0A84FF")
+
 print "system settings ok"

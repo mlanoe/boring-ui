@@ -1,0 +1,87 @@
+# Built-in control styles (src/theme.br `controlStyle`): a switch toggle (track + thumb, twice as wide) and a text field whose focus is an
+# accent underline instead of a ring. Run: boring run tests/control_styles_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+use ui.theme.*
+
+view Panel:
+    state bool on = true
+    state string text = ""
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Toggle(value = on, label = "on")
+            TextField(value = text, label = "name", placeholder = "")
+
+struct PanelRoot as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [Panel()])
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Command] named(Runtime rt, string color):
+    mut [Command] out = []
+    for c in displayList(must(layout(rt, 300.0, 200.0))):
+        if c.color == color:
+            out.push(c)
+    out
+
+# the defaults
+let plain = Theme()
+assert_eq(plain.controlStyle("Toggle"), "Box")
+assert_eq(plain.controlStyle("TextField"), "Outlined")
+assert_eq(plain.withControlStyle("Toggle", "Switch").controlStyle("Toggle"), "Switch")
+assert_eq(themeProblems(plain.withControlStyle("Toggle", "Switch").withControlStyle("TextField", "Underlined")).length, 0)
+assert_eq(themeProblems(plain.withControlStyle("Toggle", "Underlined")).length, 1)
+assert_eq(themeProblems(plain.withControlStyle("Slider", "Box")).length, 1)
+# the Fluent theme underlines its fields, the mac theme keeps the defaults
+assert_eq(fluentTheme().controlStyle("TextField"), "Underlined")
+assert_eq(macTheme().controlStyle("TextField"), "Outlined")
+
+# a Box toggle has no thumb and a square-sized mark
+let boxHost = ViewRoot(inner = PanelRoot(theme = plain))
+mut boxRt = Runtime()
+boxRt.start(boxHost)
+assert_eq(named(boxRt, "thumb").length, 0)
+assert_eq(named(boxRt, "on")[0].w, 20.0)
+
+# a Switch toggle: a mark twice as wide, a thumb disc at its right end while on
+let switchTheme = plain.withControlStyle("Toggle", "Switch")
+let switchHost = ViewRoot(inner = PanelRoot(theme = switchTheme))
+mut switchRt = Runtime()
+switchRt.start(switchHost)
+let track = named(switchRt, "on")[0]
+assert_eq(track.w, 40.0)
+assert_eq(track.radius, 10.0)
+let thumbs = named(switchRt, "thumb")
+assert_eq(thumbs.length, 1)
+assert_eq(thumbs[0].w, 14.0)
+assert_eq(thumbs[0].radius, 7.0)
+assert_eq(thumbs[0].x, track.x + 40.0 - 3.0 - 14.0)
+assert_eq(thumbs[0].hex, "#FFFFFF")                  # the text-on-accent colour
+
+# focus: an Outlined field has a ring, an Underlined one an accent line along its bottom edge and no ring
+assert(keyPress(boxRt, boxHost, "Tab"))
+assert(keyPress(boxRt, boxHost, "Tab"))
+assert_eq(named(boxRt, "focus").length, 1)
+assert_eq(named(boxRt, "underline").length, 0)
+
+let underlinedHost = ViewRoot(inner = PanelRoot(theme = plain.withControlStyle("TextField", "Underlined")))
+mut underlinedRt = Runtime()
+underlinedRt.start(underlinedHost)
+assert_eq(named(underlinedRt, "underline").length, 0)    # not focused: no line
+assert(keyPress(underlinedRt, underlinedHost, "Tab"))
+assert(keyPress(underlinedRt, underlinedHost, "Tab"))
+let lines = named(underlinedRt, "underline")
+assert_eq(lines.length, 1)
+assert_eq(lines[0].h, 2.0)
+assert_eq(lines[0].hex, "#0A84FF")
+assert_eq(named(underlinedRt, "focus").length, 0)
+
+print "control styles ok"

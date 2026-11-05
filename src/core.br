@@ -67,7 +67,7 @@ pub struct Mounted:
 
 # Whether two themes lay out and paint the same (the text measurer aside: swapping that is `layoutMemory.bump()`).
 pub def bool sameTheme(Theme a, Theme b):
-    a.name == b.name and a.dark == b.dark and a.contrast == b.contrast and a.textScale == b.textScale and a.colors == b.colors and a.metrics == b.metrics and a.fontSizes == b.fontSizes and a.buttonStyles == b.buttonStyles
+    a.name == b.name and a.dark == b.dark and a.contrast == b.contrast and a.textScale == b.textScale and a.colors == b.colors and a.metrics == b.metrics and a.fontSizes == b.fontSizes and a.buttonStyles == b.buttonStyles and a.controlStyles == b.controlStyles
 
 # The runtime's view of a tree of lowered `View`s: native views become `Desc`s eagerly, a
 # composite view stays a leaf carrying its `View` until it is expanded against its mounted state.

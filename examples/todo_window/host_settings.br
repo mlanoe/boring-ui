@@ -1,12 +1,31 @@
-# The platform half of src/system_settings.br: what this machine says about its appearance. `dark-light` reads the light/dark
-# choice on macOS, Windows and Linux (it reports "default" when there is none, which is light). The accent colour and the text
-# size are not read yet (no cross-platform source): `SystemSettings` keeps their defaults, so the theme's own accent and scale apply.
+# The platform half of src/system_settings.br: what this machine says about its appearance and which operating system it is.
+# `mundy` reads the light/dark choice, the increased-contrast preference and the accent colour on macOS, Windows and Linux; a
+# preference the platform has no value for (no accent on a GNOME without one) keeps the default, so the theme's own applies. It is
+# called from the main thread (the window's loop is), and gives up after half a second (nothing is read then: the defaults).
+# The text size is not read yet (no cross-platform source): `SystemSettings` keeps its default scale.
 #
-# Needs `dark-light` in this project's boring.toml [dependencies].
+# Needs `mundy` in this project's boring.toml [dependencies].
 
-use dark_light.detect
-use dark_light.Mode
+use mundy.Preferences
+use mundy.Interest
+use std.time.Duration
+use std.env.consts.OS
 use ui.system_settings.*
 
+# An 8-bit channel (0...1) as two uppercase hex digits.
+def string hex2(float channel):
+    let digits = "0123456789ABCDEF"
+    var n = (channel * 255.0 + 0.5) as int
+    if n < 0:
+        n = 0
+    if n > 255:
+        n = 255
+    "{digits[(n / 16)..<(n / 16 + 1)]}{digits[(n % 16)..<(n % 16 + 1)]}"
+
 pub def SystemSettings readSystemSettings():
-    SystemSettings(dark = detect() == Mode.Dark)
+    if let prefs = Preferences.once_blocking(Interest.All, Duration.from_millis(500)):
+        var accent = ""
+        if let c = prefs.accent_color.0:
+            accent = "#{hex2(c.red)}{hex2(c.green)}{hex2(c.blue)}"
+        return SystemSettings(dark = prefs.color_scheme.is_dark(), contrast = prefs.contrast.is_more(), accent = accent, platform = "{OS}")
+    SystemSettings(platform = "{OS}")

@@ -16,6 +16,8 @@ pub struct SystemSettings:
     pub string accent = ""
     # Text size preference as a multiplier (1.0 = default).
     pub float textScale = 1.0
+    # The operating system as Rust names it ("macos", "ios", "windows", "linux", "android", ...); "" = unknown.
+    pub string platform = ""
 
 # `base` (its measurer, metrics and style overrides) with the system's appearance applied: the dark base when `dark`, the
 # high-contrast palette when `contrast`, the accent for the accent and the focus ring, and the text scale. An invalid
@@ -39,3 +41,12 @@ pub def Theme macThemeFromSystem(Theme base, SystemSettings s):
 # The `fluentThemeOn` theme following the system.
 pub def Theme fluentThemeFromSystem(Theme base, SystemSettings s):
     themeFromSystem(fluentThemeOn(base), s)
+
+# The theme that looks like the platform, following the system: the mac theme on macOS and iOS, Fluent on Windows, and the built-in
+# one elsewhere (Linux and Android have no theme of their own yet), each with the appearance applied.
+pub def Theme platformThemeFromSystem(Theme base, SystemSettings s):
+    if s.platform == "macos" or s.platform == "ios":
+        return macThemeFromSystem(base, s)
+    if s.platform == "windows":
+        return fluentThemeFromSystem(base, s)
+    themeFromSystem(base, s)

@@ -437,6 +437,13 @@ def float buttonPadding(Mounted n):
 # Intrinsic size of the built-in controls (themed): a button is its label plus padding, a toggle is
 # a square box, a gap and its label, a text field a fixed-width single line. `MinimumHitSize`
 # (0 by default) is a floor on both axes of a button or toggle.
+# The width of a toggle's mark: the square `ToggleSize`, twice that for a `Switch`.
+pub def float toggleWidth(Theme t):
+    let size = t.metric(MetricRole.ToggleSize)
+    if t.controlStyle("Toggle") == "Switch":
+        return 2.0 * size
+    size
+
 def Size controlSize(Mounted n):
     let t = n.theme
     let label = n.props["label"] else ("")
@@ -449,7 +456,7 @@ def Size controlSize(Mounted n):
         return Size(w = t.metric(MetricRole.TextFieldWidth), h = t.metric(MetricRole.TextFieldHeight))
     if n.kind == "Slider":
         return Size(w = t.metric(MetricRole.TextFieldWidth), h = maxOf(t.metric(MetricRole.ToggleSize), floorSize))
-    let box = t.metric(MetricRole.ToggleSize)
+    let box = toggleWidth(t)
     Size(w = maxOf(box + t.metric(MetricRole.ControlPadding) + textWidthAt(t.measurer, label, body / 2.0, 0), floorSize), h = maxOf(maxOf(box, body), floorSize))
 
 def bool isControl(Mounted n):
