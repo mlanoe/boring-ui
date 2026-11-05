@@ -19,7 +19,9 @@
 # slot 8 holds the mask width and `u[4 i + 3]` the offset of its bytes in `Encoded.pool` (one byte per entry).
 #
 # Layout, per command `i`: `f[12 i ..]` = box x0 y0 x1 y1, clip x0 y0 x1 y1, value, dx, dy, corner radius (fill and stroke);
-# `u[4 i ..]` = op, colour, glyph, (unused). Ops: 0 fill, 1 stroke, 2 shadow, 3 glyph, 4 push opacity, 5 pop, 6 image.
+# `u[4 i ..]` = op, colour, glyph, (unused). Ops: 0 fill, 1 stroke, 2 shadow, 3 glyph, 4 push opacity, 5 pop, 6 image, 7 glyph mask, 8 line.
+# A line (op 8): the box is the segment's bounding box widened by half its thickness plus a pixel; slots 8..11 are the start x, start y, end x,
+# end y, and `u[4 i + 3]` is the thickness times 256.
 #
 # Everything the kernel calls is a top-level function over float32 scalars (the one helper shape that every
 # target accepts: `boring run`, `--target simd`, `--target wgpu`).
@@ -99,6 +101,18 @@ pub def Encoded encodeWith([Command] list, [Bitmap] images, GlyphAtlas glyphs, i
             let color = parseColor(c.hex)
             if color.a > 0:
                 push(f, u, 0, underlineOf(c), clip, 0.0, 0.0, 0.0, pack(color), 0)
+                count += 1
+        elif c.kind == "DrawLine":
+            let color = parseColor(c.hex)
+            if color.a > 0 and c.value > 0.0:
+                let ex = c.x + c.dx
+                let ey = c.y + c.dy
+                let half = c.value / 2.0 + 1.0
+                push(f, u, 8, Area(x0 = rmin(c.x, ex) - half, y0 = rmin(c.y, ey) - half, x1 = rmax(c.x, ex) + half, y1 = rmax(c.y, ey) + half), clip, c.x, c.y, ex, pack(color), 0)
+                let endYAt = f.length - 1
+                f[endYAt] = ey as float32
+                let widthAt = u.length - 1
+                u[widthAt] = (c.value * 256.0) as uint
                 count += 1
         elif c.kind == "StrokeRect":
             let color = parseColor(c.hex)
@@ -238,6 +252,20 @@ pub def float32 roundedCover(float32 fx, float32 fy, float32 bx0, float32 by0, f
         let w = minf(line, minf((bx1 - bx0) / 2.0, (by1 - by0) / 2.0))
         m = maxf(0.0, m - roundMaskDevice(fx, fy, bx0 + w, by0 + w, bx1 - w, by1 - w, maxf(r - w, 0.0)))
     m * overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
+
+# Coverage of pixel (`fx`, `fy`) by the segment (`ax`, `ay`)-(`bx`, `by`) `w` thick with round ends: the device twin of raster.br's `lineCover`.
+pub def float32 lineCoverDevice(float32 fx, float32 fy, float32 ax, float32 ay, float32 bx, float32 by, float32 w):
+    let cx = fx + 0.5
+    let cy = fy + 0.5
+    let abx = bx - ax
+    let aby = by - ay
+    let len2 = abx * abx + aby * aby
+    var float32 t = 0.0
+    if len2 > 0.0:
+        t = maxf(0.0, minf(1.0, ((cx - ax) * abx + (cy - ay) * aby) / len2))
+    let ex = cx - (ax + t * abx)
+    let ey = cy - (ay + t * aby)
+    maxf(0.0, minf(1.0, 0.5 - (sqrt(ex * ex + ey * ey) - w / 2.0)))
 
 # One blended ALPHA channel: source (already scaled by its alpha) over a destination kept at `keep`, rounded. (Colour
 # channels blend in linear light: `mixLinear`.)
@@ -401,6 +429,9 @@ kernel RasterKernel:
                                 let inside = overlap(fx, fx + 1.0, bx0, bx1) * overlap(fy, fy + 1.0, by0, by1)
                                 let clipped = overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
                                 cover = gauss(fx, sx0, sx1, sigma) * gauss(fy, sy0, sy1, sigma) * (1.0 - inside) * clipped
+                        elif op == 8:
+                            # a line segment: coverage from the distance to it (the box only serves binning)
+                            cover = lineCoverDevice(fx, fy, f[fb + 8], f[fb + 9], f[fb + 10], f[fb + 11], (u[ub + 3] as float32) / 256.0) * overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
                         elif op == 6:
                             # image: bilinear sample (clamped to the edge) of the `iw` x `ih` texels at `img[off ..]`, blended here
                             let iw = f[fb + 8]

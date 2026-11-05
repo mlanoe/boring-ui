@@ -4,7 +4,7 @@
 #   - HIT-TEST answers (the retained path from the root to the target under a point).
 #
 # Vocabulary: `FillRect`, `StrokeRect` (inside border), `DrawShadow`, `DrawText`, `PushClip`/`PopClip`
-# (`Clip` and `Scroll` viewports), `PushOpacity`/`PopOpacity`; fills and strokes carry a corner `radius`. A wrapper controls the order of its own
+# (`Clip` and `Scroll` viewports), `PushOpacity`/`PopOpacity`; fills and strokes carry a corner `radius`; a checked box adds two `DrawLine`s. A wrapper controls the order of its own
 # effects and its child: `Background` paints, then the child; `Border` strokes over the child; `Shadow`
 # paints under it; `Opacity` and `Clip` bracket everything the child emits. `Offset` is a placement
 # change (see layout.br), so it emits nothing. Overlays, transforms beyond translation, images and
@@ -270,6 +270,21 @@ def paintNode(Placed p, mut [Command] out):
                 ring.value = 1.0
             ring.radius = boxRadius
             out.push(ring)
+        if state == "on" and !isSwitch:
+            # the check mark: two round-ended segments (down to the elbow, then up to the right) in the text-on-accent colour, sized to the box
+            let tickWidth = maxOf(1.5, 0.12 * box)
+            mut shortArm = Command(kind = "DrawLine", x = p.x + 0.27 * box, y = p.y + 0.52 * box, w = 0.0, h = 0.0, text = "", color = "check", node = p.id)
+            shortArm.dx = 0.16 * box
+            shortArm.dy = 0.17 * box
+            shortArm.value = tickWidth
+            shortArm.hex = p.theme.color(ColorRole.OnAccent)
+            out.push(shortArm)
+            mut longArm = Command(kind = "DrawLine", x = p.x + 0.43 * box, y = p.y + 0.69 * box, w = 0.0, h = 0.0, text = "", color = "check", node = p.id)
+            longArm.dx = 0.32 * box
+            longArm.dy = -0.36 * box
+            longArm.value = tickWidth
+            longArm.hex = p.theme.color(ColorRole.OnAccent)
+            out.push(longArm)
         if isSwitch:
             # the thumb: a disc inset 3 from the track's ends, at the right end when on (on the accent: the text-on-accent colour)
             let d = box - 6.0
@@ -457,6 +472,8 @@ pub def string describe(Command c):
         s = "{s} {c.color}"
     if c.kind == "StrokeRect":
         s = "{s} {c.color} {c.value}"
+    if c.kind == "DrawLine":
+        s = "{s} {c.color} d={c.dx},{c.dy} w={c.value}"
     if (c.kind == "FillRect" or c.kind == "StrokeRect") and c.radius > 0.0:
         s = "{s} radius={c.radius}"
     if c.kind == "DrawShadow":

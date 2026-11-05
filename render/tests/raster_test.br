@@ -378,3 +378,18 @@ assert_eq(pixelHex(ring, 10, 0), "#FF0000FF")
 assert_eq(pixelHex(ring, 0, 0), "#00000000")
 
 print "raster ok"
+
+# ── lines: a horizontal segment covers its pixels and its round ends, nothing farther ──────────────────────────────────
+
+def Command line(float x, float y, float dx, float dy, float w, string hex):
+    Command(kind = "DrawLine", x = x, y = y, w = 0.0, h = 0.0, dx = dx, dy = dy, value = w, hex = hex)
+
+let seg = rasterize([line(2.0, 4.5, 8.0, 0.0, 1.0, "#FF0000")], 14, 9)
+assert_eq(pixelHex(seg, 5, 4), "#FFFF0000")      # on the segment
+assert_eq(pixelHex(seg, 5, 6), "#00000000")      # two pixels away
+assert_eq(pixelHex(seg, 11, 4), "#00000000")     # past the round end
+assert(pixelHex(seg, 1, 4) != "#00000000", "the round end reaches back half a pixel")
+let thick = rasterize([line(1.0, 1.0, 6.0, 6.0, 2.0, "#0000FF")], 10, 10)
+assert_eq(pixelHex(thick, 4, 4), "#FF0000FF")    # on the diagonal
+assert_eq(pixelHex(thick, 8, 1), "#00000000")    # off it
+assert_eq(rasterize([line(1.0, 1.0, 6.0, 6.0, 0.0, "#0000FF")], 10, 10).pixels[44], 0 as uint)

@@ -99,4 +99,12 @@ assert(compare([roundedRect(1.0, 1.0, 12.0, 6.0, 3.0, "#336699")], 16, 8) <= 1)
 assert(compare([roundedRect(0.5, 0.25, 14.3, 7.1, 4.0, "#FF000080"), roundedStroke(0.5, 0.25, 14.3, 7.1, 1.0, 4.0, "#0000FF")], 16, 8) <= 1)
 assert(compare([clip(2.0, 1.0, 9.5, 5.0), roundedRect(0.0, 0.0, 16.0, 8.0, 8.0, "#00FF00"), pop(), roundedStroke(2.0, 1.0, 12.0, 6.0, 1.5, 3.0, "#000000")], 16, 8) <= 1)
 
+def Command seg(float x, float y, float dx, float dy, float w, string hex):
+    Command(kind = "DrawLine", x = x, y = y, w = 0.0, h = 0.0, dx = dx, dy = dy, value = w, hex = hex)
+
+assert(compare([seg(2.0, 4.5, 8.0, 0.0, 1.0, "#FF0000")], 16, 9) <= 1)
+assert(compare([seg(1.5, 1.25, 9.5, 5.75, 2.2, "#336699"), seg(11.0, 6.0, 3.0, -4.5, 1.6, "#FF880080")], 16, 9) <= 1)
+assert(compare([clip(3.0, 1.0, 7.5, 5.0), seg(0.0, 0.0, 15.0, 8.0, 3.0, "#00AA55"), pop()], 16, 9) <= 1)
+assert(compare([fade(0.5), seg(2.0, 2.0, 10.0, 3.0, 2.0, "#0000FF"), unfade()], 16, 9) <= 1)
+
 print "raster gpu ok"

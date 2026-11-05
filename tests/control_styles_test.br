@@ -84,4 +84,13 @@ assert_eq(lines[0].h, 2.0)
 assert_eq(lines[0].hex, "#0A84FF")
 assert_eq(named(underlinedRt, "focus").length, 0)
 
+# the check mark: a Box toggle that is on draws two segments in the text-on-accent colour inside its box; off, a Switch and a field draw none
+let ticks = named(boxRt, "check")
+assert_eq(ticks.length, 2)
+assert_eq(ticks[0].kind, "DrawLine")
+assert_eq(ticks[0].hex, "#FFFFFF")
+assert(ticks[0].value >= 1.5, "visible thickness")
+assert(ticks[0].x > 0.0 and ticks[0].x < 20.0 and ticks[1].x + ticks[1].dx < 20.0, "inside the 20-pt box")
+assert_eq(named(switchRt, "check").length, 0)
+
 print "control styles ok"

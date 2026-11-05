@@ -107,4 +107,8 @@ assert(compareGlyphs([fade(0.5), rect(0.0, 0.0, 20.0, 20.0, "#0000FF"), mark(0, 
 assert(compare([Command(kind = "FillRect", x = 10.0, y = 2.0, w = 22.0, h = 14.0, hex = "#336699", radius = 5.0), Command(kind = "StrokeRect", x = 10.0, y = 2.0, w = 22.0, h = 14.0, hex = "#FF8800", value = 1.5, radius = 5.0)], 40, 20) <= 1)
 assert(compare([clip(12.0, 3.0, 12.5, 9.0), Command(kind = "FillRect", x = 10.0, y = 2.0, w = 22.0, h = 14.0, hex = "#00AA55", radius = 7.0), pop()], 40, 20) <= 1)
 
+# lines, across the tile boundary at x = 16 and in a group
+assert(compare([Command(kind = "DrawLine", x = 6.0, y = 3.0, w = 0.0, h = 0.0, dx = 24.0, dy = 11.0, value = 2.5, hex = "#336699"), Command(kind = "DrawLine", x = 30.0, y = 4.0, w = 0.0, h = 0.0, dx = -12.0, dy = 10.0, value = 1.5, hex = "#FF880080")], 40, 20) <= 1)
+assert(compare([fade(0.6), Command(kind = "DrawLine", x = 4.0, y = 16.0, w = 0.0, h = 0.0, dx = 30.0, dy = -12.0, value = 3.0, hex = "#0000FF"), unfade()], 40, 20) <= 1)
+
 print "raster tile ok"

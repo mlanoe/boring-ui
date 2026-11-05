@@ -217,6 +217,9 @@ kernel TileKernel:
                                 let inside = overlap(fx, fx + 1.0, bx0, bx1) * overlap(fy, fy + 1.0, by0, by1)
                                 let clipped = overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
                                 cover = gauss(fx, sx0, sx1, sigma) * gauss(fy, sy0, sy1, sigma) * (1.0 - inside) * clipped
+                        elif op == 8:
+                            # a line segment: coverage from the distance to it (the box only serves binning)
+                            cover = lineCoverDevice(fx, fy, f[fb + 8], f[fb + 9], f[fb + 10], f[fb + 11], (u[ub + 3] as float32) / 256.0) * overlap(fx, fx + 1.0, kx0, kx1) * overlap(fy, fy + 1.0, ky0, ky1)
                         elif op == 6:
                             # image: bilinear sample (clamped to the edge) of the `iw` x `ih` texels at `img[off ..]`, blended here
                             let iw = f[fb + 8]

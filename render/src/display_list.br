@@ -3,7 +3,10 @@
 # can be built for the kernel targets without pulling it in.
 #
 # Vocabulary (`kind`): `FillRect`, `StrokeRect` (inside border), `DrawShadow`, `DrawText`, `DrawImage`,
-# `DrawGlyph`, `MarkedText`, `PushClip`/`PopClip`, `PushOpacity`/`PopOpacity`. `FillRect`/`StrokeRect` carry an optional corner `radius`.
+# `DrawGlyph`, `MarkedText`, `DrawLine`, `PushClip`/`PopClip`, `PushOpacity`/`PopOpacity`. `FillRect`/`StrokeRect` carry an optional corner `radius`.
+#
+# `DrawLine` is one straight segment with round ends: it starts at (`x`, `y`), ends at (`x + dx`, `y + dy`) and is `value` thick (a check mark is
+# two of them). `w`, `h` are unused (0).
 #
 # `DrawGlyph` is one shaped glyph of a real font: `glyph` is its index in the `GlyphAtlas` handed next to the list,
 # (`x`, `y`) the pen position on the baseline (pixels, snapped to the pixel grid by the renderers), `hex` its colour.
