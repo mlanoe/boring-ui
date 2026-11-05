@@ -1,0 +1,18 @@
+# `Styled`: an application-written control style for a subtree (kept apart from controls.br so that importing the composite controls
+# does not also require `ui.theme`).
+
+use boring.ui.*
+use ui.theme.*
+
+# An application-written control style (`ControlStyle`, src/theme.br) for the controls below it: `Styled(style = MyStyle()):` over one `Button`
+# styles that button, over a `Column` it styles every control of that kind inside it (the inherited provider of the draft's `.buttonStyle(...)`).
+# It installs the style on the theme it inherits for its subtree only, so the nearest `Styled` (or a theme's own `withStyle`) wins and nothing
+# outside is affected. A style paints presentation only: the control keeps its label, focus, events and accessibility. (The draft's method form
+# `Button(...).style(...)` is not available: a `Button` has a `style` field, and a method form only resolves views declared in the calling file.)
+pub view Styled:
+    env Theme theme
+    ControlStyle'shared style
+    [View] children
+
+    body():
+        Provide(value = theme.withStyle(style), children = children)

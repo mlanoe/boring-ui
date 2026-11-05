@@ -1,0 +1,98 @@
+# `Styled` (src/styled.br): an application-written control style for one control or a subtree, nearest wins.
+# Run: boring run tests/scoped_style_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use ui.styled.*
+use render.display_list.*
+
+struct Pill as ControlStyle:
+    pub string tint
+
+    pub req string kind():
+        "Button"
+
+    pub req string name():
+        "Pill({tint})"
+
+    pub req [Command] paint(StyleContext c):
+        [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "pill", hex = tint, radius = c.h / 2.0)]
+
+struct Dot as ControlStyle:
+    pub req string kind():
+        "Toggle"
+
+    pub req string name():
+        "Dot"
+
+    pub req [Command] paint(StyleContext c):
+        [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "dot", hex = "#000000", radius = c.h / 2.0)]
+
+def noop():
+    pass
+
+view Panel:
+    state bool on = false
+
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Button(label = "plain", onActivate = noop)
+            Styled(style = Pill(tint = "#C0392B")):
+                Button(label = "one", onActivate = noop)
+            Styled(style = Pill(tint = "#2980B9")):
+                Column(alignment = .Leading, spacing = 0.0):
+                    Button(label = "group a", onActivate = noop)
+                    Button(label = "group b", onActivate = noop)
+                    Styled(style = Pill(tint = "#27AE60")):
+                        Button(label = "inner", onActivate = noop)
+                    Styled(style = Dot()):
+                        Toggle(value = on, label = "toggle")
+            Toggle(value = on, label = "outside")
+
+struct PanelRoot as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [Panel()])
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+# The tint of the face painted over the button whose label is `label` (the face is the last "pill"/"button" fill before its text), or "".
+def string faceOf([Command] cmds, string label):
+    var current = ""
+    var found = ""
+    for c in cmds:
+        if c.color == "pill" or c.color == "button":
+            current = "{c.color}:{c.hex}"
+        if c.kind == "DrawText" and c.text == label:
+            found = current
+    found
+
+mut rt = Runtime()
+rt.start(ViewRoot(inner = PanelRoot(theme = Theme())))
+let cmds = displayList(must(layout(rt, 300.0, 300.0)))
+
+assert_eq(faceOf(cmds, "plain"), "button:#E5E5EA")        # no style above it: the built-in secondary button
+assert_eq(faceOf(cmds, "one"), "pill:#C0392B")             # a Styled over one button
+assert_eq(faceOf(cmds, "group a"), "pill:#2980B9")         # a Styled over a group
+assert_eq(faceOf(cmds, "group b"), "pill:#2980B9")
+assert_eq(faceOf(cmds, "inner"), "pill:#27AE60")           # the nearest one wins
+
+# the toggle styles are per kind: a Dot on one toggle, the built-in on the other
+var dots = 0
+var marks = 0
+for c in cmds:
+    if c.color == "dot":
+        dots += 1
+    if c.color == "off":
+        marks += 1
+assert_eq(dots, 1)
+assert_eq(marks, 2)                                         # the "outside" toggle keeps its built-in mark and ring (two "off" commands)
+
+# the styles are scoped: the theme above is unchanged
+assert_eq(Theme().stylesFor("Button").length, 0)
+
+print "scoped style ok"
