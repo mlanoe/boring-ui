@@ -232,14 +232,23 @@ struct ThemedRoot as ViewBuilder:
     Slot<bool>'actor busy
     Slot<ScreenInfo>'actor screenInfo
     Slot<SystemSettings>'actor settings
+    Slot<int>'actor themeChoice
+    Slot<int>'actor appearanceChoice
+
+    req void pickTheme(int i):
+        themeChoice.value = i
+
+    req void pickAppearance(int i):
+        appearanceChoice.value = i
+
     req View buildView(mut Runtime rt):
-        Provide(value = platformThemeFromSystem(theme, settings.value), children = [SafeArea(info = screenInfo.value, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, onBusy = (v):
+        Provide(value = themeForChoice(theme, settings.value, themeChoice.value, appearanceChoice.value), children = [SafeArea(info = screenInfo.value, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, themeIndex = themeChoice.value, appearanceIndex = appearanceChoice.value, onTheme = (i): self.pickTheme(i), onAppearance = (i): self.pickAppearance(i), onBusy = (v):
             busy.value = v)])])
 
 mut cache = GlyphCache(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))
 let cells = BusyCells()
 cells.settings.value = readSystemSettings()
-let host = ViewRoot(inner = ThemedRoot(theme = theme, phase = cells.phase, busy = cells.busy, screenInfo = cells.screenInfo, settings = cells.settings))
+let host = ViewRoot(inner = ThemedRoot(theme = theme, phase = cells.phase, busy = cells.busy, screenInfo = cells.screenInfo, settings = cells.settings, themeChoice = cells.themeChoice, appearanceChoice = cells.appearanceChoice))
 mut rt = Runtime()
 rt.start(host)
 
@@ -319,7 +328,8 @@ kernel:
         var systemRebuilt = false
         if screen.focus_gained:
             systemRebuilt = syncSystem(pace, rt, host, cells, readSystemSettings())
-        let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt or systemRebuilt
+        let choiceRebuilt = syncChoice(pace, rt, host, cells)
+        let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt or systemRebuilt or choiceRebuilt
         let eventful = rebuilt or served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
         let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)
         # the accessibility tree (laid out only while an assistive technology is connected)

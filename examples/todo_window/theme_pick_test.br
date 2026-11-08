@@ -1,0 +1,51 @@
+# The window's theme and appearance picker (pace.br syncChoice, window_app.br, src/system_settings.br themeForChoice): picking rebuilds the root
+# once, with the chosen theme. Run from this directory: boring run theme_pick_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use ui.system_settings.*
+use pace
+
+struct PickedRoot as ViewBuilder:
+    Slot<int>'actor themeChoice
+    Slot<int>'actor appearanceChoice
+    req View buildView(mut Runtime rt):
+        Provide(value = themeForChoice(Theme(), SystemSettings(platform = "macos"), themeChoice.value, appearanceChoice.value), children = [Text("x")])
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+let cells = BusyCells()
+let host = ViewRoot(inner = PickedRoot(themeChoice = cells.themeChoice, appearanceChoice = cells.appearanceChoice))
+mut rt = Runtime()
+rt.start(host)
+mut pace = Motion()
+
+def string backgroundNow(Runtime rt):
+    windowBackground(must(layout(rt, 100.0, 100.0)))
+
+assert_eq(backgroundNow(rt), "#FFFFFF")                 # the platform's (mac) theme, light
+assert(!syncChoice(pace, rt, host, cells))               # nothing picked yet: nothing rebuilt
+
+cells.themeChoice.value = 2                              # Fluent
+assert(syncChoice(pace, rt, host, cells))
+assert_eq(backgroundNow(rt), "#F5F5F5")
+assert(!syncChoice(pace, rt, host, cells))               # once
+
+cells.appearanceChoice.value = 2                         # dark
+assert(syncChoice(pace, rt, host, cells))
+assert_eq(backgroundNow(rt), "#1F1F1F")
+
+cells.themeChoice.value = 3                              # Adwaita, still dark
+assert(syncChoice(pace, rt, host, cells))
+assert_eq(backgroundNow(rt), "#242424")
+
+cells.themeChoice.value = 0
+cells.appearanceChoice.value = 0                         # back to the platform's, as the system says
+assert(syncChoice(pace, rt, host, cells))
+assert_eq(backgroundNow(rt), "#FFFFFF")
+
+print "theme pick ok"

@@ -36,6 +36,9 @@ struct Motion:
     var bool rolling = false
     # whether the busy indicator was on at the previous frame
     var bool busyShown = false
+    # the theme and appearance picks the root was last built with
+    var int shownTheme = 0
+    var int shownAppearance = 0
     # the caret last reported to the input method (window points), and whether one has been
     var int caretX = 0
     var int caretY = 0
@@ -166,6 +169,8 @@ struct BusyCells:
     Slot<bool>'actor busy = Slot(value = false)
     Slot<ScreenInfo>'actor screenInfo = Slot(value = ScreenInfo())
     Slot<SystemSettings>'actor settings = Slot(value = SystemSettings())
+    Slot<int>'actor themeChoice = Slot(value = 0)
+    Slot<int>'actor appearanceChoice = Slot(value = 0)
 
 # The indeterminate bar's phase (0...1) at `seconds`: one sweep every 1.4 s.
 def float phaseAt(float32 seconds):
@@ -214,6 +219,20 @@ def bool syncSystem(mut Motion m, mut Runtime rt, Builder host, BusyCells cells,
     if before.dark == now.dark and before.contrast == now.contrast and before.accent == now.accent and before.textScale == now.textScale:
         return false
     cells.settings.value = now
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
+
+# Rebuilds the root when the user picked another theme or appearance (the callbacks of the window's picker write the cells). True when it did.
+def bool syncChoice(mut Motion m, mut Runtime rt, Builder host, BusyCells cells):
+    let theme = cells.themeChoice.value
+    let appearance = cells.appearanceChoice.value
+    if theme == m.shownTheme and appearance == m.shownAppearance:
+        return false
+    m.shownTheme = theme
+    m.shownAppearance = appearance
     rt.beginEvent()
     rt.invalidateRoot()
     rt.endEvent(host)

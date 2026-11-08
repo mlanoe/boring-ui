@@ -59,3 +59,20 @@ pub def Theme platformThemeFromSystem(Theme base, SystemSettings s):
     if s.platform == "linux":
         return adwaitaThemeFromSystem(base, s)
     themeFromSystem(base, s)
+
+# The theme for a window that lets the user pick: `choice` 0 = the platform's (`platformThemeFromSystem`), 1 = mac, 2 = Fluent, 3 = Adwaita,
+# `appearance` 0 = what the system says, 1 = light, 2 = dark (the system's contrast, accent and text scale still apply). Anything else is 0.
+pub def Theme themeForChoice(Theme base, SystemSettings s, int choice, int appearance):
+    var dark = s.dark
+    if appearance == 1:
+        dark = false
+    if appearance == 2:
+        dark = true
+    let chosen = SystemSettings(dark = dark, contrast = s.contrast, accent = s.accent, textScale = s.textScale, platform = s.platform)
+    if choice == 1:
+        return macThemeFromSystem(base, chosen)
+    if choice == 2:
+        return fluentThemeFromSystem(base, chosen)
+    if choice == 3:
+        return adwaitaThemeFromSystem(base, chosen)
+    platformThemeFromSystem(base, chosen)

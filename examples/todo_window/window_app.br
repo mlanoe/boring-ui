@@ -20,6 +20,11 @@ view WindowApp:
     bool busy
     ScreenInfo info = ScreenInfo()
     BoolAction onBusy
+    # The theme picker's choices (see `themeForChoice`) and what the host does when one is picked.
+    int themeIndex = 0
+    int appearanceIndex = 0
+    IndexAction onTheme
+    IndexAction onAppearance
 
     state bool showLogo = true
     state int stepped = 3
@@ -77,6 +82,11 @@ view WindowApp:
             Tooltip(text = "Fades the logo and the photo out and back"):
                 Button(label = "Toggle logo", onActivate = ():
                     showLogo = !showLogo)
+            Row(alignment = .Center, spacing = 8.0):
+                SegmentedControl(selected = themeIndex, options = ["Auto", "macOS", "Fluent", "Adwaita"], onSelect = (i):
+                    onTheme(i))
+                SegmentedControl(selected = appearanceIndex, options = ["System", "Light", "Dark"], onSelect = (i):
+                    onAppearance(i))
             AnimationScope(curve = "EaseInOut", duration = 300.0, value = "{showLogo}"):
                 Column(alignment = .Leading, spacing = 8.0):
                     if showLogo:
@@ -188,7 +198,10 @@ view WindowApp:
                                                 if busy:
                                                     IndeterminateBar(phase = phase, width = 200.0)
 
+def void ignoreIndex(int i):
+    pass
+
 struct AppRoot as ViewBuilder:
     Slot<bool>'actor busy = Slot(value = false)
-    req View buildView(mut Runtime rt): WindowApp(phase = 0.0, busy = busy.value, onBusy = (v):
+    req View buildView(mut Runtime rt): WindowApp(phase = 0.0, busy = busy.value, onTheme = (i): ignoreIndex(i), onAppearance = (i): ignoreIndex(i), onBusy = (v):
         busy.value = v)

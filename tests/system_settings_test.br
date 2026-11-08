@@ -102,4 +102,16 @@ assert_eq(fluentThemeFromSystem(Theme(), SystemSettings(accent = "#F74F9E")).col
 assert_eq(themeProblems(adwDark).length, 0)
 assert_eq(themeProblems(adwLight).length, 0)
 
+# the user's pick: a theme and an appearance, over what the system says
+let sysDark = SystemSettings(dark = true, accent = "#E66100", platform = "macos")
+assert_eq(themeForChoice(Theme(), sysDark, 0, 0).color(ColorRole.Accent), "#E66100")                       # the platform's theme, the system's dark and accent
+assert_eq(themeForChoice(Theme(), sysDark, 0, 0).color(ColorRole.WindowBackground), "#1C1C1E")
+assert_eq(themeForChoice(Theme(), sysDark, 0, 1).color(ColorRole.WindowBackground), "#FFFFFF")             # forced light
+assert_eq(themeForChoice(Theme(), none, 0, 2).color(ColorRole.WindowBackground), "#1C1C1E")                 # forced dark
+assert_eq(themeForChoice(Theme(), none, 2, 0).color(ColorRole.Accent), "#0F6CBD")                          # Fluent
+assert_eq(themeForChoice(Theme(), none, 2, 2).color(ColorRole.WindowBackground), "#1F1F1F")                # Fluent dark
+assert_eq(themeForChoice(Theme(), none, 3, 0).color(ColorRole.Accent), "#3584E4")                          # Adwaita
+assert_eq(themeForChoice(Theme(), none, 1, 0).color(ColorRole.Accent), "#007AFF")                          # mac
+assert_eq(themeForChoice(Theme(), none, 9, 9).color(ColorRole.Accent), "#0A84FF")                          # unknown picks: the platform's (none: the base)
+
 print "system settings ok"
