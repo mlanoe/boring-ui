@@ -369,7 +369,8 @@ style names built in.
   `std::env::consts::OS` for the platform) at start-up and again when the window regains focus (no timer: a `redraw = "demand"` loop can only be
   woken every frame). The demo window also has a picker (`themeForChoice`): theme Auto / macOS / Fluent / Adwaita and appearance System / Light / Dark,
   rebuilt through `syncChoice` (`examples/todo_window/theme_pick_test.br`). `tests/system_settings_test.br`.
-- **Built-in control styles**: `theme.withControlStyle("TextField", "Underlined")` (an accent line under the focused field, no focus ring),
+- **Built-in control styles** (`Underlined` and `Switch` are themselves `ControlStyle`s, `UnderlinedField` and `SwitchToggle` in `src/theme.br`; an installed
+  style for the same kind takes precedence): `theme.withControlStyle("TextField", "Underlined")` (an accent line under the focused field, no focus ring),
   `("Toggle", "Switch")` (a pill track and a thumb); `Toggle` boxes are round or rounded squares (`ToggleRadius`) and a checked `Box` draws
   a check mark (two `DrawLine`s). A pressed `Button` / `Toggle` (the press went down on it and the pointer is still over it) gets a second
   shade over the hover one. `tests/control_styles_test.br`, `tests/pressed_look_test.br`.

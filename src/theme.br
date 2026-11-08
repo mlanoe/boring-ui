@@ -391,6 +391,100 @@ pub trait ControlStyle:
     req bool focusRing(StyleContext c):
         true
 
+# ── the built-in named styles that are `ControlStyle`s ────────────────────────────────────────────────────────
+
+# The default text field look (`Outlined`): an elevated face with a bordered, rounded outline. `Underlined` builds on it.
+pub def [Command] outlinedField(StyleContext c):
+    let radius = c.theme.metric(MetricRole.ControlRadius)
+    mut face = Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "field", node = c.node)
+    face.hex = c.theme.color(ColorRole.ElevatedSurface)
+    face.radius = radius
+    mut edge = Command(kind = "StrokeRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "fieldBorder", node = c.node)
+    edge.hex = c.theme.color(ColorRole.ControlBorder)
+    edge.value = c.theme.metric(MetricRole.ControlBorderWidth)
+    edge.radius = radius
+    [face, edge]
+
+# `withControlStyle("TextField", "Underlined")`: the outlined field plus an accent line along its bottom edge while focused, inset by the
+# corner radius; the line stands in for the focus ring.
+pub struct UnderlinedField as ControlStyle:
+    pub req string kind():
+        "TextField"
+
+    pub req string name():
+        "Underlined"
+
+    pub req [Command] paint(StyleContext c):
+        mut out = [] as [Command]
+        for e in outlinedField(c):
+            out.push(e)
+        if c.focused:
+            let inset = c.theme.metric(MetricRole.ControlRadius)
+            mut line = Command(kind = "FillRect", x = c.x + inset, y = c.y + c.h - 2.0, w = c.w - 2.0 * inset, h = 2.0, color = "underline", node = c.node)
+            line.hex = c.theme.color(ColorRole.Accent)
+            out.push(line)
+        out
+
+    pub req bool focusRing(StyleContext c):
+        false
+
+# `withControlStyle("Toggle", "Switch")`: a pill track twice as wide as it is tall and a thumb disc inset 3 from its ends, at the right end
+# while on. The context's box is the track's (`h` = `ToggleSize`).
+pub struct SwitchToggle as ControlStyle:
+    pub req string kind():
+        "Toggle"
+
+    pub req string name():
+        "Switch"
+
+    pub req float markWidth(StyleContext c):
+        2.0 * c.h
+
+    pub req [Command] paint(StyleContext c):
+        mut out = [] as [Command]
+        var state = "off"
+        if c.on:
+            state = "on"
+        mut track = Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = state, node = c.node)
+        track.radius = c.h / 2.0
+        if c.on:
+            track.hex = c.theme.color(ColorRole.Accent)
+        else:
+            track.hex = c.theme.color(ColorRole.ElevatedSurface)
+        out.push(track)
+        if !c.on:
+            mut rim = Command(kind = "StrokeRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "off", node = c.node)
+            rim.hex = c.theme.color(ColorRole.ControlBorder)
+            rim.value = 1.0
+            rim.radius = c.h / 2.0
+            out.push(rim)
+        let d = c.h - 6.0
+        var thumbX = c.x + 3.0
+        if c.on:
+            thumbX = c.x + c.w - 3.0 - d
+        mut thumb = Command(kind = "FillRect", x = thumbX, y = c.y + 3.0, w = d, h = d, color = "thumb", node = c.node)
+        if c.on:
+            thumb.hex = c.theme.color(ColorRole.OnAccent)
+        else:
+            thumb.hex = c.theme.color(ColorRole.SecondaryText)
+        thumb.radius = d / 2.0
+        out.push(thumb)
+        if c.hovered:
+            mut shade = Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "hover", node = c.node)
+            shade.hex = c.theme.color(ColorRole.ShadowColor)
+            shade.radius = c.h / 2.0
+            out.push(shade)
+            if c.pressed:
+                mut deeper = Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "pressed", node = c.node)
+                deeper.hex = c.theme.color(ColorRole.ShadowColor)
+                deeper.radius = c.h / 2.0
+                out.push(deeper)
+        out
+
+# Appends a style to a list of them (a parameter typed `ControlStyle'shared` is what converts a concrete style struct under `boring build`).
+def void addStyle(mut [ControlStyle'shared] into, ControlStyle'shared style):
+    into.push(style)
+
 pub struct Theme as EnvValue:
     pub string name = "system"
     pub bool dark = false
@@ -535,12 +629,19 @@ pub struct Theme as EnvValue:
         next.push(style)
         Theme(name = name, dark = dark, contrast = contrast, textScale = textScale, colors = colors, metrics = metrics, fontSizes = fontSizes, buttonStyles = buttonStyles, controlStyles = controlStyles, customStyles = next, measurer = measurer)
 
-    # The installed custom style for a kind: one element, or none.
+    # The style that paints a kind: an installed `ControlStyle`, else the built-in named one that is a `ControlStyle` (`Underlined`, `Switch`): one element, or none.
     pub req [ControlStyle'shared] stylesFor(string control):
         mut found = []
         for e in customStyles:
             if e.kind() == control:
                 found.push(e)
+        # no application style for this kind: the built-in named style that is a `ControlStyle` (`controlStyle`), if any
+        if found.length == 0:
+            let named = self.controlStyle(control)
+            if control == "TextField" and named == "Underlined":
+                addStyle(found, UnderlinedField())
+            if control == "Toggle" and named == "Switch":
+                addStyle(found, SwitchToggle())
         found
 
     # The installed styles' kinds and names in one string: what `sameTheme` compares (a trait object has no equality of its own).
