@@ -235,10 +235,10 @@ struct ThemedRoot as ViewBuilder:
     Slot<int>'actor themeChoice
     Slot<int>'actor appearanceChoice
 
-    req void pickTheme(int i):
+    def void pickTheme(int i):
         themeChoice.value = i
 
-    req void pickAppearance(int i):
+    def void pickAppearance(int i):
         appearanceChoice.value = i
 
     req View buildView(mut Runtime rt):

@@ -481,10 +481,6 @@ pub struct SwitchToggle as ControlStyle:
                 out.push(deeper)
         out
 
-# Appends a style to a list of them (a parameter typed `ControlStyle'shared` is what converts a concrete style struct under `boring build`).
-def void addStyle(mut [ControlStyle'shared] into, ControlStyle'shared style):
-    into.push(style)
-
 pub struct Theme as EnvValue:
     pub string name = "system"
     pub bool dark = false
@@ -639,9 +635,9 @@ pub struct Theme as EnvValue:
         if found.length == 0:
             let named = self.controlStyle(control)
             if control == "TextField" and named == "Underlined":
-                addStyle(found, UnderlinedField())
+                found.push(UnderlinedField())
             if control == "Toggle" and named == "Switch":
-                addStyle(found, SwitchToggle())
+                found.push(SwitchToggle())
         found
 
     # The installed styles' kinds and names in one string: what `sameTheme` compares (a trait object has no equality of its own).
