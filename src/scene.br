@@ -72,10 +72,10 @@ def int textStyleOf(Placed p):
 
 # The context an application-written style (`ControlStyle`) is told about the control `p` (a toggle's is the mark's box: see `toggleContext`).
 def StyleContext styleContextOf(Placed p, string kind):
-    StyleContext(kind = kind, node = p.id, x = p.x, y = p.y, w = p.w, h = p.h, label = (p.props["label"] else ("")), role = (p.props["role"] else ("Normal")), on = (p.props["value"] else ("false")) == "true", hovered = propOrLive(p, "hovered", "false") == "true", focused = propOrLive(p, "focused", "false") == "true", theme = p.theme)
+    StyleContext(kind = kind, node = p.id, x = p.x, y = p.y, w = p.w, h = p.h, label = (p.props["label"] else ("")), role = (p.props["role"] else ("Normal")), on = (p.props["value"] else ("false")) == "true", hovered = propOrLive(p, "hovered", "false") == "true", focused = propOrLive(p, "focused", "false") == "true", pressed = propOrLive(p, "pressed", "false") == "true", theme = p.theme)
 
 def StyleContext toggleContext(Placed p, float markW, float markH):
-    StyleContext(kind = "Toggle", node = p.id, x = p.x, y = p.y, w = markW, h = markH, label = (p.props["label"] else ("")), on = (p.props["value"] else ("false")) == "true", hovered = propOrLive(p, "hovered", "false") == "true", focused = propOrLive(p, "focused", "false") == "true", theme = p.theme)
+    StyleContext(kind = "Toggle", node = p.id, x = p.x, y = p.y, w = markW, h = markH, label = (p.props["label"] else ("")), on = (p.props["value"] else ("false")) == "true", hovered = propOrLive(p, "hovered", "false") == "true", focused = propOrLive(p, "focused", "false") == "true", pressed = propOrLive(p, "pressed", "false") == "true", theme = p.theme)
 
 # What a custom style paints, each command stamped with the control's node.
 def void pushStyled(ControlStyle'shared style, StyleContext ctx, mut [Command] out):

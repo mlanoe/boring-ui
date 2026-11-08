@@ -1403,6 +1403,10 @@ def Placed finishLayout(Runtime rt, Placed laidOut, float width, float height):
     if let hv = rt.hover:
         if rt.valid(hv):
             _ = markLive(placed, hv.id, [PropValue(key = "hovered", value = "true")])
+            # pressed: the control that took the press (`rt.capture`) while the pointer is still over it
+            if let cap = rt.capture:
+                if cap.id == hv.id and rt.valid(cap):
+                    _ = markLive(placed, cap.id, [PropValue(key = "pressed", value = "true")])
     if let d = rt.drag:
         if d.active:
             _ = markLive(placed, placed.id, [PropValue(key = "dragText", value = d.preview), PropValue(key = "dragX", value = "{d.x}"), PropValue(key = "dragY", value = "{d.y}")])

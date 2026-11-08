@@ -352,7 +352,7 @@ pub struct FixtureMeasurer as TextMeasurer:
 # ── custom control styles ────────────────────────────────────────────────────────────────────────────────────
 
 # What a style is told about the control it paints: its kind, node and bounds (a toggle's: the mark's box), the label, the button role
-# ("Normal", "Destructive", "Cancel"), the toggle's value, and the interaction state. Read-only; the theme gives it every token.
+# ("Normal", "Destructive", "Cancel"), the toggle's value, and the interaction state (hovered, focused, pressed). Read-only; the theme gives it every token.
 pub struct StyleContext:
     pub string kind
     pub int node = -1
@@ -365,6 +365,8 @@ pub struct StyleContext:
     pub bool on = false
     pub bool hovered = false
     pub bool focused = false
+    # The pointer went down on this control and is still over it.
+    pub bool pressed = false
     pub Theme theme
 
 # The look of one kind of control, written by the application: an ordinary struct implementing this trait and installed with
