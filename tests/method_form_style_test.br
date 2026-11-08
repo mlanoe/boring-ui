@@ -1,0 +1,58 @@
+# The method form of `Styled` (src/styled.br): `Button(...).styled(MyStyle())`, with the view imported from another file. Needs a `boring` that
+# resolves method-form modifiers to imported views (a container takes the block form `Styled(style = x):`: a trailing array block cannot be chained). Run: boring run tests/method_form_style_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use ui.styled.*
+use render.display_list.*
+
+struct Pill as ControlStyle:
+    pub string tint
+
+    pub req string kind():
+        "Button"
+
+    pub req string name():
+        "Pill({tint})"
+
+    pub req [Command] paint(StyleContext c):
+        [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "pill", hex = tint, radius = c.h / 2.0)]
+
+def noop():
+    pass
+
+view Panel:
+    body():
+        Column(alignment = .Leading, spacing = 0.0):
+            Button(label = "plain", onActivate = noop)
+            Button(label = "styled", onActivate = noop).styled(Pill(tint = "#C0392B"))
+            Button(label = "last", onActivate = noop)
+
+struct PanelRoot as ViewBuilder:
+    req View buildView(mut Runtime rt):
+        Provide(value = Theme(), children = [Panel()])
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def string faceOf([Command] cmds, string label):
+    var current = ""
+    var found = ""
+    for c in cmds:
+        if c.color == "pill" or c.color == "button":
+            current = "{c.color}:{c.hex}"
+        if c.kind == "DrawText" and c.text == label:
+            found = current
+    found
+
+mut rt = Runtime()
+rt.start(ViewRoot(inner = PanelRoot()))
+let cmds = displayList(must(layout(rt, 300.0, 300.0)))
+assert_eq(faceOf(cmds, "plain"), "button:#E5E5EA")
+assert_eq(faceOf(cmds, "styled"), "pill:#C0392B")           # `.styled(...)` on one button
+assert_eq(faceOf(cmds, "last"), "button:#E5E5EA")           # the next sibling is not styled
+
+print "method form style ok"

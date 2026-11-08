@@ -238,7 +238,7 @@ assert_eq(stateOf(stateRt), "hover")
 # ── a list style: called once per visible row, with the key and whether the row is selected ─────────
 
 view Files:
-    state {string} picked = {}
+    state {string} picked = {"2"}
 
     body():
         Frame(height = 200.0):
@@ -252,14 +252,8 @@ struct FilesRoot as ViewBuilder:
         Provide(value = theme, children = [Files()])
 
 assert_eq(themeProblems(plain.withStyle(Bands())).length, 0)
-let listHost = ViewRoot(inner = FilesRoot(theme = plain.withStyle(Bands())))
 mut listRt = Runtime()
-listRt.start(listHost)
-let before = named(listRt, "row")
-assert_eq(before.length, 3)
-assert_eq(before[1].hex, "#EEEEEE")                     # nothing selected yet
-# a click on the second row selects it (a non-empty set literal as the initial `state` does not transpile yet)
-_ = pointerDown(listRt, listHost, must(layout(listRt, 300.0, 200.0)), before[1].x + 2.0, before[1].y + 2.0)
+listRt.start(ViewRoot(inner = FilesRoot(theme = plain.withStyle(Bands()))))
 let rows = named(listRt, "row")
 assert_eq(rows.length, 3)
 assert_eq(rows[0].text, "1")
@@ -269,15 +263,8 @@ assert_eq(rows[1].hex, "#AABBCC")                       # the selected row
 assert_eq(rows[2].hex, "#EEEEEE")
 assert(rows[1].y > rows[0].y, "each row's own box")
 assert_eq(named(listRt, "selected").length, 0)          # the built-in selection band is replaced
-let builtInHost = ViewRoot(inner = FilesRoot(theme = plain))
 mut builtInRt = Runtime()
-builtInRt.start(builtInHost)
-let builtInRows = displayList(must(layout(builtInRt, 300.0, 200.0)))
-var rowY = 0.0
-for c in builtInRows:
-    if c.kind == "DrawText" and c.text == "row 2":
-        rowY = c.y
-_ = pointerDown(builtInRt, builtInHost, must(layout(builtInRt, 300.0, 200.0)), 2.0, rowY + 2.0)
+builtInRt.start(ViewRoot(inner = FilesRoot(theme = plain)))
 assert_eq(named(builtInRt, "selected").length, 1)
 assert_eq(named(builtInRt, "row").length, 0)
 
