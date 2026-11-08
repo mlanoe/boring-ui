@@ -72,6 +72,20 @@ struct StateButton as ControlStyle:
             state = "pressed"
         [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "state", hex = "#000000", text = state)]
 
+# a list style: a band behind each row, tinted when the row is selected, the row key carried as the command's text
+struct Bands as ControlStyle:
+    pub req string kind():
+        "List"
+
+    pub req string name():
+        "Bands"
+
+    pub req [Command] paint(StyleContext c):
+        var tint = "#EEEEEE"
+        if c.on:
+            tint = "#AABBCC"
+        [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "row", hex = tint, text = c.label)]
+
 # a style for a kind that does not exist
 struct Bogus as ControlStyle:
     pub req string kind():
@@ -220,5 +234,51 @@ _ = pointerMove(stateRt, stateHost, must(layout(stateRt, 300.0, 200.0)), gx, gy)
 assert_eq(stateOf(stateRt), "pressed")
 _ = pointerUp(stateRt, stateHost, must(layout(stateRt, 300.0, 200.0)), gx, gy)
 assert_eq(stateOf(stateRt), "hover")
+
+# ── a list style: called once per visible row, with the key and whether the row is selected ─────────
+
+view Files:
+    state {string} picked = {}
+
+    body():
+        Frame(height = 200.0):
+            MultiList(selection = picked):
+                for key in ["1", "2", "3"] with key:
+                    Text("row {key}")
+
+struct FilesRoot as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [Files()])
+
+assert_eq(themeProblems(plain.withStyle(Bands())).length, 0)
+let listHost = ViewRoot(inner = FilesRoot(theme = plain.withStyle(Bands())))
+mut listRt = Runtime()
+listRt.start(listHost)
+let before = named(listRt, "row")
+assert_eq(before.length, 3)
+assert_eq(before[1].hex, "#EEEEEE")                     # nothing selected yet
+# a click on the second row selects it (a non-empty set literal as the initial `state` does not transpile yet)
+_ = pointerDown(listRt, listHost, must(layout(listRt, 300.0, 200.0)), before[1].x + 2.0, before[1].y + 2.0)
+let rows = named(listRt, "row")
+assert_eq(rows.length, 3)
+assert_eq(rows[0].text, "1")
+assert_eq(rows[0].hex, "#EEEEEE")
+assert_eq(rows[1].text, "2")
+assert_eq(rows[1].hex, "#AABBCC")                       # the selected row
+assert_eq(rows[2].hex, "#EEEEEE")
+assert(rows[1].y > rows[0].y, "each row's own box")
+assert_eq(named(listRt, "selected").length, 0)          # the built-in selection band is replaced
+let builtInHost = ViewRoot(inner = FilesRoot(theme = plain))
+mut builtInRt = Runtime()
+builtInRt.start(builtInHost)
+let builtInRows = displayList(must(layout(builtInRt, 300.0, 200.0)))
+var rowY = 0.0
+for c in builtInRows:
+    if c.kind == "DrawText" and c.text == "row 2":
+        rowY = c.y
+_ = pointerDown(builtInRt, builtInHost, must(layout(builtInRt, 300.0, 200.0)), 2.0, rowY + 2.0)
+assert_eq(named(builtInRt, "selected").length, 1)
+assert_eq(named(builtInRt, "row").length, 0)
 
 print "trait styles ok"

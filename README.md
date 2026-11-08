@@ -371,15 +371,16 @@ style names built in.
   `("Toggle", "Switch")` (a pill track and a thumb); `Toggle` boxes are round or rounded squares (`ToggleRadius`) and a checked `Box` draws
   a check mark (two `DrawLine`s). A pressed `Button` / `Toggle` (the press went down on it and the pointer is still over it) gets a second
   shade over the hover one. `tests/control_styles_test.br`, `tests/pressed_look_test.br`.
-- **Application-written control styles**: implement the `ControlStyle` trait (`kind()` "Button" | "Toggle" | "TextField", `name()`,
+- **Application-written control styles**: implement the `ControlStyle` trait (`kind()` "Button" | "Toggle" | "TextField" | "List", `name()`,
   `paint(StyleContext) -> [Command]`, defaulted `markWidth` / `textColor` / `focusRing`) and install it with `theme.withStyle(style)`, or for
   a subtree with `Styled(style = x):` ([`src/styled.br`](src/styled.br); the nearest wins). A style paints the control's presentation as
   display-list commands; the control keeps its label or text, caret, focus, events and accessibility. `StyleContext` carries the kind, node,
   bounds, label, button role, toggle value and the hovered / focused / pressed state (pressed = the control that took the press while the
-  pointer is still over it). `tests/trait_styles_test.br`, `tests/scoped_style_test.br`.
+  pointer is still over it). A `List` / `MultiList` style is called once per visible row (the row's box, its key as the label, `on` =
+  selected) and replaces the built-in selection band. `tests/trait_styles_test.br`, `tests/scoped_style_test.br`.
 - Not yet: adaptive spacing pairs, `.textScale`/`.tint` provider modifiers, styles that return a view subtree (`<View> body(Context)`),
   the method forms `.style(...)` / `.buttonStyle(...)` (a `Button` has a `style` field; method forms only resolve views declared in the
-  calling file), `ListStyle`.
+  calling file).
 
 Tests: `theme_test.br` (value), `theme_scene_test.br` (nearest provider, dark base, tokens in layout/painting, styles, validation).
 

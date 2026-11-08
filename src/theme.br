@@ -375,7 +375,8 @@ pub struct StyleContext:
 # change what the control does. `name` identifies the style and its parameters (two styles with the same kind and name are the same
 # style to the layout cache).
 pub trait ControlStyle:
-    # The kind of control it styles: "Button", "Toggle" or "TextField".
+    # The kind of control it styles: "Button", "Toggle", "TextField" or "List" (a `List` / `MultiList`: `paint` is called once per visible row,
+    # with the row's box, its key as the label and `on` = selected; the node is the list's).
     req string kind()
     req string name()
     # The commands that paint the control's presentation; the host stamps their `node`.
@@ -591,8 +592,8 @@ pub struct Theme as EnvValue:
             if !isBuiltInStyle(e.style):
                 problems.push("button style for {e.role}: '{e.style}' is not Primary, Secondary, Plain, Compact or Danger")
         for e in customStyles:
-            if e.kind() != "Button" and e.kind() != "Toggle" and e.kind() != "TextField":
-                problems.push("custom style '{e.name()}': '{e.kind()}' is not Button, Toggle or TextField")
+            if e.kind() != "Button" and e.kind() != "Toggle" and e.kind() != "TextField" and e.kind() != "List":
+                problems.push("custom style '{e.name()}': '{e.kind()}' is not Button, Toggle, TextField or List")
         for e in controlStyles:
             if !isControlStyle(e.role, e.style):
                 problems.push("control style for {e.role}: '{e.style}' is not a built-in style of that control")

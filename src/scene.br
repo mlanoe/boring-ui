@@ -77,6 +77,10 @@ def StyleContext styleContextOf(Placed p, string kind):
 def StyleContext toggleContext(Placed p, float markW, float markH):
     StyleContext(kind = "Toggle", node = p.id, x = p.x, y = p.y, w = markW, h = markH, label = (p.props["label"] else ("")), on = (p.props["value"] else ("false")) == "true", hovered = propOrLive(p, "hovered", "false") == "true", focused = propOrLive(p, "focused", "false") == "true", pressed = propOrLive(p, "pressed", "false") == "true", theme = p.theme)
 
+# A list row's context: the row's box, its key as the label, whether it is selected; the node is the list's.
+def StyleContext rowContext(Placed list, Placed row, bool selected):
+    StyleContext(kind = "List", node = list.id, x = row.x, y = row.y, w = row.w, h = row.h, label = row.key, on = selected, focused = propOrLive(list, "focused", "false") == "true", theme = list.theme)
+
 # What a custom style paints, each command stamped with the control's node.
 def void pushStyled(ControlStyle'shared style, StyleContext ctx, mut [Command] out):
     for c in style.paint(ctx):
@@ -359,8 +363,13 @@ def paintNode(Placed p, mut [Command] out):
         # Selected rows get the theme's selection color behind their content (a `MultiList` keeps several keys,
         # newline-separated in its `selection` prop; a `List` one).
         let chosen = (p.props["selection"] else ("")).split("\n")
+        let customList = p.theme.stylesFor("List")
         for c in p.children:
-            if c.key != "" and chosen.contains(c.key):
+            if customList.length > 0:
+                # an application-written style paints each visible row (its box, key and whether it is selected)
+                if c.key != "" and c.y + c.h >= p.y and c.y <= p.y + p.h:
+                    pushStyled(customList[0], rowContext(p, c, chosen.contains(c.key)), out)
+            elif c.key != "" and chosen.contains(c.key):
                 mut band = cmd("FillRect", c, "", "selected")
                 band.hex = p.theme.color(ColorRole.Selection)
                 out.push(band)
