@@ -128,6 +128,12 @@ def paintNode(Placed p, mut [Command] out):
             shade.hex = p.theme.color(ColorRole.ShadowColor)
             shade.radius = p.theme.metric(MetricRole.ControlRadius)
             out.push(shade)
+            if propOrLive(p, "pressed", "false") == "true":
+                # pressed: a second shade, so the face is darker than while only hovered
+                mut deeper = cmd("FillRect", p, "", "pressed")
+                deeper.hex = p.theme.color(ColorRole.ShadowColor)
+                deeper.radius = p.theme.metric(MetricRole.ControlRadius)
+                out.push(deeper)
         let label = p.props["label"] else ("")
         mut text = Command(kind = "DrawText", x = p.x + pad, y = p.y + pad, w = p.w - 2.0 * pad, h = body, text = label, color = "", node = p.id)
         text.hex = p.theme.colorNamed(spec.text)
@@ -337,6 +343,11 @@ def paintNode(Placed p, mut [Command] out):
                 shade.hex = p.theme.color(ColorRole.ShadowColor)
                 shade.radius = boxRadius
                 out.push(shade)
+                if propOrLive(p, "pressed", "false") == "true":
+                    mut deeper = Command(kind = "FillRect", x = p.x, y = p.y, w = markW, h = box, text = "", color = "pressed", node = p.id)
+                    deeper.hex = p.theme.color(ColorRole.ShadowColor)
+                    deeper.radius = boxRadius
+                    out.push(deeper)
         # the label is set at the body size it was measured at (layout), centred on the row; not at the row's height
         let labelSize = p.theme.fontSizeNamed("Body")
         mut text = Command(kind = "DrawText", x = p.x + markW + gap, y = p.y + (p.h - labelSize) / 2.0, w = p.w - markW - gap, h = labelSize, text = label, color = "", node = p.id)

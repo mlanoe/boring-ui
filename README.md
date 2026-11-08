@@ -369,7 +369,8 @@ style names built in.
   `std::env::consts::OS` for the platform) at start-up and again when the window regains focus. `tests/system_settings_test.br`.
 - **Built-in control styles**: `theme.withControlStyle("TextField", "Underlined")` (an accent line under the focused field, no focus ring),
   `("Toggle", "Switch")` (a pill track and a thumb); `Toggle` boxes are round or rounded squares (`ToggleRadius`) and a checked `Box` draws
-  a check mark (two `DrawLine`s). `tests/control_styles_test.br`.
+  a check mark (two `DrawLine`s). A pressed `Button` / `Toggle` (the press went down on it and the pointer is still over it) gets a second
+  shade over the hover one. `tests/control_styles_test.br`, `tests/pressed_look_test.br`.
 - **Application-written control styles**: implement the `ControlStyle` trait (`kind()` "Button" | "Toggle" | "TextField", `name()`,
   `paint(StyleContext) -> [Command]`, defaulted `markWidth` / `textColor` / `focusRing`) and install it with `theme.withStyle(style)`, or for
   a subtree with `Styled(style = x):` ([`src/styled.br`](src/styled.br); the nearest wins). A style paints the control's presentation as
@@ -378,7 +379,7 @@ style names built in.
   pointer is still over it). `tests/trait_styles_test.br`, `tests/scoped_style_test.br`.
 - Not yet: adaptive spacing pairs, `.textScale`/`.tint` provider modifiers, styles that return a view subtree (`<View> body(Context)`),
   the method forms `.style(...)` / `.buttonStyle(...)` (a `Button` has a `style` field; method forms only resolve views declared in the
-  calling file), `ListStyle`, a built-in pressed look.
+  calling file), `ListStyle`.
 
 Tests: `theme_test.br` (value), `theme_scene_test.br` (nearest provider, dark base, tokens in layout/painting, styles, validation).
 
