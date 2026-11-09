@@ -39,6 +39,8 @@ struct Motion:
     # the theme and appearance picks the root was last built with
     var int shownTheme = 0
     var int shownAppearance = 0
+    # when the system's appearance is read next (seconds of `screen.time`; see main.br)
+    var float nextSystemPoll = 3.0
     # the caret last reported to the input method (window points), and whether one has been
     var int caretX = 0
     var int caretY = 0

@@ -324,9 +324,10 @@ kernel:
         let busyRebuilt = syncBusy(pace, rt, host, cells, screen.time)
         let hoverRebuilt = syncHover(pace, rt, host, screen.time)
         let screenRebuilt = syncScreen(pace, rt, host, cells, pw, ph, screen.safeTop as float / scale, screen.safeLeft as float / scale, screen.safeBottom as float / scale, screen.safeRight as float / scale)
-        # the system's light/dark choice is read again when the window regains focus (a change is made in System Settings, then the user comes back)
+        # the system's light/dark choice is read again when the window regains focus and every few seconds (a timed wake-up, the loop otherwise sleeps)
         var systemRebuilt = false
-        if screen.focus_gained:
+        if screen.focus_gained or float(screen.time) >= pace.nextSystemPoll:
+            pace.nextSystemPoll = float(screen.time) + 3.0
             systemRebuilt = syncSystem(pace, rt, host, cells, readSystemSettings())
         let choiceRebuilt = syncChoice(pace, rt, host, cells)
         let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt or systemRebuilt or choiceRebuilt
@@ -348,6 +349,8 @@ kernel:
         screen.present(k.out)
         if pacePending(pace, screen.time) or isBusy(cells) or hoverWaiting(rt):
             screen.requestRedraw()
+        else:
+            screen.requestRedrawAfter(((pace.nextSystemPoll - float(screen.time)) * 1000.0) as int + 1)
         if !quiet:
             trackCaret(pace, rt, pw, ph)
         # the soft keyboard of a phone follows the focus: up while a text field has it

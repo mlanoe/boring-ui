@@ -269,8 +269,7 @@ that ran). Nothing here terminates anything: the application reporter — a host
   `id` change is an expected completion and is not an error (and the task stays finished — a rebuild with the same `id` does not retry it).
 - `rt.pathOf(id)` gives a node's view path; `takeReports()` returns and clears the queue.
 
-Not yet: callbacks that actually `throw` are caught by the boundary only once `boring build` supports throwing function types (task proposed — today it
-works under the interpreter only), so `act`/`deliver` do not yet call `reportFailure` themselves; a view-tree `.onError` is deferred in the draft.
+Callbacks that `throw` are caught at the dispatch boundary (`act`, `deliver`, hooks, tasks, animation; commit 85a4114) and reported as `callback`/`hook`/`task` entries, in the interpreter and under `boring build` (re-checked 2026-11-11). A view-tree `.onError` is deferred in the draft.
 Test: `core_errors_test.br`.
 
 ## Sheet, focus bindings and List (layer 4/5)
@@ -366,8 +365,8 @@ style names built in.
   `SystemSettings` (dark, contrast, accent, text scale, platform) and `themeFromSystem` / `platformThemeFromSystem` (mac on macOS and iOS,
   Fluent on Windows, Adwaita on Linux); the system accent is applied as light and dark variant overrides, so it outranks a platform theme's
   own accent. The host reads the platform (`examples/todo_window/host_settings.br`: `mundy` for the colour scheme, contrast and accent,
-  `std::env::consts::OS` for the platform) at start-up and again when the window regains focus (no timer: a `redraw = "demand"` loop can only be
-  woken every frame). The demo window also has a picker (`themeForChoice`): theme Auto / macOS / Fluent / Adwaita and appearance System / Light / Dark,
+  `std::env::consts::OS` for the platform) at start-up and again when the window regains focus and every 3 s (`screen.requestRedrawAfter`: the
+  `redraw = "demand"` loop sleeps in between; on hosts other than wgpu that call behaves as `requestRedraw`). The demo window also has a picker (`themeForChoice`): theme Auto / macOS / Fluent / Adwaita and appearance System / Light / Dark,
   rebuilt through `syncChoice` (`examples/todo_window/theme_pick_test.br`). `tests/system_settings_test.br`.
 - **Built-in control styles** (`Underlined` and `Switch` are themselves `ControlStyle`s, `UnderlinedField` and `SwitchToggle` in `src/theme.br`; an installed
   style for the same kind takes precedence): `theme.withControlStyle("TextField", "Underlined")` (an accent line under the focused field, no focus ring),
