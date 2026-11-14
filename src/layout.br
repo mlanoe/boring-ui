@@ -503,7 +503,7 @@ def Span spanUncached(Mounted n, bool horiz, float? cross, mut Memo memo):
             return Span(min = longestWordAt(m, content, cell, style), ideal = oneLine, max = oneLine)
         let h = measureText(n, Prop(w = cross, h = nil)).h
         return fixedSpan(h)
-    if n.kind == "Button" and hasChild(n):
+    if (n.kind == "Button" or n.kind == "Toggle") and hasChild(n):
         # the presentation subtree of a view-returning style sets the button's size (the hit-size floor still applies)
         let inner = span(n.children[0], horiz, cross, memo)
         let floorSize = n.theme.metric(MetricRole.MinimumHitSize)
@@ -1013,7 +1013,7 @@ def Size sizeUncached(Mounted n, Prop p, mut Memo memo):
         return sizeOf(n.children[0], p, memo)
     if k == "Text":
         return measureText(n, p)
-    if n.kind == "Button" and hasChild(n):
+    if (n.kind == "Button" or n.kind == "Toggle") and hasChild(n):
         let inner = sizeOf(n.children[0], p, memo)
         let floorSize = n.theme.metric(MetricRole.MinimumHitSize)
         return Size(w = maxOf(inner.w, floorSize), h = maxOf(inner.h, floorSize))
@@ -1160,10 +1160,16 @@ def Placed placeIn(Mounted n, float x, float y, Size size, mut Memo memo):
         let i = numProp(n, "insets") else (0.0)
         let cs = sizeOf(n.children[0], Prop(w = nonNeg(size.w - 2.0 * i), h = nonNeg(size.h - 2.0 * i)), memo)
         node.children.push(placeIn(n.children[0], x + i, y + i, cs, memo))
-    elif k == "Button" and hasChild(n):
-        # the presentation subtree, centred in the button's box
+    elif k == "TextField" and hasChild(n):
+        # a view-returning style's decoration fills the field's box
+        node.children.push(placeChild(n.children[0], x, y, size, memo))
+    elif (k == "Button" or k == "Toggle") and hasChild(n):
+        # the presentation subtree: centred in a button's box, at the leading edge of a toggle's
         let cs = sizeOf(n.children[0], Prop(w = size.w, h = size.h), memo)
-        node.children.push(placeIn(n.children[0], x + (size.w - cs.w) / 2.0, y + (size.h - cs.h) / 2.0, cs, memo))
+        var at = x + (size.w - cs.w) / 2.0
+        if k == "Toggle":
+            at = x
+        node.children.push(placeIn(n.children[0], at, y + (size.h - cs.h) / 2.0, cs, memo))
     elif k == "Sheet":
         # Contributes no bounds: its content is placed at its own size (centered in the window later).
         for c in n.children:

@@ -6,6 +6,7 @@ use ui.core.*
 use ui.layout.*
 use ui.scene.*
 use ui.events.*
+use ui.semantics.*
 use ui.theme.*
 use render.display_list.*
 
@@ -24,15 +25,68 @@ struct CardButton as ControlStyle:
         [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "card", hex = "#EEEEEE", radius = 6.0, text = state)]
 
     pub req [View] body(StyleContext c):
-        [Padding(insets = 12.0, children = [Text(content = "{c.label}!", bold = true)])]
+        var mark = "!"
+        if c.pressed:
+            mark = "!!"
+        [Padding(insets = 12.0, children = [Text(content = "{c.label}{mark}", bold = true)])]
+
+# a toggle drawn as its label with a state word beside it: the subtree composes the whole control
+struct WordToggle as ControlStyle:
+    pub req string kind():
+        "Toggle"
+
+    pub req string name():
+        "WordToggle"
+
+    pub req [Command] paint(StyleContext c):
+        []
+
+    pub req [View] body(StyleContext c):
+        var word = "off"
+        if c.on:
+            word = "on"
+        [Padding(insets = 6.0, children = [Text(content = "{c.label}: {word}")])]
+
+# a text field with a decoration under its text: a caption that counts the characters typed
+struct CountedField as ControlStyle:
+    pub req string kind():
+        "TextField"
+
+    pub req string name():
+        "CountedField"
+
+    pub req [Command] paint(StyleContext c):
+        []
+
+    pub req [View] body(StyleContext c):
+        [Padding(insets = 2.0, children = [Text(content = "{c.label}#{c.value.graphemeCount}")])]
+
+# a list with a decoration under it: a caption that lists the selection (the rows stay the list's own, painted by `paint`)
+struct CaptionedList as ControlStyle:
+    pub req string kind():
+        "List"
+
+    pub req string name():
+        "CaptionedList"
+
+    pub req [Command] paint(StyleContext c):
+        []
+
+    pub req [View] body(StyleContext c):
+        [Text(content = "picked[{c.value}]")]
 
 def noop():
     pass
 
 view Panel:
+    state bool flag = false
+    state string name = ""
+
     body():
         Column(alignment = .Leading, spacing = 8.0):
             Button(label = "Go", onActivate = noop)
+            Toggle(value = flag, label = "Sound")
+            TextField(value = name, label = "Name", placeholder = "")
 
 struct PanelRoot as ViewBuilder:
     Theme theme
@@ -86,7 +140,7 @@ assert(text.x >= button.x + 12.0 - 0.5, "the subtree sits inside the button")
 assert_eq(count(rt, "card"), 1)                                  # the style's own face, under the subtree
 mut labels = [] as [Command]
 for c in displayList(lay(rt)):
-    if c.kind == "DrawText":
+    if c.kind == "DrawText" and c.text.startsWith("Go"):
         labels.push(c)
 assert_eq(labels.length, 1)                                        # only the subtree's label: the host draws none
 assert_eq(labels[0].text, "Go!")
@@ -103,5 +157,111 @@ assert_eq(cardState, "pressed")                                    # the button,
 assert_eq(count(rt, "pressed"), 0)                                # a style supplies its own look: no built-in shade
 let after = must(find(lay(rt), "Button"))
 assert_eq(after.id, button.id)
+
+# ── the subtree follows the pointer state: pressed rebuilds it, so does the release ─────────────────
+
+def string shownLabel(Runtime rt):
+    var shown = ""
+    for c in displayList(lay(rt)):
+        if c.kind == "DrawText" and c.text.startsWith("Go"):
+            shown = c.text
+    shown
+
+assert_eq(shownLabel(rt), "Go!!")                                 # built with pressed = true
+_ = pointerUp(rt, host, lay(rt), text.x + 1.0, text.y + 1.0)
+assert_eq(shownLabel(rt), "Go!")                                   # released: built again
+
+
+# ── a Toggle's style returns views too: the subtree is the whole control, and the toggle's value rebuilds it ──
+
+let toggled = plain.withStyle(WordToggle())
+let thost = ViewRoot(inner = PanelRoot(theme = toggled))
+mut trt = Runtime()
+trt.start(thost)
+let toggle = must(find(lay(trt), "Toggle"))
+assert_eq(toggle.children.length, 1)
+let ttext = must(find(toggle, "Text"))
+assert_eq(ttext.props["content"] else (""), "Sound: off")
+assert(toggle.w >= ttext.w + 12.0 - 0.5, "the toggle takes the subtree's width")
+assert(ttext.x >= toggle.x + 6.0 - 0.5, "the subtree sits at the toggle's leading edge")
+var drawn = [] as [Command]
+for c in displayList(lay(trt)):
+    if c.kind == "DrawText" and c.text.startsWith("Sound"):
+        drawn.push(c)
+assert_eq(drawn.length, 1)                                          # no host label beside the subtree
+assert_eq(count(trt, "off"), 0)                                     # no built-in mark
+_ = pointerDown(trt, thost, lay(trt), ttext.x + 1.0, ttext.y + 1.0)
+_ = pointerUp(trt, thost, lay(trt), ttext.x + 1.0, ttext.y + 1.0)
+assert_eq(must(find(must(find(lay(trt), "Toggle")), "Text")).props["content"] else (""), "Sound: on")
+
+# ── a TextField's style returns a decoration: it fills the field, sits under the host's text, and follows the value ──
+
+let counted = plain.withStyle(CountedField())
+let fhost = ViewRoot(inner = PanelRoot(theme = counted))
+mut frt = Runtime()
+frt.start(fhost)
+let field = must(find(lay(frt), "TextField"))
+assert_eq(field.children.length, 1)
+assert_eq(field.w, plain.metric(MetricRole.TextFieldWidth))        # the field keeps its standard size
+assert_eq(field.h, plain.metric(MetricRole.TextFieldHeight))
+def int indexOfText(Runtime rt, string text):
+    var found = -1
+    var at = 0
+    for c in displayList(lay(rt)):
+        if c.kind == "DrawText" and c.text == text:
+            found = at
+        at += 1
+    found
+assert(indexOfText(frt, "Name#0") >= 0, "the decoration is painted")
+_ = pointerDown(frt, fhost, lay(frt), field.x + 3.0, field.y + 3.0)
+_ = pointerUp(frt, fhost, lay(frt), field.x + 3.0, field.y + 3.0)
+_ = typeText(frt, fhost, "abc")
+assert(indexOfText(frt, "Name#3") >= 0, "the decoration follows the value")
+assert(indexOfText(frt, "Name#0") < 0, "the old decoration is gone")
+assert(indexOfText(frt, "abc") > indexOfText(frt, "Name#3"), "the host's text is painted over the decoration")
+
+# ── a List's style returns a decoration: wrapped under the list, the rows and the selection are the list's own ────
+
+view Files:
+    state string picked = "2"
+
+    body():
+        Frame(height = 120.0):
+            List(selection = picked):
+                for key in ["1", "2", "3"] with key:
+                    Text("row {key}")
+
+struct FilesRoot as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt): Provide(value = theme, children = [Files()])
+
+let listed = plain.withStyle(CaptionedList())
+let lhost = ViewRoot(inner = FilesRoot(theme = listed))
+mut lrt = Runtime()
+lrt.start(lhost)
+let list = must(find(lay(lrt), "List"))
+assert_eq(list.children.length, 3)                                  # the rows are the list's own children, the decoration is not one
+assert(indexOfText(lrt, "picked[2]") >= 0, "the decoration shows the selection")
+assert(indexOfText(lrt, "picked[2]") < indexOfText(lrt, "row 1"), "the decoration is under the rows")
+let second = list.children[0]
+_ = pointerDown(lrt, lhost, lay(lrt), second.x + 3.0, second.y + 3.0)
+_ = pointerUp(lrt, lhost, lay(lrt), second.x + 3.0, second.y + 3.0)
+assert(indexOfText(lrt, "picked[1]") >= 0, "the selection moved and the decoration followed")
+assert_eq(must(find(lay(lrt), "List")).children.length, 3)
+
+# ── a decoration is presentation: the pointer and assistive technology see the control, not its subtree ──
+
+# a press on the decoration's own area, where no row is, still reaches the list (the decoration sits under it)
+let emptyArea = hitTest(lay(lrt), list.x + 150.0, list.y + 60.0)
+assert_eq(emptyArea[emptyArea.length - 1], list.id)
+# the accessibility tree has the list and its rows, not the caption
+let listTree = describeTree(semantics(lay(lrt)).roots, 0)
+assert_eq(listTree.length, 4)
+assert(listTree[0].startsWith("list "), "the decoration is not a node of its own")
+# a button's, toggle's and field's subtree are not exposed either: one node each, named by the host's label
+for tree in [semantics(lay(rt)).roots, semantics(lay(trt)).roots, semantics(lay(frt)).roots]:
+    for n in tree:
+        assert_eq(n.children.length, 0)
+assert_eq(semantics(lay(rt)).roots.length, 3)
 
 print "view style ok"

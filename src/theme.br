@@ -367,6 +367,8 @@ pub struct StyleContext:
     pub bool focused = false
     # The pointer went down on this control and is still over it.
     pub bool pressed = false
+    # A text field's text.
+    pub string value = ""
     pub Theme theme
 
 # The look of one kind of control, written by the application: an ordinary struct implementing this trait and installed with
@@ -381,8 +383,9 @@ pub trait ControlStyle:
     req string name()
     # The commands that paint the control's presentation; the host stamps their `node`.
     req [Command] paint(StyleContext c)
-    # A style that returns views (Button only for now): the presentation subtree the runtime hosts inside the control, built from the context's
-    # label, role and theme. The host then draws no label of its own (the subtree composes it); a style returning [] stays painter-only.
+    # A style that returns views (Button and Toggle; for a TextField it is a decoration under the host's text; for a List one under the whole list, built from its selection (`value`, newline-separated keys), rows still painted by `paint`): the presentation subtree the runtime hosts inside the control, built from the context's
+    # label, role, value (`on`), hovered / focused / pressed state and theme. The host then draws no label of its own (the subtree composes it);
+    # a style returning [] stays painter-only.
     req [View] body(StyleContext c):
         []
     # A toggle's mark width (the label follows it); other kinds ignore it. Default: a square the height of the mark.

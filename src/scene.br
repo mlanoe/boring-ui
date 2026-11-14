@@ -155,6 +155,9 @@ def paintNode(Placed p, mut [Command] out):
         else:
             for c in outlinedField(styleContextOf(p, "TextField")):
                 out.push(c)
+        # a view-returning style's decoration: over the face, under the text
+        for c in p.children:
+            paint(c, out)
         # the text, selection, caret and composition stay inside the field: a value longer than the field is cut at its edge
         # (there is no horizontal scrolling yet; the caret of a value that long is cut with it)
         out.push(Command(kind = "PushClip", x = p.x + 2.0, y = p.y, w = p.w - 4.0, h = p.h, text = "", color = "", node = p.id))
@@ -277,7 +280,11 @@ def paintNode(Placed p, mut [Command] out):
         let gap = p.theme.metric(MetricRole.ControlPadding)
         let customToggle = p.theme.stylesFor("Toggle")
         var markW = box
-        if customToggle.length > 0:
+        if p.children.length > 0:
+            # a view-returning style: its face (if any) under the whole control, the subtree (label included) over it
+            if customToggle.length > 0:
+                pushStyled(customToggle[0], toggleContext(p, p.w, p.h), out)
+        elif customToggle.length > 0:
             markW = toggleWidth(p.theme)
             pushStyled(customToggle[0], toggleContext(p, markW, box), out)
         else:
@@ -324,7 +331,8 @@ def paintNode(Placed p, mut [Command] out):
         let labelSize = p.theme.fontSizeNamed("Body")
         mut text = Command(kind = "DrawText", x = p.x + markW + gap, y = p.y + (p.h - labelSize) / 2.0, w = p.w - markW - gap, h = labelSize, text = label, color = "", node = p.id)
         text.hex = p.theme.color(ColorRole.PrimaryText)
-        out.push(text)
+        if p.children.length == 0:
+            out.push(text)
     if p.kind == "Clip" or p.kind == "Scroll" or (p.kind == "List" or p.kind == "MultiList"):
         out.push(cmd("PushClip", p, "", ""))
     if p.kind == "List" or p.kind == "MultiList":
@@ -345,6 +353,8 @@ def paintNode(Placed p, mut [Command] out):
     var childIndex = 0
     for c in p.children:
         childIndex += 1
+        if p.kind == "TextField":
+            continue    # painted by the field itself, under its text
         # a presented popover's panel paints in the popover layer, over everything (see `paintPopovers`)
         if p.kind == "Popover" and childIndex > 1:
             continue

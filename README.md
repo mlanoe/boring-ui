@@ -380,13 +380,14 @@ style names built in.
   bounds, label, button role, toggle value and the hovered / focused / pressed state (pressed = the control that took the press while the
   pointer is still over it). A `List` / `MultiList` style is called once per visible row (the row's box, its key as the label, `on` =
   selected) and replaces the built-in selection band. `tests/trait_styles_test.br`, `tests/scoped_style_test.br`.
-- **Styles that return views** (Button only): `ControlStyle.body(StyleContext)` returns `[View]` (default `[]`, painter-only). The runtime mounts it as the
-  button's `children` (`Button` has a `[View] children` field, `stdlib/ui.br`), `controlSize` becomes the subtree's size (the hit-size floor still
+- **Styles that return views** (Button, Toggle, TextField and List): `ControlStyle.body(StyleContext)` returns `[View]` (default `[]`, painter-only). The runtime mounts it as the
+  control's `children` (`Button`, `Toggle` and `TextField` have a `[View] children` field, `stdlib/ui.br`), `controlSize` becomes the subtree's size (the hit-size floor still
   applies), the subtree is centred in the button's box and painted over the style's `paint` face, and the host draws no label of its own (the subtree
-  composes it). Pointer, focus and keyboard stay with the button. The context is fixed at mount (label, role, theme): hovered / pressed / focused are
-  live paint state and do not rebuild the subtree, so use `paint` for those. `tests/view_style_test.br`.
-- Not yet: adaptive spacing pairs, `.textScale`/`.tint` provider modifiers, view-returning styles for Toggle / TextField / List and ones that follow the
-  pointer state,
+  composes it; a toggle's subtree is the whole control, label included, at its leading edge, and the context's `on` is its value). A text field's subtree is a decoration: it fills the field's box (the field keeps its size), painted over the style's `paint` face and under the host's text, caret and selection; the context's `value` is the text. A list's subtree is a decoration under the whole list: the list is wrapped in a `Layer` whose first children are the subtree (the rows stay the list's own children, so windowing, keys, selection and reordering are untouched), built from the selection (`value`, newline-separated keys; no hovered / focused state, the node does not exist yet); rows are still painted by `paint`. Pointer, focus and keyboard stay with the control. The context carries label, role, theme and the hovered / focused / pressed state;
+  the subtree is built again when the pointer enters or leaves, focus moves, or the button is pressed or released (the root is reconciled, as for any
+  hover change). A subtree is presentation only: the control keeps the pointer (a press on the subtree is a press of the control; a list's decoration sits under the list) and
+  the accessibility tree has one node for the control, named by its own `label`, never the subtree's texts. `tests/view_style_test.br`.
+- Not yet: adaptive spacing pairs, `.textScale`/`.tint` provider modifiers, a per-row view-returning style for List (use `paint` per row),
   the method forms `.style(...)` / `.buttonStyle(...)` (a `Button` has a `style` field; method forms only resolve views declared in the
   calling file).
 

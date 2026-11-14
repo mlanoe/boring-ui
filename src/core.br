@@ -83,6 +83,11 @@ pub Desc describe(View v):
         kids.push(describe(c))
     Desc(kind = v.viewKind(), site = v.viewSite(), key = v.viewKey(), children = kids, props = v.viewProps(), control = v)
 
+def {string=string} decoratedMark():
+    mut marks = {=}
+    marks["decorated"] = "true"
+    marks
+
 # The description a composite node was last built from, to re-expand it without its parent.
 def Desc lastBuilt(Mounted n):
     Desc(kind = n.kind, site = n.site, key = n.key, view = n.view, props = n.props, control = n.control)
@@ -705,6 +710,43 @@ pub struct Runtime:
     # The children to reconcile under `node`: a native node's own, or — for a composite view —
     # its body, expanded against the state this identity has kept since it mounted.
     def [Desc] childrenOf(int id, Desc d, [EnvValue] scope):
+        let kids = self.plainChildren(id, d, scope)
+        if (d.props["decorated"] else ("false")) == "true":
+            return kids     # the wrapper `decorated` made: its list child is already decorated
+        # Almost every node has no list among its children: skip the scope and theme lookups for it (this runs for every node of every pass).
+        var hasList = false
+        for kid in kids:
+            if kid.kind == "List" or kid.kind == "MultiList":
+                hasList = true
+        if !hasList:
+            return kids
+        self.decorated(kids, self.scopeBelow(d, scope))
+
+    # A `List` / `MultiList` among `kids` under a theme whose `List` style returns views gets that decoration under it: the list is wrapped
+    # in a `Layer` whose first children are the style's subtree (the rows stay the list's own children, so windowing, keys, selection and
+    # reordering are untouched). The decoration is built when the node is reconciled, from the list's selection.
+    def [Desc] decorated([Desc] kids, [EnvValue] scope):
+        let theme = themeIn(scope)
+        let styles = theme.stylesFor("List")
+        if styles.length == 0:
+            return kids
+        mut out = []
+        for kid in kids:
+            var wrapped = false
+            if kid.kind == "List" or kid.kind == "MultiList":
+                let chosen = kid.props["selection"] else ("")
+                mut inner = []
+                for v in styles[0].body(StyleContext(kind = "List", on = chosen != "", value = chosen, theme = theme)):
+                    inner.push(describe(v))
+                if inner.length > 0:
+                    inner.push(kid)
+                    out.push(Desc(kind = "Layer", site = kid.site, key = kid.key, children = inner, props = decoratedMark()))
+                    wrapped = true
+            if !wrapped:
+                out.push(kid)
+        out
+
+    def [Desc] plainChildren(int id, Desc d, [EnvValue] scope):
         if let v = d.view:
             if let info = meta[id]:
                 if let st = info.state:
@@ -717,13 +759,25 @@ pub struct Runtime:
             # the anchor always, the panel only while presented
             if (d.props["isPresented"] else ("false")) != "true" and d.children.length > 1:
                 return [d.children[0]]
-        if d.kind == "Button" and d.children.length == 0:
+        if (d.kind == "Button" or d.kind == "Toggle" or d.kind == "TextField") and d.children.length == 0:
             # A view-returning style (`ControlStyle.body`) supplies the button's presentation subtree.
             let theme = themeIn(scope)
-            let styles = theme.stylesFor("Button")
+            # (a built-in named style has the default empty `body`, so only an application's style can supply a subtree)
+            var styles = [] as [ControlStyle'shared]
+            if theme.customStyles.length > 0:
+                styles = theme.stylesFor(d.kind)
             if styles.length > 0:
+                var isHovered = false
+                if let hv = hover:
+                    isHovered = hv.id == id
+                var isFocused = false
+                if let f = focus:
+                    isFocused = f.id == id
+                var isPressed = false
+                if let c = capture:
+                    isPressed = c.id == id and isHovered
                 mut presented = []
-                for v in styles[0].body(StyleContext(kind = "Button", label = (d.props["label"] else ("")), role = (d.props["role"] else ("Normal")), theme = theme)):
+                for v in styles[0].body(StyleContext(kind = d.kind, label = (d.props["label"] else ("")), role = (d.props["role"] else ("Normal")), on = (d.props["value"] else ("false")) == "true", value = (d.props["value"] else ("")), hovered = isHovered, focused = isFocused, pressed = isPressed, theme = theme)):
                     presented.push(describe(v))
                 return presented
         d.children

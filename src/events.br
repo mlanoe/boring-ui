@@ -530,6 +530,7 @@ pub def bool pointerDownWith(mut Runtime rt, Builder host, Placed placed, float 
                 let h = Handle(id = node.id, generation = node.generation)
                 focusControl(rt, host, h)
                 rt.capture = h
+                rebuildPresented(rt, host, h.id)
                 if node.kind == "Slider":
                     if let at = findPlaced(placed, id):
                         _ = setSliderFromPointer(rt, host, h, at, x)
@@ -1046,6 +1047,15 @@ pub def bool pointerUp(mut Runtime rt, Builder host, Placed placed, float x, flo
     let used = releaseCapture(rt, host, placed, x, y)
     fired or used
 
+# A button whose style returns views rebuilds its subtree when the pointer state it is built from changes (press, release): the root is
+# reconciled again as one event. Hover and focus changes already do that.
+def void rebuildPresented(mut Runtime rt, Builder host, int id):
+    if let node = rt.find(id):
+        if (node.kind == "Button" or node.kind == "Toggle") and node.children.length > 0:
+            rt.beginEvent()
+            rt.invalidateRoot()
+            rt.endEvent(host)
+
 def bool releaseCapture(mut Runtime rt, Builder host, Placed placed, float x, float y):
     if rt.thumbDrag != nil:
         rt.thumbDrag = nil
@@ -1063,6 +1073,7 @@ def bool releaseCapture(mut Runtime rt, Builder host, Placed placed, float x, fl
     let h = held else (Handle(id = -1, generation = -1))
     if !rt.valid(h):
         return false
+    rebuildPresented(rt, host, h.id)
     # A drag on a slider simply ends wherever the pointer is released.
     if let held = rt.find(h.id):
         if held.kind == "Slider":

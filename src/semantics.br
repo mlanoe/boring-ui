@@ -64,6 +64,12 @@ def walk(Placed p, mut [mut SemNode] out, mut [string] errors, bool off):
         return
     if k == "AccessibilityHidden":
         return
+    # The wrapper a List style's decoration makes (core.br `decorated`): presentation only, like a Button's or a TextField's subtree
+    # (which the control's own node stands for) — only the list, its last child, is exposed.
+    if (p.props["decorated"] else ("false")) == "true":
+        if p.children.length > 0:
+            walk(p.children[p.children.length - 1], out, errors, off)
+        return
     if k == "Text":
         mut n = node(p, "staticText")
         n.name = p.props["content"] else ("")
