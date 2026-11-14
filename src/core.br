@@ -717,6 +717,15 @@ pub struct Runtime:
             # the anchor always, the panel only while presented
             if (d.props["isPresented"] else ("false")) != "true" and d.children.length > 1:
                 return [d.children[0]]
+        if d.kind == "Button" and d.children.length == 0:
+            # A view-returning style (`ControlStyle.body`) supplies the button's presentation subtree.
+            let theme = themeIn(scope)
+            let styles = theme.stylesFor("Button")
+            if styles.length > 0:
+                mut presented = []
+                for v in styles[0].body(StyleContext(kind = "Button", label = (d.props["label"] else ("")), role = (d.props["role"] else ("Normal")), theme = theme)):
+                    presented.push(describe(v))
+                return presented
         d.children
 
     # One composite's body as a `Desc`. A view with `env` gets the providers in scope for it (nearest

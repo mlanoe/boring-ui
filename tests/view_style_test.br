@@ -1,0 +1,107 @@
+# A style that returns views (src/theme.br `ControlStyle.body`, Button only): the runtime mounts the subtree inside the button, layout sizes the
+# button from it, scene paints it over the style's own face, and the button keeps the pointer. Run: boring run tests/view_style_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
+use ui.theme.*
+use render.display_list.*
+
+# a button whose presentation is its label, bold, in a padded rounded card (the label is the subtree's, not the host's)
+struct CardButton as ControlStyle:
+    pub req string kind():
+        "Button"
+
+    pub req string name():
+        "CardButton"
+
+    pub req [Command] paint(StyleContext c):
+        var state = "idle"
+        if c.pressed:
+            state = "pressed"
+        [Command(kind = "FillRect", x = c.x, y = c.y, w = c.w, h = c.h, color = "card", hex = "#EEEEEE", radius = 6.0, text = state)]
+
+    pub req [View] body(StyleContext c):
+        [Padding(insets = 12.0, children = [Text(content = "{c.label}!", bold = true)])]
+
+def noop():
+    pass
+
+view Panel:
+    body():
+        Column(alignment = .Leading, spacing = 8.0):
+            Button(label = "Go", onActivate = noop)
+
+struct PanelRoot as ViewBuilder:
+    Theme theme
+    req View buildView(mut Runtime rt):
+        Provide(value = theme, children = [Panel()])
+
+def Placed must(Placed? p):
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def Placed lay(Runtime rt):
+    must(layout(rt, 300.0, 200.0))
+
+def Placed? find(Placed p, string kind):
+    if p.kind == kind:
+        return p
+    for c in p.children:
+        if let f = find(c, kind):
+            return f
+    nil
+
+def int count(Runtime rt, string color):
+    var n = 0
+    for c in displayList(lay(rt)):
+        if c.color == color:
+            n += 1
+    n
+
+# ── without a view style the button is what it was: a leaf, its own label ────────────────────────────
+
+let plain = Theme()
+let plainHost = ViewRoot(inner = PanelRoot(theme = plain))
+mut plainRt = Runtime()
+plainRt.start(plainHost)
+let plainButton = must(find(lay(plainRt), "Button"))
+assert_eq(plainButton.children.length, 0)
+
+# ── with one: the subtree is mounted, sizes the button and is painted ────────────────────────────────
+
+let styled = plain.withStyle(CardButton())
+let host = ViewRoot(inner = PanelRoot(theme = styled))
+mut rt = Runtime()
+rt.start(host)
+let button = must(find(lay(rt), "Button"))
+assert_eq(button.children.length, 1)
+assert_eq(button.children[0].kind, "Padding")
+let text = must(find(button, "Text"))
+# the card is the label's width plus the padding, never under the hit-size floor
+assert(button.w >= text.w + 24.0 - 0.5, "the button takes the subtree's width")
+assert(button.h >= text.h + 24.0 - 0.5, "the button takes the subtree's height")
+assert(text.x >= button.x + 12.0 - 0.5, "the subtree sits inside the button")
+assert_eq(count(rt, "card"), 1)                                  # the style's own face, under the subtree
+mut labels = [] as [Command]
+for c in displayList(lay(rt)):
+    if c.kind == "DrawText":
+        labels.push(c)
+assert_eq(labels.length, 1)                                        # only the subtree's label: the host draws none
+assert_eq(labels[0].text, "Go!")
+
+# ── the button keeps the pointer: a press on the subtree's text is a press of the button ─────────────
+
+_ = pointerMove(rt, host, lay(rt), text.x + 1.0, text.y + 1.0)
+_ = pointerDown(rt, host, lay(rt), text.x + 1.0, text.y + 1.0)
+var cardState = ""
+for c in displayList(lay(rt)):
+    if c.color == "card":
+        cardState = c.text
+assert_eq(cardState, "pressed")                                    # the button, not the subtree's text, took the press
+assert_eq(count(rt, "pressed"), 0)                                # a style supplies its own look: no built-in shade
+let after = must(find(lay(rt), "Button"))
+assert_eq(after.id, button.id)
+
+print "view style ok"

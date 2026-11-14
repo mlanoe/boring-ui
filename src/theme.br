@@ -381,6 +381,10 @@ pub trait ControlStyle:
     req string name()
     # The commands that paint the control's presentation; the host stamps their `node`.
     req [Command] paint(StyleContext c)
+    # A style that returns views (Button only for now): the presentation subtree the runtime hosts inside the control, built from the context's
+    # label, role and theme. The host then draws no label of its own (the subtree composes it); a style returning [] stays painter-only.
+    req [View] body(StyleContext c):
+        []
     # A toggle's mark width (the label follows it); other kinds ignore it. Default: a square the height of the mark.
     req float markWidth(StyleContext c):
         c.h

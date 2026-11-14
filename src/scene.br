@@ -145,7 +145,8 @@ def paintNode(Placed p, mut [Command] out):
             let tone = customButton[0].textColor(styleContextOf(p, "Button"))
             if tone != "":
                 text.hex = tone
-        out.push(text)
+        if p.children.length == 0:
+            out.push(text)
     if p.kind == "TextField":
         let value = p.props["value"] else ("")
         let customField = p.theme.stylesFor("TextField")

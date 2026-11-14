@@ -380,7 +380,13 @@ style names built in.
   bounds, label, button role, toggle value and the hovered / focused / pressed state (pressed = the control that took the press while the
   pointer is still over it). A `List` / `MultiList` style is called once per visible row (the row's box, its key as the label, `on` =
   selected) and replaces the built-in selection band. `tests/trait_styles_test.br`, `tests/scoped_style_test.br`.
-- Not yet: adaptive spacing pairs, `.textScale`/`.tint` provider modifiers, styles that return a view subtree (`<View> body(Context)`),
+- **Styles that return views** (Button only): `ControlStyle.body(StyleContext)` returns `[View]` (default `[]`, painter-only). The runtime mounts it as the
+  button's `children` (`Button` has a `[View] children` field, `stdlib/ui.br`), `controlSize` becomes the subtree's size (the hit-size floor still
+  applies), the subtree is centred in the button's box and painted over the style's `paint` face, and the host draws no label of its own (the subtree
+  composes it). Pointer, focus and keyboard stay with the button. The context is fixed at mount (label, role, theme): hovered / pressed / focused are
+  live paint state and do not rebuild the subtree, so use `paint` for those. `tests/view_style_test.br`.
+- Not yet: adaptive spacing pairs, `.textScale`/`.tint` provider modifiers, view-returning styles for Toggle / TextField / List and ones that follow the
+  pointer state,
   the method forms `.style(...)` / `.buttonStyle(...)` (a `Button` has a `style` field; method forms only resolve views declared in the
   calling file).
 
