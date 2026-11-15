@@ -44,6 +44,11 @@ pub struct Bitmap:
     pub int height
     pub [uint] pixels
 
+# The most pixels (width x height) an image decoder accepts: a header can declare any size, and the decoders allocate from it
+# (the JPEG one keeps a coefficient array of about three times as many entries), so a hostile file must not be able to ask
+# for gigabytes. 16 megapixels is a 4096 x 4096 picture, well above any window.
+pub let int maxImagePixels = 16777216
+
 # The glyph images a `DrawGlyph` command refers to, as one pool of 8-bit coverage masks (struct of arrays, so a
 # kernel reads plain numeric buffers). Glyph `g` is `width[g]` x `height[g]` bytes starting at `offset[g]` in
 # `alpha`, row-major; `left[g]`/`top[g]` locate its top-left corner from the pen on the baseline (`top` positive

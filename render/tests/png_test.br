@@ -41,4 +41,18 @@ for i in 0..<(whole.length / 2):
     cut.push(whole[i])
 assert(decodePng("t", cut) == nil)
 
+# hostile headers and streams are refused, not allocated for: a 4x4 image whose stream inflates to 20 MB (a decompression
+# bomb, cut off at the 68 bytes the header allows), a declared 100000 x 100000 image, and sizes whose product overflows
+assert(decodePng("bomb", fs.readBytes("fixtures/bomb.png")) == nil)
+assert(decodePng("huge", fs.readBytes("fixtures/huge_dims.png")) == nil)
+assert(decodePng("overflow", fs.readBytes("fixtures/overflow_dims.png")) == nil)
+
+# the output limit of `inflate` itself, on a final stored block of 5 bytes
+let stored = [1 as uint8, 5 as uint8, 0 as uint8, 250 as uint8, 255 as uint8, 10 as uint8, 20 as uint8, 30 as uint8, 40 as uint8, 50 as uint8]
+if let all = inflate(stored, 0, 5):
+    assert_eq(all.length, 5)
+else:
+    assert(false)
+assert(inflate(stored, 0, 4) == nil)
+
 print "png ok"

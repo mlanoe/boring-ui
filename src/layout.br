@@ -12,7 +12,7 @@
 #
 # Implemented: `Text`, `Padding`, `Frame` (fixed/min/max), `Spacer`, `Priority`, `Row`, `Column`
 # (spacing, cross-axis alignment); composite views and `KeyedGroup` are transparent.
-# Also: `Layer` (overlay stack), `Fill` (accept the proposed size on chosen axes, align the child),
+# Also: `Layer` (overlay stack), `Fill` (accept the proposed size on chosen axes, align the child), `Fraction` (a clamped share of the proposal per axis),
 # `Scroll` (a finite viewport; the offset lives on the mounted node and is clamped here), `Offset`
 # (a paint/hit-test translation that never changes sizes) and `Text` line limits with tail ellipsis.
 # Not yet: baseline alignment, idealWidth, adaptive spacing pairs (one default gap), right-to-left,
@@ -134,8 +134,21 @@ def float? numProp(Mounted n, string key):
         return s.parseFloat()
     nil
 
+# A `Fraction`'s share on one axis, clamped to 0.0...1.0 (nil when that axis is not set).
+def float? fractionProp(Mounted n, string key):
+    if let f = numProp(n, key):
+        return clampTo(f, 0.0, 1.0)
+    nil
+
 def bool hasChild(Mounted n):
     n.children.length > 0
+
+# The one child of a single-child wrapper (`Padding`, `Frame`, `Fill`, `Fraction`, `Scroll`), or an empty stand-in of zero size when it has none:
+# measuring such a wrapper then works like measuring one around nothing (placing skips the missing child, see `placeIn`).
+def Mounted onlyChild(Mounted n):
+    if hasChild(n):
+        return n.children[0]
+    Mounted(id = -1, generation = -1, kind = "Empty", site = 0, key = "")
 
 # Composite views (they carry their `View`), `Priority`, `Background` and `Clip` forward all layout to
 # their one child (the last two only add painting/hit-test behaviour, see scene.br).
@@ -518,7 +531,7 @@ def Span spanUncached(Mounted n, bool horiz, float? cross, mut Memo memo):
         return Span(min = m, ideal = m, max = unbounded)
     if k == "Padding":
         let i = numProp(n, "insets") else (0.0)
-        let s = span(n.children[0], horiz, shrink(cross, 2.0 * i), memo)
+        let s = span(onlyChild(n), horiz, shrink(cross, 2.0 * i), memo)
         return Span(min = s.min + 2.0 * i, ideal = s.ideal + 2.0 * i, max = minOf(s.max + 2.0 * i, unbounded))
     if k == "Frame":
         return frameSpan(n, horiz, cross, memo)
@@ -541,12 +554,27 @@ def Span spanUncached(Mounted n, bool horiz, float? cross, mut Memo memo):
             hi = maxOf(hi, s.max)
         return Span(min = lo, ideal = id, max = hi)
     if k == "Fill":
-        let s = span(n.children[0], horiz, cross, memo)
+        let s = span(onlyChild(n), horiz, cross, memo)
         var grows = flag(n, "width")
         if !horiz:
             grows = flag(n, "height")
         if grows:
             return Span(min = s.min, ideal = s.ideal, max = unbounded)
+        return s
+    if k == "Fraction":
+        # Flexible along a fractional axis (the share is taken from whatever is proposed); across, the other axis' share scales `cross`.
+        var along = "width"
+        var other = "height"
+        if !horiz:
+            along = "height"
+            other = "width"
+        var scaled = cross
+        if let c = cross:
+            if let f = fractionProp(n, other):
+                scaled = c * f
+        let s = span(onlyChild(n), horiz, scaled, memo)
+        if fractionProp(n, along) != nil:
+            return Span(min = 0.0, ideal = s.ideal, max = unbounded)
         return s
     if (k == "List" or k == "MultiList"):
         if windows(n, memo):
@@ -567,7 +595,7 @@ def Span spanUncached(Mounted n, bool horiz, float? cross, mut Memo memo):
         var contentCross = cross
         if scrollsThisAxis:
             contentCross = cross
-        let s = span(n.children[0], horiz, contentCross, memo)
+        let s = span(onlyChild(n), horiz, contentCross, memo)
         if scrollsThisAxis:
             return Span(min = 0.0, ideal = s.ideal, max = unbounded)
         return Span(min = s.min, ideal = s.ideal, max = unbounded)
@@ -583,7 +611,7 @@ def Span frameSpan(Mounted n, bool horiz, float? cross, mut Memo memo):
         hi = "maxHeight"
     if let f = numProp(n, fixed):
         return fixedSpan(f)
-    let s = span(n.children[0], horiz, cross, memo)
+    let s = span(onlyChild(n), horiz, cross, memo)
     let low = numProp(n, lo) else (0.0)
     let high = numProp(n, hi) else (unbounded)
     Span(min = clampTo(s.min, low, high), ideal = clampTo(s.ideal, low, high), max = clampTo(s.max, low, high))
@@ -1024,7 +1052,7 @@ def Size sizeUncached(Mounted n, Prop p, mut Memo memo):
         return Size(w = maxOf(m, p.w else (m)), h = maxOf(m, p.h else (m)))
     if k == "Padding":
         let i = numProp(n, "insets") else (0.0)
-        let cs = sizeOf(n.children[0], Prop(w = shrink(p.w, 2.0 * i), h = shrink(p.h, 2.0 * i)), memo)
+        let cs = sizeOf(onlyChild(n), Prop(w = shrink(p.w, 2.0 * i), h = shrink(p.h, 2.0 * i)), memo)
         return Size(w = cs.w + 2.0 * i, h = cs.h + 2.0 * i)
     if k == "Frame":
         return measureFrame(n, p, memo)
@@ -1048,8 +1076,29 @@ def Size sizeUncached(Mounted n, Prop p, mut Memo memo):
             w = maxOf(w, cs.w)
             h = maxOf(h, cs.h)
         return Size(w = w, h = h)
+    if k == "Fraction":
+        let fw = fractionProp(n, "width")
+        let fh = fractionProp(n, "height")
+        var propW = p.w
+        var propH = p.h
+        if let f = fw:
+            if let given = p.w:
+                propW = given * f
+        if let f = fh:
+            if let given = p.h:
+                propH = given * f
+        let cs = sizeOf(onlyChild(n), Prop(w = propW, h = propH), memo)
+        var w = cs.w
+        var h = cs.h
+        if let f = fw:
+            if let given = p.w:
+                w = given * f
+        if let f = fh:
+            if let given = p.h:
+                h = given * f
+        return Size(w = w, h = h)
     if k == "Fill":
-        let cs = sizeOf(n.children[0], p, memo)
+        let cs = sizeOf(onlyChild(n), p, memo)
         var w = cs.w
         var h = cs.h
         let offeredW = p.w else (cs.w)
@@ -1078,7 +1127,7 @@ def Size sizeUncached(Mounted n, Prop p, mut Memo memo):
         var contentProp = Prop(w = p.w, h = nil)
         if !isVerticalScroll(n):
             contentProp = Prop(w = nil, h = p.h)
-        let cs = sizeOf(n.children[0], contentProp, memo)
+        let cs = sizeOf(onlyChild(n), contentProp, memo)
         let viewW = p.w else (cs.w)
         let viewH = p.h else (cs.h)
         return Size(w = viewW, h = viewH)
@@ -1109,7 +1158,7 @@ def float? frameProposal(float? incoming, float? fixed, float? lo, float? hi):
     nil
 
 def Size measureFrame(Mounted n, Prop p, mut Memo memo):
-    let child = n.children[0]
+    let child = onlyChild(n)
     let fw = numProp(n, "width")
     let fh = numProp(n, "height")
     let cs = sizeOf(child, Prop(
@@ -1156,7 +1205,7 @@ def Placed placeIn(Mounted n, float x, float y, Size size, mut Memo memo):
             node.children.push(placeIn(n.children[0], x, y, cs, memo))
         return node
     let k = n.kind
-    if k == "Padding":
+    if k == "Padding" and hasChild(n):
         let i = numProp(n, "insets") else (0.0)
         let cs = sizeOf(n.children[0], Prop(w = nonNeg(size.w - 2.0 * i), h = nonNeg(size.h - 2.0 * i)), memo)
         node.children.push(placeIn(n.children[0], x + i, y + i, cs, memo))
@@ -1192,7 +1241,7 @@ def Placed placeIn(Mounted n, float x, float y, Size size, mut Memo memo):
         for c in flatten(n):
             let cs = sizeOf(c, Prop(w = size.w, h = size.h), memo)
             node.children.push(placeIn(c, x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs, memo))
-    elif k == "Fill":
+    elif (k == "Fill" or k == "Fraction") and hasChild(n):
         let a = alignmentOf(n)
         let cs = sizeOf(n.children[0], Prop(w = size.w, h = size.h), memo)
         node.children.push(placeIn(n.children[0], x + (size.w - cs.w) * xFraction(a), y + (size.h - cs.h) * yFraction(a), cs, memo))
@@ -1213,7 +1262,7 @@ def Placed placeIn(Mounted n, float x, float y, Size size, mut Memo memo):
             row.key = keys[i]
             node.children.push(row)
             rowY += neg.mains[i] + neg.gap
-    elif k == "Scroll":
+    elif k == "Scroll" and hasChild(n):
         let vertical = isVerticalScroll(n)
         var contentProp = Prop(w = size.w, h = nil)
         if !vertical:
@@ -1230,7 +1279,7 @@ def Placed placeIn(Mounted n, float x, float y, Size size, mut Memo memo):
             node.children.push(placeIn(n.children[0], x, y - offset, cs, memo))
         else:
             node.children.push(placeIn(n.children[0], x - offset, y, cs, memo))
-    elif k == "Frame":
+    elif k == "Frame" and hasChild(n):
         node.children.push(placeChild(n.children[0], x, y, size, memo))
     elif k == "Row" or k == "Column":
         let isRow = k == "Row"

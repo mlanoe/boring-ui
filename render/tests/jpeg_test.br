@@ -62,4 +62,6 @@ mut [uint8] cut = []
 for i in 0..<60:
     cut.push(whole[i])
 assert(decodeJpeg("t", cut) == nil)
+# a header that declares 65535 x 65535 pixels is refused before any coefficient array is allocated for it
+assert(decodeJpeg("h", fs.readBytes("fixtures/huge_dims.jpg")) == nil)
 print "jpeg ok"

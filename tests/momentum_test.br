@@ -63,4 +63,24 @@ assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 100000.0))
 assert(!stepMomentum(rt, host, laid(rt), 1.0))
 assert_eq(offset(rt), 30.0 * 16.0 - 48.0)
 assert(!momentumActive(rt))
+
+# The distance coasted does not depend on the display's frame rate: half a second at 60 Hz and at 144 Hz land together.
+_ = scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, -10000.0)
+assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 600.0))
+for _ in 0..<30:
+    _ = stepMomentum(rt, host, laid(rt), 1.0 / 60.0)
+let at60 = offset(rt)
+_ = scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, -10000.0)
+assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 600.0))
+for _ in 0..<72:
+    _ = stepMomentum(rt, host, laid(rt), 1.0 / 144.0)
+let at144 = offset(rt)
+assert(at60 > 100.0, "it coasted")
+assert(at144 - at60 < 0.5 and at60 - at144 < 0.5, "same distance at 60 Hz and 144 Hz")
+# a step that elapsed no time changes nothing and keeps the inertia running
+_ = scrollBy(rt, host, laid(rt), 10.0, 10.0, 0.0, -10000.0)
+assert(fling(rt, laid(rt), 10.0, 10.0, 0.0, 600.0))
+assert(stepMomentum(rt, host, laid(rt), 0.0))
+assert_eq(offset(rt), 0.0)
+assert(momentumActive(rt))
 print("momentum ok")

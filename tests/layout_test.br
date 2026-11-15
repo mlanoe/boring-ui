@@ -122,4 +122,35 @@ let tiny = must(lay(Row(alignment = .Center, spacing = 0.0, children = [longText
 assert_eq(tiny.children[0].w, 32.0)
 assert_eq(tiny.w, 64.0)
 
+# ── single-child wrappers with no child lay out as if around nothing (they used to index children[0]) ───────
+
+let emptyPadding = must(lay(Padding(insets = 4.0, children = []), 100.0, 100.0))
+assert_eq(emptyPadding.w, 8.0)
+assert_eq(emptyPadding.h, 8.0)
+assert_eq(emptyPadding.children.length, 0)
+
+let emptyFixedFrame = must(lay(Frame(width = 30.0, height = 20.0, children = []), 100.0, 100.0))
+assert_eq(emptyFixedFrame.w, 30.0)
+assert_eq(emptyFixedFrame.h, 20.0)
+assert_eq(emptyFixedFrame.children.length, 0)
+
+let emptyFrame = must(lay(Frame(children = []), 100.0, 100.0))
+assert_eq(emptyFrame.w, 0.0)
+assert_eq(emptyFrame.h, 0.0)
+
+let emptyFill = must(lay(Fill(children = []), 100.0, 100.0))
+assert_eq(emptyFill.w, 100.0)
+assert_eq(emptyFill.h, 100.0)
+assert_eq(emptyFill.children.length, 0)
+
+let emptyScroll = must(lay(Scroll(children = []), 100.0, 100.0))
+assert_eq(emptyScroll.w, 100.0)
+assert_eq(emptyScroll.h, 100.0)
+assert_eq(emptyScroll.children.length, 0)
+
+# inside a stack the empty wrapper goes through the span path too: 2 * 2 pt of padding next to a one-letter text (8 pt)
+let withEmpty = must(lay(Row(alignment = .Center, spacing = 0.0, children = [Padding(insets = 2.0, children = []), Text("a")]), 100.0, 100.0))
+assert_eq(withEmpty.w, 12.0)
+assert_eq(withEmpty.children.length, 2)
+
 print "layout ok"

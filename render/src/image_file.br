@@ -30,6 +30,9 @@ def [int] headerNumber([uint8] bytes, int at):
             value = 0
         value = value * 10 + (bytes[i] as int) - 48
         i += 1
+        # a number this long is no image size (and a longer one would overflow): refuse it here
+        if value > maxImagePixels:
+            return [0 - 1, i]
     [value, i]
 
 # Decodes a `P6` file; nil when it is not one, is truncated, or has a `maxval` other than 255.
@@ -40,6 +43,8 @@ pub def Bitmap? decodePpm(string name, [uint8] bytes):
     let h = headerNumber(bytes, w[1])
     let m = headerNumber(bytes, h[1])
     if w[0] <= 0 or h[0] <= 0 or m[0] != 255:
+        return nil
+    if w[0] > maxImagePixels / h[0]:
         return nil
     # exactly one white-space byte separates the header from the texels
     let start = m[1] + 1

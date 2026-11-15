@@ -108,7 +108,7 @@ assert(!pointerUp(rt, host, lay(rt), 290.0, 290.0))          # released elsewher
 assert_eq(summary(rt), "0/0/0/0||")
 assert(rt.capture == nil)
 assert(pointerDown(rt, host, lay(rt), okX, okY))
-pointerCancel(rt)
+pointerCancel(rt, host)
 assert(!pointerUp(rt, host, lay(rt), okX, okY))              # nothing captured any more
 assert_eq(summary(rt), "0/0/0/0||")
 assert(pointerDown(rt, host, lay(rt), okX, okY))

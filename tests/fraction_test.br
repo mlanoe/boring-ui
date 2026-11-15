@@ -1,0 +1,63 @@
+# Fraction: a clamped share of the proposal per axis (src/layout.br). Run: boring run tests/fraction_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+
+struct Fixed as ViewBuilder:
+    View root
+    req View buildView(mut Runtime rt): root
+
+def Placed lay(View root, float w, float h):
+    mut rt = Runtime()
+    rt.start(ViewRoot(inner = Fixed(root = root)))
+    let p = layout(rt, w, h)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+# A 10x10 thumb at the trailing edge of a `Fraction(width = f)` inside a track `width` wide.
+def Placed track(float width, float f):
+    lay(Frame(width = width, height = 20.0, children = [Layer(alignment = .MiddleLeading, children = [
+        Frame(width = width, height = 4.0, children = [Spacer()]),
+        Fraction(width = f, alignment = .MiddleTrailing, children = [Frame(width = 10.0, height = 10.0, children = [Spacer()])])])]), 500.0, 500.0)
+
+# frame -> layer -> [track, fraction]
+def Placed fractionOf(Placed p):
+    p.children[0].children[1]
+
+# the thumb's right edge sits at f * width
+for width in [100.0, 240.0, 37.0]:
+    for f in [0.0, 0.25, 0.4, 1.0]:
+        let fr = fractionOf(track(width, f))
+        assert_eq(fr.kind, "Fraction")
+        assert_eq(fr.w, width * f)
+        assert_eq(fr.x, 0.0)
+        let thumb = fr.children[0]
+        assert_eq(thumb.x + thumb.w, width * f)
+
+# out of range: clamped to 0.0...1.0
+assert_eq(fractionOf(track(100.0, -0.5)).w, 0.0)
+assert_eq(fractionOf(track(100.0, 1.5)).w, 100.0)
+assert_eq(fractionOf(track(100.0, 7.0)).children[0].x, 90.0)
+
+# height share, and both axes at once; the other axis of a width-only Fraction takes the child's own size
+# (a `Layer` is the union of its children, so a full-size sibling keeps the proposal at the parent's size)
+let both = lay(Frame(width = 200.0, height = 80.0, children = [Layer(alignment = .TopLeading, children = [
+    Fill(children = [Spacer()]),
+    Fraction(width = 0.5, height = 0.25, alignment = .TopLeading, children = [Spacer()])])]), 500.0, 500.0)
+let bf = both.children[0].children[1]
+assert_eq(bf.w, 100.0)
+assert_eq(bf.h, 20.0)
+let wo = fractionOf(track(100.0, 0.5))
+assert_eq(wo.h, 10.0)
+assert_eq(wo.y, 5.0)                       # centred in the 20-high frame
+
+# unspecified axis: no proposal to take a share of, so the child's own size
+let free = lay(Fraction(width = 0.5, children = [Frame(width = 30.0, height = 12.0, children = [Spacer()])]), 500.0, 500.0)
+assert_eq(free.kind, "Fraction")
+assert_eq(free.children[0].w, 30.0)
+
+# the child is proposed the share (a Fill child grows to it)
+let fill = lay(Frame(width = 100.0, height = 20.0, children = [Fraction(width = 0.3, children = [Fill(children = [Spacer()])])]), 500.0, 500.0)
+assert_eq(fill.children[0].children[0].w, 30.0)
+
+print "fraction ok"

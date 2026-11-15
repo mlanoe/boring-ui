@@ -134,6 +134,12 @@ the window to the root and returns a `Placed` tree in window coordinates; `measu
 - Stack allocation is the draft's deterministic algorithm: reserve every minimum, then water-fill by priority group
   toward each ideal, then toward each maximum; below the sum of minimums everything keeps its minimum and the stack
   overflows; with an unspecified main axis children get their ideal and spacers their themed minimum.
+- `Fraction(width = 0.4, height = nil, alignment = .Middle)` takes a share of the finite size its parent proposes, per axis (the
+  value is clamped to `0.0...1.0`; a nil axis, or an axis with no proposal, takes the child's own size). The child is proposed that size
+  and aligned inside it. Put it in a parent that proposes a definite size (`Layer`, `Fill`, `Frame`); as a stack child it is flexible
+  like `Fill`. A `Layer` is the union of its children, so keep a full-size sibling (the track) beside it. It exists so a view-returning `ControlStyle` can place a slider thumb at a fraction of the track
+  (`Layer` of the track and `Fraction(width = v, alignment = .MiddleTrailing)` around the thumb), since `body(StyleContext)` runs before
+  the size is known. `tests/fraction_test.br`.
 - Modifier order matters and is tested with the draft's examples (`width(200).padding(10)` = 220 wide,
   `padding(10).width(200)` = 200 wide with the padding centered inside).
 - `TextField` has a themed fixed size (160 × 24) and is painted as a field plus its value.

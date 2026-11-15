@@ -3,8 +3,9 @@
 #
 # Supported: non-interlaced images of 8 bits per channel, colour types 0 (gray), 2 (RGB), 3 (palette, with `tRNS`
 # alpha), 4 (gray + alpha) and 6 (RGBA). Not supported, and `decodePng` returns nil for: interlacing, 1/2/4/16-bit
-# depths, and corrupt streams. The zlib checksum and the chunk CRCs are not verified. Gamma / colour-profile chunks
-# are ignored (the pixels are taken as sRGB).
+# depths, corrupt streams, an image larger than `maxImagePixels` (display_list.br), and a stream that inflates to more
+# than the header's size (a decompression bomb is cut off at the size the header declares). The zlib checksum and the chunk
+# CRCs are not verified. Gamma / colour-profile chunks are ignored (the pixels are taken as sRGB).
 
 use render.display_list.*
 
@@ -82,7 +83,7 @@ def [int] distExtra():
     [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
 
 # One compressed block's symbols until the end-of-block code; false on a corrupt stream.
-def bool inflateCodes(mut Bits b, [uint8] data, mut [int] out, Huffman lit, Huffman dist):
+def bool inflateCodes(mut Bits b, [uint8] data, mut [int] out, Huffman lit, Huffman dist, int limit):
     let lbase = lengthBase()
     let lextra = lengthExtra()
     let dbase = distBase()
@@ -92,6 +93,8 @@ def bool inflateCodes(mut Bits b, [uint8] data, mut [int] out, Huffman lit, Huff
         if sym < 0:
             return false
         if sym < 256:
+            if out.length >= limit:
+                return false
             out.push(sym)
         elif sym == 256:
             return true
@@ -104,7 +107,7 @@ def bool inflateCodes(mut Bits b, [uint8] data, mut [int] out, Huffman lit, Huff
             if ds < 0 or ds >= 30:
                 return false
             let d = dbase[ds] + need(b, data, dextra[ds])
-            if b.failed or d > out.length:
+            if b.failed or d > out.length or out.length + len > limit:
                 return false
             var k = 0
             while k < len:
@@ -130,7 +133,7 @@ def [int] codeLengthOrder():
     [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 
 # A dynamic block: reads its code tables, then the codes.
-def bool inflateDynamic(mut Bits b, [uint8] data, mut [int] out):
+def bool inflateDynamic(mut Bits b, [uint8] data, mut [int] out, int limit):
     let nlen = need(b, data, 5) + 257
     let ndist = need(b, data, 5) + 1
     let ncode = need(b, data, 4) + 4
@@ -169,10 +172,11 @@ def bool inflateDynamic(mut Bits b, [uint8] data, mut [int] out):
                 i += 1
     let lit = buildHuffman(all, 0, nlen)
     let dist = buildHuffman(all, nlen, ndist)
-    inflateCodes(b, data, out, lit, dist)
+    inflateCodes(b, data, out, lit, dist, limit)
 
-# Inflates the raw deflate stream starting at `start`; nil when it is corrupt or truncated.
-pub def [int]? inflate([uint8] data, int start):
+# Inflates the raw deflate stream starting at `start`; nil when it is corrupt or truncated, or when it would produce more
+# than `limit` bytes (a decompression bomb: deflate expands up to about 1000 times, so the caller says how much it expects).
+pub def [int]? inflate([uint8] data, int start, int limit):
     mut b = Bits(pos = start)
     mut [int] out = []
     var last = false
@@ -189,17 +193,17 @@ pub def [int]? inflate([uint8] data, int start):
                 return nil
             let len = (data[b.pos] as int) | ((data[b.pos + 1] as int) << 8)
             let inv = (data[b.pos + 2] as int) | ((data[b.pos + 3] as int) << 8)
-            if (len ^ 65535) != inv or b.pos + 4 + len > data.length:
+            if (len ^ 65535) != inv or b.pos + 4 + len > data.length or out.length + len > limit:
                 return nil
             for i in 0..<len:
                 out.push(data[b.pos + 4 + i] as int)
             b.pos += 4 + len
         elif kind == 1:
             let fixed = fixedLengths()
-            if !inflateCodes(b, data, out, buildHuffman(fixed, 0, 288), buildHuffman(fixed, 288, 30)):
+            if !inflateCodes(b, data, out, buildHuffman(fixed, 0, 288), buildHuffman(fixed, 288, 30), limit):
                 return nil
         elif kind == 2:
-            if !inflateDynamic(b, data, out):
+            if !inflateDynamic(b, data, out, limit):
                 return nil
         else:
             return nil
@@ -320,12 +324,16 @@ pub def Bitmap? decodePng(string name, [uint8] data):
         return nil
     if colorType == 3 and palette.length < 3:
         return nil
+    # a declared size beyond the limit is refused before anything is allocated for it (the division keeps the product from overflowing)
+    if width > maxImagePixels / height:
+        return nil
+    let expected = height * (width * bpp + 1)
     # two zlib header bytes (CM must be 8, no preset dictionary), then the deflate stream
     if ((compressed[0] as int) & 15) != 8 or ((compressed[1] as int) & 32) != 0:
         return nil
-    guard let raw = inflate(compressed, 2) else:
+    guard let raw = inflate(compressed, 2, expected) else:
         return nil
-    if raw.length < height * (width * bpp + 1):
+    if raw.length < expected:
         return nil
     guard let px = unfilter(raw, width, height, bpp) else:
         return nil

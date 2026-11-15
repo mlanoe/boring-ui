@@ -35,4 +35,8 @@ else:
     assert(false)
 assert(decodeImage("junk", [1 as uint8, 2 as uint8, 3 as uint8]) == nil)
 
+# a header whose size is beyond the limit, or too long a number to fit, is refused: "P6 99999 99999 255\n" and a 30-digit width
+assert(decodePpm("big", fs.readBytes("fixtures/big_header.ppm")) == nil)
+assert(decodePpm("long", fs.readBytes("fixtures/long_number.ppm")) == nil)
+
 print "image file ok"

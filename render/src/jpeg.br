@@ -9,7 +9,8 @@
 # Supported: 8-bit precision; 1 component (gray) or 3 (YCbCr, or RGB when an Adobe marker says transform 0); any
 # sampling factors up to 4 x 4; restart intervals; 16-bit quantization tables. Not supported, and `decodeJpeg`
 # returns nil for: arithmetic coding, lossless and hierarchical modes, 12-bit samples, 4-component (CMYK/YCCK)
-# images, and corrupt or truncated entropy data in a scan header. The result differs from libjpeg's by rounding only:
+# images, an image larger than `maxImagePixels` (display_list.br), and corrupt or truncated entropy data in a scan header.
+# The result differs from libjpeg's by rounding only:
 # the inverse transform is floating point (libjpeg uses an integer one) and chroma is upsampled with the same triangle
 # ("fancy") filter for 2x factors and bilinear sampling otherwise, so a test against libjpeg allows a few LSBs.
 
@@ -450,6 +451,9 @@ pub def Bitmap? decodeJpeg(string name, [uint8] d):
                 f.ncomp = d[body + 5] as int
                 if f.width <= 0 or f.height <= 0 or (f.ncomp != 1 and f.ncomp != 3) or len < 8 + 3 * f.ncomp:
                     return nil
+                # the declared size is refused before the coefficient array below is allocated from it
+                if f.width > maxImagePixels / f.height:
+                    return nil
                 for i in 0..<f.ncomp:
                     let at = body + 6 + 3 * i
                     f.cid.push(d[at] as int)
@@ -473,6 +477,9 @@ pub def Bitmap? decodeJpeg(string name, [uint8] d):
                     total += f.mcusX * f.ch[i] * f.mcusY * f.cv[i] * 64
                     f.cpw.push(ceilDiv(ceilDiv(f.width * f.ch[i], f.hmax), 8))
                     f.cph.push(ceilDiv(ceilDiv(f.height * f.cv[i], f.vmax), 8))
+                # (blocks pad each side to a multiple of 8 * the sampling factor, so a bit more than three entries per pixel at most)
+                if total > 4 * maxImagePixels:
+                    return nil
                 coef = [0 for ..<total]
                 sawFrame = true
             elif m == 195 or (m >= 197 and m <= 207 and m != 200 and m != 204):

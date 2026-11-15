@@ -332,6 +332,17 @@ def string editKind(int a, int b, string insert):
         return "type"
     "other"
 
+def int maxUndoGroups():
+    200
+
+# Puts a field's undo history, caret and anchor back as they were (an edit the control did not accept).
+def void restoreEditState(mut Runtime rt, Handle h, EditHistory? history, int caret, int anchor):
+    if let past = history:
+        rt.histories[h.id] = past
+    else:
+        rt.histories.remove(h.id)
+    moveCaret(rt, h, caret, anchor)
+
 def void recordEdit(mut Runtime rt, Handle h, string before, int caretBefore, int a, int b, string insert, string after):
     mut hist = historyOf(rt, h, before)
     let kind = editKind(a, b, insert)
@@ -339,6 +350,10 @@ def void recordEdit(mut Runtime rt, Handle h, string before, int caretBefore, in
     if !grouped:
         hist.undoText.push(before)
         hist.undoCaret.push(caretBefore)
+        # a bounded history: every group keeps a full copy of the text, so the oldest one goes first
+        if hist.undoText.length > maxUndoGroups():
+            hist.undoText = hist.undoText.removeAt(hist.undoText.firstIndex())
+            hist.undoCaret = hist.undoCaret.removeAt(hist.undoCaret.firstIndex())
     hist.redoText = []
     hist.redoCaret = []
     hist.current = after
@@ -389,20 +404,32 @@ def bool stepHistory(mut Runtime rt, Builder host, bool backwards):
     hist.current = target
     hist.lastKind = ""
     hist.expectCaret = -1
+    let priorHistory = rt.histories[f.id]
+    let priorAnchor = anchorOf(rt, f, value.graphemeCount, here)
     rt.histories[f.id] = hist
     let c = clampTo(targetCaret, 0, target.graphemeCount)
     moveCaret(rt, f, c, c)
-    act(rt, host, f, "setText", target)
+    let accepted = act(rt, host, f, "setText", target)
+    if !accepted:
+        # the control did not take the text: the undo entry that was just popped is not lost
+        restoreEditState(rt, f, priorHistory, here, priorAnchor)
+    accepted
 
 # Replaces the text between `a` and `b` with `insert`, leaving the caret after it, as one event.
 def bool replaceRange(mut Runtime rt, Builder host, Handle h, Mounted node, int a, int b, string insert):
     let text = propOf(node, "value")
     let len = text.graphemeCount
     let next = "{text.graphemeSlice(0, a)}{insert}{text.graphemeSlice(b, len)}"
+    let caretBefore = caretOf(rt, h, len)
+    let anchorBefore = anchorOf(rt, h, len, caretBefore)
+    let priorHistory = rt.histories[h.id]
     if next != text:
-        recordEdit(rt, h, text, caretOf(rt, h, len), a, b, insert, next)
+        recordEdit(rt, h, text, caretBefore, a, b, insert, next)
     moveCaret(rt, h, a + insert.graphemeCount, a + insert.graphemeCount)
-    act(rt, host, h, "setText", next)
+    let accepted = act(rt, host, h, "setText", next)
+    if !accepted:
+        restoreEditState(rt, h, priorHistory, caretBefore, anchorBefore)
+    accepted
 
 def Handle? focusedField(Runtime rt):
     if let f = rt.focus:
@@ -1090,7 +1117,12 @@ def bool releaseCapture(mut Runtime rt, Builder host, Placed placed, float x, fl
     false
 
 # The platform cancelled the pointer (window lost, modal opened): the capture ends, nothing happens.
-pub def void pointerCancel(mut Runtime rt):
+pub def void pointerCancel(mut Runtime rt, Builder host):
+    # An active drag is abandoned like an Escape: the source's and the targets' bound flags go back to false (without the host
+    # they would stay "dragging" for the application).
+    if let d = rt.drag:
+        if d.active:
+            dragEnd(rt, host, Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0), 0.0, 0.0, false)
     rt.pan = nil
     rt.press = nil
     rt.thumbDrag = nil
@@ -1880,6 +1912,10 @@ pub def bool revealFocus(mut Runtime rt, Builder host, Placed placed):
 def float frictionPerTick():
     0.95
 
+# The continuous decay rate (per second) equal to `frictionPerTick()` per 1/60 s: -ln(0.95) * 60.
+def float frictionRate():
+    3.0775976632530
+
 pub def bool fling(mut Runtime rt, Placed placed, float x, float y, float vx, float vy):
     rt.momentum = nil
     rt.glide = nil
@@ -1922,27 +1958,25 @@ pub def bool stepMomentum(mut Runtime rt, Builder host, Placed placed, float dt)
     guard let node = findPlaced(placed, m.node) else:
         rt.momentum = nil
         return false
+    if dt <= 0.0:
+        return true
     let start = numOf(node, "scroll")
     let most = numOf(node, "scrollMax")
-    var pos = start
-    var v = m.velocity
-    var ticks = (dt * 60.0 + 0.5) as int
-    if ticks < 1:
-        ticks = 1
+    # Friction is exponential in time (v shrinks by `frictionPerTick()` every 1/60 s), so one step of any length `dt` is solved in
+    # closed form: v(t) = v0 * keep, and the distance covered is v0 * (1 - keep) / rate. The result does not depend on how the
+    # elapsed time is cut into frames (a 144 Hz display used to coast about 2.4x too fast).
+    let keep = pow(frictionPerTick(), dt * 60.0)
+    var pos = start + m.velocity * (1.0 - keep) / frictionRate()
+    let v = m.velocity * keep
     var alive = true
-    var t = 0
-    while t < ticks and alive:
-        v = v * frictionPerTick()
-        pos = pos + v / 60.0
-        if pos <= 0.0:
-            pos = 0.0
-            alive = false
-        if pos >= most:
-            pos = most
-            alive = false
-        if v < 20.0 and v > -20.0:
-            alive = false
-        t += 1
+    if pos <= 0.0:
+        pos = 0.0
+        alive = false
+    if pos >= most:
+        pos = most
+        alive = false
+    if v < 20.0 and v > -20.0:
+        alive = false
     if pos != start:
         rt.beginEvent()
         _ = rt.scrollTo(m.node, pos)
