@@ -1,22 +1,42 @@
 # boring-ui
 
-The headless reactive core of boring-ui, the SwiftUI-flavoured GUI toolkit designed in
-[`boring/docs/design-notes/boring-ui-draft.md`](../boring/docs/design-notes/boring-ui-draft.md) and tracked in
-[`boring-ui-progress.md`](../boring/docs/design-notes/boring-ui-progress.md). It is **layer 2** of the draft's
-implementation sequence, written in pure [Boring](../boring) (no `Cargo.toml`, no `boring.toml` — a plain
-`src/` consumed through a `[deps]` path entry, like [`boring-numlib`](../boring-numlib)):
+[![CI](https://github.com/mlanoe/boring-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/mlanoe/boring-ui/actions/workflows/ci.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+
+A declarative, reactive GUI toolkit for the [Boring](https://github.com/mlanoe/boring) programming language, inspired by SwiftUI.
+
+Designed in [`boring-ui-draft.md`](https://github.com/mlanoe/boring/blob/main/docs/design-notes/boring-ui-draft.md) and tracked in [`boring-ui-progress.md`](https://github.com/mlanoe/boring/blob/main/docs/design-notes/boring-ui-progress.md), `boring-ui` implements:
+- A **headless reactive core** (`src/core.br`): declarative view tree lowering, reconciliation, stable identity across rebuilds, typed state retention (`StateBox`), lifecycle hooks, and transactional update cycles.
+- A **layout negotiation engine** (`src/layout.br`): two-pass size proposal and reporting, flex-like `Row`/`Column`, overlays (`Layer`), constraints (`Frame`, `Padding`, `Fill`, `Fraction`), and scrolling.
+- A **scene & display-list pipeline** (`src/scene.br`): layered drawing commands, clipping, opacity, shadows, and spatial hit-testing.
+- An **event dispatch & gesture system** (`src/events.br`): 3-phase keyboard routing (Capture, Target, Bubble), directional focus navigation, pointer/touch routing, momentum scrolling, and gestures (`OnTap`, `OnLongPress`, `OnSwipe`, `OnPan`).
+- A **comprehensive widget library** (`src/controls.br`, `src/theme.br`): text, buttons, sliders, lists, multi-selection, popovers, sheets, pickers, and desktop multi-windowing.
+- **Dedicated rendering & text packages**: reference CPU rasterizer, tiled GPU kernel rasterizer (`render/`), and Swash text shaping (`text/`).
+
+## Installation / Usage
+
+Add `boring-ui` to your `boring.toml`:
 
 ```toml
-# some-project/boring.toml
+[deps]
+ui = { git = "https://github.com/mlanoe/boring-ui" }
+```
+
+Or reference a local checkout during development:
+
+```toml
 [deps]
 ui = "../boring-ui"
 ```
 
+Then import `ui` modules in your Boring source code:
+
 ```boring
 use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.events.*
 ```
-
-It knows nothing about windows, layout, rendering or platform input, and nothing about the *types* of views.
 
 ## What's here — [`src/core.br`](src/core.br)
 
@@ -162,7 +182,7 @@ enlarges it, and children are tested front to back. `Background(color)` and `Cli
 `boring.ui`, layout-transparent. `describe(command)` renders one line per command for golden tests.
 
 ## Renderers — [`render/`](render) (steps 0 and 1 of
-[`boring-ui-renderer-draft.md`](../boring/docs/design-notes/boring-ui-renderer-draft.md))
+[`boring-ui-renderer-draft.md`](https://github.com/mlanoe/boring/blob/main/docs/design-notes/boring-ui-renderer-draft.md))
 
 A separate project (`render/boring.toml`, referenced as `render.<module>`; boring-ui depends on it through the root
 `boring.toml`) so it builds for `--target simd|wgpu` without the view runtime. It holds
@@ -645,7 +665,7 @@ unsupported expression (the function takes `float32`).
 ## Running the tests
 
 ```bash
-tests/run_tests.sh              # interpreter (`boring run`); needs a `boring` on PATH (cargo install --path ../boring)
+tests/run_tests.sh              # interpreter (`boring run`); needs `boring` on PATH (cargo install --git https://github.com/mlanoe/boring)
 tests/run_tests_transpiled.sh   # transpiler (`boring build` + `cargo run`), same files
 render/tests/run_tests.sh       # the renderer project's own tests (interpreter)
 render/tests/run_kernel_tests.sh # kernel rasterizer vs CPU reference on the real simd and wgpu targets
@@ -827,3 +847,10 @@ ScreenInfo(width = 390.0, height = 844.0, safeTop = 47.0, safeBottom = 34.0, key
 The todo window fills `ScreenInfo` from its size each frame (`syncScreen` in `pace.br`), so narrowing the window to a phone's width flips the "Controls" panel's `Adaptive` sample to its compact layout. The safe-area insets come from `screen.safeTop`/`.safeLeft`/`.safeBottom`/`.safeRight` (the wgpu host reads them from winit on iOS, 0 on a desktop) and the window wraps its root in `SafeArea`, so on a phone nothing sits under the notch or the home indicator. The software keyboard's height is not known to the host yet, so `keyboard` stays 0.
 
 Not done: a shipped iOS or Android host. The wgpu host builds for `aarch64-apple-ios-sim` and runs the todo window in the iOS Simulator (`examples/todo_window/ios_sim.sh [device]` builds, packages and launches it on a booted simulator): the window fills the screen, touch, the soft keyboard following the focused text field and the safe area work, and the generated host adopts the UIScene life cycle that a recent SDK requires (winit 0.30 does not: it registers a scene delegate and attaches winit's window to the scene, see the iOS note in boring's `docs/gpu-display.md`), so the binary keeps the SDK it was linked with. Nothing but that script packages the `.app` (hand-written `Info.plist` with the scene manifest and `UILaunchScreen`, ad-hoc signature). There is no device build (signing and provisioning), no Android host and no platform text-input adapter (see the design draft). Also not done: the software keyboard's height, orientation locking, and a `MinTarget` that enlarges the hit area without moving the layout. The name is `ScreenInfo` because the language reserves `Device` for GPUs.
+
+## Contributing & License
+
+This project is licensed under the terms of the [GNU General Public License v3.0](LICENSE).
+
+Contributors are required to agree to the [Contributor License Agreement](CLA.md) before contributions can be merged. To sign, add your name to [`CLA-signatories.md`](CLA-signatories.md) in your pull request.
+

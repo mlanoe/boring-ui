@@ -1,5 +1,8 @@
 /target
 .DS_Store
+*.log
+*.build.log
+
 # `boring build --compile` output for the test entry files under tests/
 # (e.g. tests/biguint_test_rust/) -- generated Cargo projects, not source.
 /tests/*_rust/

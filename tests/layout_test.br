@@ -143,6 +143,11 @@ assert_eq(emptyFill.w, 100.0)
 assert_eq(emptyFill.h, 100.0)
 assert_eq(emptyFill.children.length, 0)
 
+let emptyFraction = must(lay(Fraction(width = 0.5, children = []), 100.0, 100.0))
+assert_eq(emptyFraction.w, 50.0)
+assert_eq(emptyFraction.h, 0.0)
+assert_eq(emptyFraction.children.length, 0)
+
 let emptyScroll = must(lay(Scroll(children = []), 100.0, 100.0))
 assert_eq(emptyScroll.w, 100.0)
 assert_eq(emptyScroll.h, 100.0)

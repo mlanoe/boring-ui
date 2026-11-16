@@ -1,0 +1,9 @@
+# Tell GitHub Linguist to highlight .br files as Swift (closest approximation).
+# Boring is inspired by Swift and Python; Swift gives the best keyword coverage
+# (let, var, guard, struct, throws, defer, nil, etc.).
+*.br linguist-language=Swift
+
+# Shell scripts must stay LF -- a `#!/usr/bin/env bash` shebang breaks
+# ("bash\r: No such file or directory") the moment CRLF reaches a Linux
+# container.
+*.sh text eol=lf
