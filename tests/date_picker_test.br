@@ -102,4 +102,58 @@ for i in 0..<9:
 assert_eq(count(rt, "Text", "content", "February 2026"), 1)
 assert_eq(count(rt, "Button", "label", "28"), 1)
 assert_eq(count(rt, "Button", "label", "29"), 0)
+
+# Bounded DatePicker (`minMonth`/`minDay` .. `maxMonth`/`maxDay`) and `TimePicker` (24-hour HH:MM with minuteStep)
+view BoundedPage:
+    state int y = 2026
+    state int m = 11
+    state int d = 15
+    state int hr = 23
+    state int mn = 45
+
+    def setDate(int ny, int nm, int nd):
+        y = ny
+        m = nm
+        d = nd
+
+    def setTime(int nh, int nmin):
+        hr = nh
+        mn = nmin
+
+    body():
+        Column(alignment = .Leading, spacing = 8.0):
+            DatePicker(year = y, month = m, day = d, minYear = 2026, maxYear = 2026, minMonth = 11, minDay = 10, maxMonth = 11, maxDay = 20, onChange = (a, b, c):
+                self.setDate(a, b, c))
+            TimePicker(hour = hr, minute = mn, minuteStep = 15, onChange = (h, m2):
+                self.setTime(h, m2))
+
+struct BoundedBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): BoundedPage()
+
+let bhost = ViewRoot(inner = BoundedBuilder())
+mut brt = Runtime()
+brt.start(bhost)
+
+# Day 5 is before minDay (10), so clicking it is disabled and keeps day 15; day 18 is inside [10, 20] and succeeds
+let day5 = named(brt, "Button", "label", "5")
+assert(!click(brt, bhost, lay(brt), day5.x + 2.0, day5.y + 2.0))
+assert_eq(named(brt, "Button", "label", "15").props["style"], "Primary")
+let day18 = named(brt, "Button", "label", "18")
+assert(click(brt, bhost, lay(brt), day18.x + 2.0, day18.y + 2.0))
+assert_eq(named(brt, "Button", "label", "18").props["style"], "Primary")
+# Both "<" and ">" month buttons are disabled because minMonth == maxMonth == 11
+let prevBtn = named(brt, "Button", "label", "<")
+let nextBtn = named(brt, "Button", "label", ">")
+assert(!click(brt, bhost, lay(brt), prevBtn.x + 2.0, prevBtn.y + 2.0))
+assert(!click(brt, bhost, lay(brt), nextBtn.x + 2.0, nextBtn.y + 2.0))
+
+# TimePicker shows "23:45"; H+ wraps to 00:45; M+ (step 15) wraps to 00:00
+assert_eq(count(brt, "Text", "content", "23:45"), 1)
+let hPlus = named(brt, "Button", "label", "H+")
+assert(click(brt, bhost, lay(brt), hPlus.x + 2.0, hPlus.y + 2.0))
+assert_eq(count(brt, "Text", "content", "00:45"), 1)
+let mPlus = named(brt, "Button", "label", "M+")
+assert(click(brt, bhost, lay(brt), mPlus.x + 2.0, mPlus.y + 2.0))
+assert_eq(count(brt, "Text", "content", "00:00"), 1)
+
 print("date_picker_test ok")

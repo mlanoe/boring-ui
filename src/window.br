@@ -1,0 +1,589 @@
+# Native window host driver for boring-ui (`ui.window`).
+#
+# Encapsulates the frame pacing, animation presentation, pointer/touch/wheel/key/IME routing,
+# accessibility request dispatch, clipboard synchronization, safe-area / system-settings / theme-choice
+# synchronization, and IME caret geometry that every native `Screen` window application needs.
+#
+# Pure Boring (no external Rust crates): works in `boring run`, `boring build`, and `--target simd|wgpu`.
+# For real-font text shaping (`swash`) and `GlyphCache` frame encoding, see `text.window` (`text/src/window.br`).
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use ui.events.*
+use ui.anim.*
+use ui.animator.*
+use ui.accessibility.*
+use ui.mobile.*
+use ui.system_settings.*
+use render.display_list.*
+use render.scale.*
+use render.raster_font.*
+use render.image_file.*
+
+# ── IME byte-offset to grapheme conversion ───────────────────────────────────────────────────────
+# The platform reports the caret in the marked text as a UTF-8 BYTE offset (`screen.marked_end`, -1 when the IME gave
+# none); boring-ui's runtime works in grapheme indices (`imeUpdate`'s `cursor`), and Boring itself never exposes bytes,
+# so the offset is walked scalar by scalar.
+
+# The UTF-8 length of the scalar value `code`.
+pub def int utf8Length(int code):
+    if code < 128:
+        return 1
+    if code < 2048:
+        return 2
+    if code < 65536:
+        return 3
+    4
+
+# The grapheme index of byte offset `byteOffset` in `text`: the first cluster boundary at or after it (the offset of
+# a caret never splits a cluster, and rounding forward never leaves the caret before text the IME has passed). A
+# negative offset, or one past the end, is the end of the text.
+pub def int graphemeAtByte(string text, int byteOffset):
+    let count = text.graphemeCount
+    if byteOffset < 0:
+        return count
+    var seen = 0
+    var i = 0
+    while i < count:
+        if seen >= byteOffset:
+            return i
+        for c in text.graphemeSlice(i, i + 1).chars():
+            seen += utf8Length(ord(c))
+        i += 1
+    count
+
+# The caret's column in the field's text, in terminal cells: `caret` graphemes of `value` precede the composition,
+# and the composing `marked` text shows from there with its own caret `cursor` graphemes in.
+pub def int composingCells(string value, int caret, string marked, int cursor):
+    value.graphemeSlice(0, caret).displayWidth + marked.graphemeSlice(0, cursor).displayWidth
+
+# ── Layout & frame pacing (`Motion`) ─────────────────────────────────────────────────────────────
+
+pub def Placed placedOf(Runtime rt, int w, int h):
+    layout(rt, w as float, h as float) else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+# What the window keeps between frames besides the runtime: the animator, whether the runtime's layout has changed
+# since the last `commit`, where the pointer and caret were, and per-frame host outputs (IME state, clipboard write,
+# and next redraw schedule).
+pub struct Motion:
+    pub var Animator an = Animator()
+    pub var bool dirty = false
+    pub var int lastX = 0 - 1
+    # The pointer position the window reported at launch (before any real movement) and whether the pointer has moved or pressed since.
+    pub var int startX = 0 - 1
+    pub var int startY = 0 - 1
+    pub var bool pointerSeen = false
+    # The right button went to a context menu (`contextPress`), so its drag and release are not a finger's.
+    pub var bool rightContext = false
+    pub var int lastY = 0 - 1
+    # the previous primary press (time in seconds, position) and how many quick presses in a row it ended
+    pub var float32 pressAt = 0.0 - 10.0
+    pub var int pressX = 0 - 100
+    pub var int pressY = 0 - 100
+    pub var int clicks = 0
+    # the time of the previous frame (for inertia) and whether a fling is still running
+    pub var float32 lastSeconds = 0.0
+    pub var bool rolling = false
+    # whether the busy indicator was on at the previous frame
+    pub var bool busyShown = false
+    # the theme and appearance picks the root was last built with
+    pub var int shownTheme = 0
+    pub var int shownAppearance = 0
+    # when the system's appearance is read next (seconds of `screen.time`)
+    pub var float nextSystemPoll = 3.0
+    # the caret last reported to the input method (window points), and whether one has been
+    pub var int caretX = 0
+    pub var int caretY = 0
+    pub var bool caretKnown = false
+    # per-frame host outputs filled by `stepWindow`
+    pub var bool axServed = false
+    pub var bool clipboardChanged = false
+    pub var string clipboardOut = ""
+    pub var bool redrawImmediate = false
+    pub var int redrawAfterMs = 3000
+    pub var bool imeAllowed = false
+    pub var int imeX = 0
+    pub var int imeY = 0
+    pub var int imeW = 2
+    pub var int imeH = 16
+
+pub def void begin(mut Motion m, Placed first):
+    commit(m.an, first, nil, [], 0.0)
+
+# The layout to paint at `seconds`. `eventful`: an input event reached the runtime this frame. A frame that changed the
+# runtime hands the animator the new layout (the transaction's animation and triggered scopes apply to it); while an
+# animation runs, one that carries none (pointer motion, say) waits, so it does not snap the animation in flight. A
+# removal that finished is released first.
+pub def Placed paceFrame(mut Motion m, mut Runtime rt, Builder host, bool eventful, int x, int y, int w, int h, float32 seconds):
+    let now = (seconds as float) * 1000.0
+    if eventful or x != m.lastX or y != m.lastY:
+        m.dirty = true
+    m.lastX = x
+    m.lastY = y
+    if takeCompletion(m.an, now):
+        for id in retiringIds(rt):
+            _ = endRetirement(rt, host, id)
+            m.dirty = true
+    if m.dirty:
+        # a `Scroll(anchor, request)` asked to scroll: applied with the laid-out window before this frame's layout is taken
+        _ = applyScrollRequests(rt, host, placedOf(rt, w, h))
+        if glideActive(rt):
+            m.rolling = true
+        let animation = rt.takeAnimation()
+        let triggers = rt.takeTriggers()
+        if isAnimating(m.an, now) and animation == nil and triggers.length == 0:
+            return presentation(m.an, now)
+        commit(m.an, placedOf(rt, w, h), animation, triggers, now)
+        m.dirty = false
+    presentation(m.an, now)
+
+# Whether another frame is due without any input: an animation is running or finishing, or a change waits.
+pub def bool pacePending(Motion m, float32 seconds):
+    let now = (seconds as float) * 1000.0
+    m.dirty or m.rolling or isAnimating(m.an, now) or !m.an.completionTaken
+
+# Whether the pointer is really over the window: a window reports (0, 0) until the first pointer event, which must not count as hovering
+# whatever sits at the corner (a tooltip would show at launch). The first position is remembered; the pointer is known once it moves from it
+# or a button is pressed.
+pub def bool pointerKnown(mut Motion m, int x, int y, bool pressed):
+    if m.pointerSeen:
+        return true
+    if m.startX < 0:
+        m.startX = x
+        m.startY = y
+    if pressed or x != m.startX or y != m.startY:
+        m.pointerSeen = true
+    m.pointerSeen
+
+# The right mouse button: a context menu under the pointer takes the press; otherwise it stands in for a finger (touchStart / touchDrag / touchEnd).
+pub def void rightDown(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    m.rightContext = contextPress(rt, host, placedOf(rt, w, h), x as float, y as float)
+    if m.rightContext:
+        m.dirty = true
+    else:
+        touchStart(rt, host, w, h, x, y, seconds)
+
+pub def void rightHeld(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    if !m.rightContext:
+        touchDrag(m, rt, host, w, h, x, y, seconds)
+
+pub def void rightUp(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    if !m.rightContext:
+        touchEnd(m, rt, host, w, h, x, y, seconds)
+    m.rightContext = false
+
+pub def void touch(mut Motion m):
+    m.dirty = true
+
+# A primary press at (x, y) at `seconds`: a second or third press close in time and place is a double or triple click
+# (word / whole text); Shift extends the selection of a text field from where it was anchored.
+pub def void pressWith(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds, bool shift):
+    var near = x - m.pressX < 5 and m.pressX - x < 5 and y - m.pressY < 5 and m.pressY - y < 5
+    if near and seconds - m.pressAt < 0.4:
+        m.clicks = m.clicks + 1
+    else:
+        m.clicks = 1
+    m.pressAt = seconds
+    m.pressX = x
+    m.pressY = y
+    var mods = ""
+    if shift:
+        mods = "Range"
+    setClock(rt, (seconds as float) * 1000.0)
+    _ = pointerDownClicks(rt, host, placedOf(rt, w, h), x as float, y as float, mods, m.clicks)
+
+# One finger (a touch host, or the right mouse button standing in for one on a desktop): see events.br `touchDown`.
+pub def void touchStart(mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    _ = touchDown(rt, host, placedOf(rt, w, h), x as float, y as float, seconds as float)
+
+pub def void touchDrag(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    if touchMove(rt, host, placedOf(rt, w, h), x as float, y as float, seconds as float):
+        m.dirty = true
+
+pub def void touchEnd(mut Motion m, mut Runtime rt, Builder host, int w, int h, int x, int y, float32 seconds):
+    _ = touchUp(rt, host, placedOf(rt, w, h), x as float, y as float, seconds as float)
+    m.dirty = true
+
+# Advances a running fling by the time since the previous frame; `rolling` keeps the loop asking for frames while it lasts.
+pub def void paceMomentum(mut Motion m, mut Runtime rt, Builder host, int w, int h, float32 seconds):
+    var dt = (seconds - m.lastSeconds) as float
+    m.lastSeconds = seconds
+    if dt < 0.001:
+        dt = 0.001
+    if dt > 0.1:
+        dt = 0.1
+    m.rolling = false
+    if momentumActive(rt):
+        m.rolling = stepMomentum(rt, host, placedOf(rt, w, h), dt)
+        m.dirty = true
+    if glideActive(rt):
+        if stepGlide(rt, host, placedOf(rt, w, h), dt):
+            m.rolling = true
+        m.dirty = true
+
+# The system cancelled the touch (a call, the window lost): nothing is pressed and nothing flings.
+pub def void touchAbort(mut Motion m, mut Runtime rt):
+    touchCancel(rt)
+    m.dirty = true
+
+# ── Reactive host cells (`BusyCells`) ────────────────────────────────────────────────────────────
+
+# The cells the loop writes and the root builder reads (the indeterminate bar, screen size & safe area, system
+# settings, and theme/appearance overrides).
+pub struct BusyCells:
+    pub Slot<float>'actor phase = Slot(value = 0.0)
+    pub Slot<bool>'actor busy = Slot(value = false)
+    pub Slot<ScreenInfo>'actor screenInfo = Slot(value = ScreenInfo())
+    pub Slot<SystemSettings>'actor settings = Slot(value = SystemSettings())
+    pub Slot<int>'actor themeChoice = Slot(value = 0)
+    pub Slot<int>'actor appearanceChoice = Slot(value = 0)
+
+# The indeterminate bar's phase (0...1) at `seconds`: one sweep every 1.4 s.
+pub def float phaseAt(float32 seconds):
+    let t = (seconds as float) * 0.7
+    t - (t as int) as float
+
+# Keeps the window in step with the busy indicator: while `cells.busy` the phase advances and the root is rebuilt every frame (its
+# new phase), and once more when `busy` has just changed (the view reads it). True when the runtime was rebuilt, so the frame must be painted.
+pub def bool syncBusy(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, float32 seconds):
+    let busy = cells.busy.value
+    if !busy and !m.busyShown:
+        return false
+    cells.phase.value = phaseAt(seconds)
+    m.busyShown = busy
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
+
+# Feeds the runtime's hover clock (tooltips appear after their delay); true when it rebuilt the runtime, so the frame must be painted.
+pub def bool syncHover(mut Motion m, mut Runtime rt, Builder host, float32 seconds):
+    let rebuilt = tickHover(rt, host, (seconds as float) * 1000.0)
+    if rebuilt:
+        m.dirty = true
+    rebuilt
+
+# Hands the root view the window's size class and insets (the window is a phone-sized one when it is narrow): the root is rebuilt only when
+# something a layout can see changed. True when it was, so the frame must be painted. The insets of the safe area are in points.
+pub def bool syncScreen(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, int w, int h, float top, float left, float bottom, float right):
+    let now = ScreenInfo(width = w as float, height = h as float, safeTop = top, safeLeft = left, safeBottom = bottom, safeRight = right)
+    if !screenChanged(cells.screenInfo.value, now):
+        return false
+    cells.screenInfo.value = now
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
+
+# Hands the root view the system's appearance: the root is rebuilt, so the theme is derived again, only
+# when the appearance changed. True when it was, so the frame must be painted.
+pub def bool syncSystem(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, SystemSettings now):
+    let before = cells.settings.value
+    if before.dark == now.dark and before.contrast == now.contrast and before.accent == now.accent and before.textScale == now.textScale:
+        return false
+    cells.settings.value = now
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
+
+# Same as `syncSystem`, discarding the return value so it can be called as a statement inside a `Screen` render loop.
+pub def void applySystem(mut Motion m, mut Runtime rt, Builder host, BusyCells cells, SystemSettings now):
+    _ = syncSystem(m, rt, host, cells, now)
+
+# Rebuilds the root when the user picked another theme or appearance (the callbacks of the window's picker write the cells). True when it did.
+pub def bool syncChoice(mut Motion m, mut Runtime rt, Builder host, BusyCells cells):
+    let theme = cells.themeChoice.value
+    let appearance = cells.appearanceChoice.value
+    if theme == m.shownTheme and appearance == m.shownAppearance:
+        return false
+    m.shownTheme = theme
+    m.shownAppearance = appearance
+    rt.beginEvent()
+    rt.invalidateRoot()
+    rt.endEvent(host)
+    m.dirty = true
+    true
+
+pub def bool isBusy(BusyCells cells):
+    cells.busy.value
+
+# Whether the system settings should be polled on this frame (`focusGained` or `nextSystemPoll` elapsed), advancing `nextSystemPoll` by 3 s.
+pub def bool shouldPollSystem(mut Motion m, bool focusGained, float32 seconds):
+    if focusGained or (seconds as float) >= m.nextSystemPoll:
+        m.nextSystemPoll = (seconds as float) + 3.0
+        return true
+    false
+
+# ── Runtime input & accessibility helpers ────────────────────────────────────────────────────────
+
+pub def void release(mut Runtime rt, Builder host, int w, int h, int x, int y):
+    _ = pointerUp(rt, host, placedOf(rt, w, h), x as float, y as float)
+
+pub def void motion(mut Runtime rt, Builder host, int w, int h, int x, int y):
+    _ = pointerMove(rt, host, placedOf(rt, w, h), x as float, y as float)
+
+pub def void wheel(mut Runtime rt, Builder host, int w, int h, int x, int y, float dx, float dy):
+    _ = scrollBy(rt, host, placedOf(rt, w, h), x as float, y as float, dx as float, dy as float)
+
+# A key as events.br names it: Space, Shift-variants, and the editing shortcuts of the platform's command key.
+pub def void keyDown(mut Runtime rt, Builder host, string name, bool shift, bool command):
+    var mapped = name
+    if name == " ":
+        mapped = "Space"
+    if shift and (name == "Tab" or name == "Left" or name == "Right" or name == "Home" or name == "End" or name == "Up" or name == "Down"):
+        mapped = "Shift{name}"
+    if command and name == "a":
+        mapped = "SelectAll"
+    # the internal clipboard (copy and cut fill it from the focused field's selection, paste inserts it)
+    if command and name == "c":
+        _ = copySelection(rt)
+        return
+    if command and name == "x":
+        _ = cutSelection(rt, host)
+        return
+    if command and name == "v":
+        _ = pasteClipboard(rt, host)
+        return
+    if command and name == "z":
+        if shift:
+            mapped = "Redo"
+        else:
+            mapped = "Undo"
+    _ = keyPress(rt, host, mapped)
+
+# One frame of text input. While the input method composes, its marked text is shown at the caret (the bound
+# value is untouched); the text that arrives with the end of a composition is committed as one edit, and typed
+# text is inserted. An empty `marked` with no text, while a composition is on, abandons it.
+pub def void textInput(mut Runtime rt, Builder host, string marked, int markedEnd, string text):
+    if marked != "":
+        # the caret inside the composing text, from the platform's byte offset (the end when it gave none)
+        _ = imeUpdate(rt, host, marked, graphemeAtByte(marked, markedEnd))
+    if text != "":
+        if rt.composition != nil:
+            _ = imeCommit(rt, host, text)
+        else:
+            _ = typeText(rt, host, text)
+    if marked == "" and text == "":
+        if rt.composition != nil:
+            _ = imeCancel(rt, host)
+
+# A request from the screen reader (`screen.accessibilityRequests`). The host reports a click as "activate" whatever
+# the control: a toggle takes it as its own "toggle". True when the runtime acted on it (the window must be drawn again).
+# `placed` is the last frame laid out: the one the screen reader saw, which "scrollIntoView" measures against.
+pub def bool serveRequest(mut Runtime rt, Builder host, Placed placed, int id, string action, string arg):
+    if action == "scrollIntoView":
+        return axScrollIntoView(rt, placed, id)
+    var wanted = action
+    if action == "activate":
+        if let node = rt.find(id):
+            if node.kind == "Toggle":
+                wanted = "toggle"
+    axPerform(rt, host, id, wanted, arg)
+
+# Same as `serveRequest`, recording on `m.axServed` that an accessibility request acted this frame.
+pub def void noteAccessibilityRequest(mut Motion m, mut Runtime rt, Builder host, Placed placed, int id, string action, string arg):
+    if serveRequest(rt, host, placed, id, action, arg):
+        m.axServed = true
+
+# ── Caret tracking for the input method's candidate window ───────────────────────────────────────
+
+pub def Placed? nodeOf(Placed p, int id):
+    if p.id == id:
+        return p
+    for c in p.children:
+        if let found = nodeOf(c, id):
+            return found
+    nil
+
+# The focused text field's caret as [x, y] in window points (the window's corner when none).
+pub def [int] caretAt(Runtime rt, int w, int h):
+    if let f = rt.focus:
+        # (laid out only for a focused field: most frames have none)
+        let placed = placedOf(rt, w, h)
+        if let node = nodeOf(placed, f.id):
+            if node.kind == "TextField":
+                let body = placed.theme.fontSizeNamed("Body")
+                let caret = selectionOf(rt, f)[0]
+                let value = node.props["value"] else ("")
+                # (the measurer's caret stops follow the visual order in right-to-left or mixed text)
+                var shown = "{value}"
+                var at = caret
+                if let c = rt.composition:
+                    shown = "{value.graphemeSlice(0, caret)}{c.text}{value.graphemeSlice(caret, value.graphemeCount)}"
+                    at = caret + c.cursor
+                let offset = placed.theme.measurer.caretX(shown, at, body, 0)
+                let origin = fieldOrigin(placed.theme.measurer, shown, at, node.w, body)
+                return [(node.x + 4.0 + origin + offset) as int, (node.y + maxOf(0.0, (node.h - body) / 2.0)) as int]
+    [0, 0]
+
+# Remembers where the caret is for the quiet frames that follow.
+pub def void trackCaret(mut Motion m, Runtime rt, int w, int h):
+    let caret = caretAt(rt, w, h)
+    m.caretX = caret[0]
+    m.caretY = caret[1]
+    m.caretKnown = true
+
+# ── Rasterizer setup & image loading helpers ─────────────────────────────────────────────────────
+
+pub def [uint] atlasWords():
+    let small = buildAtlas()
+    mut [uint] atlas = []
+    for i in 0..<small.length:
+        atlas.push(small[i] as uint)
+    atlas
+
+# A transparent picture for a window of `n` pixels (the kernel overwrites every one of them).
+pub def [uint] blank(int n):
+    [0 as uint for ..<n]
+
+# A cleared picture of `n` pixels (a loop body cannot build the array itself).
+pub def [uint] blankPicture(int n):
+    [0 as uint for ..<n]
+
+pub def Runtime startedRuntime(Builder host):
+    mut fresh = Runtime()
+    fresh.start(host)
+    fresh
+
+# Loads each file in `names` from `dir` (PNG, JPEG or binary PPM); missing or unsupported files are skipped.
+pub def [Bitmap] readImagesFrom(string dir, [string] names) throws:
+    mut [Bitmap] images = []
+    for name in names:
+        let path = "{dir}/{name}"
+        if fs.exists(path):
+            if let img = loadImage(name, path):
+                images.push(img)
+    images
+
+pub def [Bitmap] loadImagesFrom(string dir, [string] names):
+    readImagesFrom(dir, names) else ([])
+
+# ── Unified per-frame window stepper (`stepWindow`) ──────────────────────────────────────────────
+
+# Runs one complete frame of a native window:
+#   1. Scales physical window & pointer coordinates to logical points (`scale`).
+#   2. Dispatches pointer motion, primary press/release (with multi-click & Shift selection), touch / right-button
+#      gestures & momentum flings, mouse wheel scrolling, keyboard shortcuts (including clipboard copy/cut/paste),
+#      and IME composition/commit.
+#   3. Synchronizes reactive cells (`BusyCells`: indeterminate bar phase, hover delay timer, screen size & safe-area
+#      insets, theme/appearance picker choices).
+#   4. Advances the `Animator` (`paceFrame`) and updates `m`'s per-frame outputs (`redrawImmediate`, `redrawAfterMs`,
+#      `imeAllowed`, `imeX`, `imeY`, `imeW`, `imeH`, `clipboardChanged`, `clipboardOut`), returning the `Placed`
+#      tree to present and expose to accessibility.
+pub def Placed stepWindow(
+    mut Motion m,
+    mut Runtime rt,
+    Builder host,
+    BusyCells cells,
+    int screenW,
+    int screenH,
+    float scale,
+    bool resized,
+    int mouseX,
+    int mouseY,
+    bool leftPressed,
+    bool leftReleased,
+    bool rightPressed,
+    bool rightReleased,
+    bool rightHeldNow,
+    float scrollX,
+    float scrollY,
+    bool touchStarted,
+    bool touching,
+    bool touchEnded,
+    bool touchCancelled,
+    int touchX,
+    int touchY,
+    [string] keyEvents,
+    bool shift,
+    bool command,
+    string clipboardIn,
+    string marked,
+    int markedEnd,
+    string text,
+    int safeTop,
+    int safeLeft,
+    int safeBottom,
+    int safeRight,
+    float32 seconds
+):
+    var s = scale
+    if s <= 0.0:
+        s = 1.0
+    let pw = (screenW as float / s) as int
+    let ph = (screenH as float / s) as int
+    let mx = (mouseX as float / s) as int
+    let my = (mouseY as float / s) as int
+    let tx = (touchX as float / s) as int
+    let ty = (touchY as float / s) as int
+
+    let served = m.axServed
+    m.axServed = false
+    m.clipboardChanged = false
+    m.clipboardOut = ""
+
+    let quiet = !resized and !leftPressed and !leftReleased and !rightPressed and !rightReleased and !rightHeldNow and scrollX == 0.0 and scrollY == 0.0 and !touchStarted and !touching and !touchEnded and !touchCancelled and keyEvents.length == 0 and text == "" and marked == "" and !served and !m.rolling and !m.dirty and mx == m.lastX and my == m.lastY and m.caretKnown
+    if !quiet and pointerKnown(m, mx, my, leftPressed or rightPressed):
+        motion(rt, host, pw, ph, mx, my)
+    if leftPressed:
+        pressWith(m, rt, host, pw, ph, mx, my, seconds, shift)
+    if leftReleased:
+        _ = pointerUp(rt, host, placedOf(rt, pw, ph), mx as float, my as float)
+    if touchStarted:
+        touchStart(rt, host, pw, ph, tx, ty, seconds)
+    if touching:
+        touchDrag(m, rt, host, pw, ph, tx, ty, seconds)
+    if touchEnded:
+        touchEnd(m, rt, host, pw, ph, tx, ty, seconds)
+    if touchCancelled:
+        touchAbort(m, rt)
+    if rightPressed:
+        rightDown(m, rt, host, pw, ph, mx, my, seconds)
+    if rightHeldNow:
+        rightHeld(m, rt, host, pw, ph, mx, my, seconds)
+    if rightReleased:
+        rightUp(m, rt, host, pw, ph, mx, my, seconds)
+    paceMomentum(m, rt, host, pw, ph, seconds)
+    if scrollX != 0.0 or scrollY != 0.0:
+        wheel(rt, host, pw, ph, mx, my, scrollX / s, scrollY / s)
+    for name in keyEvents:
+        if command and name == "v":
+            rt.clipboard = clipboardIn
+        keyDown(rt, host, name, shift, command)
+        if command and (name == "c" or name == "x"):
+            m.clipboardChanged = true
+            m.clipboardOut = rt.clipboard
+    textInput(rt, host, marked, markedEnd, text)
+    for name in keyEvents:
+        touch(m)
+    let busyRebuilt = syncBusy(m, rt, host, cells, seconds)
+    let hoverRebuilt = syncHover(m, rt, host, seconds)
+    let screenRebuilt = syncScreen(m, rt, host, cells, pw, ph, safeTop as float / s, safeLeft as float / s, safeBottom as float / s, safeRight as float / s)
+    let choiceRebuilt = syncChoice(m, rt, host, cells)
+    let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt or choiceRebuilt
+    let eventful = rebuilt or served or resized or leftPressed or leftReleased or scrollX != 0.0 or scrollY != 0.0 or text != "" or marked != ""
+    let shown = paceFrame(m, rt, host, eventful, mx, my, pw, ph, seconds)
+    if pacePending(m, seconds) or isBusy(cells) or hoverWaiting(rt):
+        m.redrawImmediate = true
+        m.redrawAfterMs = 0
+    else:
+        m.redrawImmediate = false
+        var waitMs = ((m.nextSystemPoll - (seconds as float)) * 1000.0) as int + 1
+        if waitMs < 1:
+            waitMs = 1
+        m.redrawAfterMs = waitMs
+    if !quiet:
+        trackCaret(m, rt, pw, ph)
+    m.imeAllowed = textFieldFocused(rt)
+    m.imeX = (m.caretX as float * s) as int
+    m.imeY = (m.caretY as float * s) as int
+    m.imeW = (2.0 * s) as int
+    m.imeH = (16.0 * s) as int
+    shown

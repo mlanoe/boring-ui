@@ -18,7 +18,7 @@ view Panel:
 
     body():
         Column(alignment = .Leading, spacing = 20.0):
-            Menu(label = "File", items = ["New", "Open", "Delete"], danger = 2, onSelect = (i):
+            Menu(label = "File", items = ["New", "Open", "-", "Delete"], danger = 3, onSelect = (i):
                 self.picked(i))
             Button(label = "Elsewhere", onActivate = ():
                 self.picked(-1))
@@ -58,9 +58,11 @@ rt.start(host)
 assert(button(rt, "File ▾") != nil)
 assert(button(rt, "Open") == nil)
 
-# Open: the items show; the destructive one carries its role.
+# Open: the items show; the "-" item renders a Separator instead of a Button, and the destructive one carries its role.
 assert(press(rt, host, "File ▾"))
 assert(button(rt, "Open") != nil)
+assert(button(rt, "-") == nil)
+assert_eq(ofKind(lay(rt), "Separator").length, 1)
 let del = button(rt, "Delete") else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
 assert_eq(del.props["role"] else (""), "Destructive")
 

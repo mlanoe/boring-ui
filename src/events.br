@@ -404,7 +404,7 @@ def bool stepHistory(mut Runtime rt, Builder host, bool backwards):
     hist.current = target
     hist.lastKind = ""
     hist.expectCaret = -1
-    let priorHistory = rt.histories[f.id]
+    let EditHistory? priorHistory = rt.histories[f.id]
     let priorAnchor = anchorOf(rt, f, value.graphemeCount, here)
     rt.histories[f.id] = hist
     let c = clampTo(targetCaret, 0, target.graphemeCount)
@@ -422,7 +422,7 @@ def bool replaceRange(mut Runtime rt, Builder host, Handle h, Mounted node, int 
     let next = "{text.graphemeSlice(0, a)}{insert}{text.graphemeSlice(b, len)}"
     let caretBefore = caretOf(rt, h, len)
     let anchorBefore = anchorOf(rt, h, len, caretBefore)
-    let priorHistory = rt.histories[h.id]
+    let EditHistory? priorHistory = rt.histories[h.id]
     if next != text:
         recordEdit(rt, h, text, caretBefore, a, b, insert, next)
     moveCaret(rt, h, a + insert.graphemeCount, a + insert.graphemeCount)
@@ -1636,15 +1636,15 @@ def bool defaultKey(mut Runtime rt, Builder host, string name):
         focusControl(rt, host, order[next])
         return true
     if name == "Escape":
+        let popovers = rt.presentedPopovers()
+        if popovers.length > 0:
+            if let h = rt.handle(popovers[popovers.length - 1]):
+                return act(rt, host, h, "dismiss", "")
         if activateScopeButton(rt, host, true):
             return true
         # No Cancel button: the presented sheet performs its ordinary dismissal (writes `false`).
         if rt.openSheets.length > 0:
             if let h = rt.handle(rt.openSheets[rt.openSheets.length - 1]):
-                return act(rt, host, h, "dismiss", "")
-        let popovers = rt.presentedPopovers()
-        if popovers.length > 0:
-            if let h = rt.handle(popovers[popovers.length - 1]):
                 return act(rt, host, h, "dismiss", "")
         return false
     if let f = rt.focus:

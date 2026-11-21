@@ -101,7 +101,7 @@ mut rt = Runtime()
 rt.start(host)
 
 def int n(Runtime rt, string which):
-    let s = pageState(rt)
+    mut s = pageState(rt)
     if which == "tap":
         return Page().tapCount(s)
     if which == "double":

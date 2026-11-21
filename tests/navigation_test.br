@@ -1,13 +1,25 @@
-# NavigationStack / NavigationLink / NavigationBack (src/controls.br): push by name, the bar's back button, one page mounted at a time.
+# NavigationStack / NavigationLink / NavigationBack / NavigationSplitView (src/controls.br):
+# - push by name, the bar's back button, one active page mounted at a time
+# - Escape key pops when deeper than root (unless a Popover or Sheet is open, which Escape dismisses first)
+# - Rightwards swipe gesture pops one level
+# - Animated push/pop slide transitions (`Transition(.Slide)` under `AnimationScope`)
+# - `NavigationSplitView`: side-by-side master-detail in Regular width, collapses to `NavigationStack` in Compact width
 # Run: boring run tests/navigation_test.br
 
 use boring.ui.*
 use ui.core.*
 use ui.layout.*
 use ui.events.*
+use ui.animator.*
 use ui.controls.*
+use ui.mobile.*
 
 view Panel:
+    state int choice = 0
+
+    def pickChoice(int i):
+        choice = i
+
     body():
         NavigationStack(title = "Home", names = ["a", "b"], titles = ["Page A", "Page B"]):
             Column(alignment = .Leading, spacing = 4.0):
@@ -16,6 +28,8 @@ view Panel:
                 NavigationBack(label = "Root back")
             Column(alignment = .Leading, spacing = 4.0):
                 Text(content = "page a")
+                Picker(selected = choice, options = ["One", "Two"], onSelect = (i):
+                    self.pickChoice(i))
                 NavigationLink(label = "Open B", to = "b")
                 NavigationBack(label = "Done")
             Column(alignment = .Leading, spacing = 4.0):
@@ -38,11 +52,14 @@ def [Placed] ofKind(Placed p, string kind):
             out.push(f)
     out
 
-def bool hasText(Runtime rt, string s):
-    for t in ofKind(lay(rt), "Text"):
+def bool hasTextIn(Placed root, string s):
+    for t in ofKind(root, "Text"):
         if (t.props["content"] else ("")) == s:
             return true
     false
+
+def bool hasText(Runtime rt, string s):
+    hasTextIn(lay(rt), s)
 
 def bool pressLabel(mut Runtime rt, Builder host, string label):
     for b in ofKind(lay(rt), "Button"):
@@ -50,40 +67,161 @@ def bool pressLabel(mut Runtime rt, Builder host, string label):
             return click(rt, host, lay(rt), b.x + 2.0, b.y + 2.0)
     false
 
+def Placed? findText(Placed p, string s):
+    for t in ofKind(p, "Text"):
+        if (t.props["content"] else ("")) == s:
+            return t
+    nil
+
 let host = ViewRoot(inner = PanelBuilder())
 mut rt = Runtime()
 rt.start(host)
 
-# The root: its title, its content, no back button.
+# 1. The root: its title, its content, no back button, Escape does nothing.
 assert(hasText(rt, "Home"))
 assert(hasText(rt, "root"))
 assert(!hasText(rt, "page a"))
 assert(!pressLabel(rt, host, "‹ Back"))
+assert(!keyPress(rt, host, "Escape"))
 # NavigationBack is disabled at the root: it does nothing.
 assert(!pressLabel(rt, host, "Root back"))
 assert(hasText(rt, "root"))
 
-# Push "a": its title and content replace the root's; the bar gets a back button.
+# 2. Push "a": its title and content replace the root's; the bar gets a back button.
 assert(pressLabel(rt, host, "Open A"))
 assert(hasText(rt, "Page A"))
 assert(hasText(rt, "page a"))
 assert(!hasText(rt, "root"))
 
-# Push "b" on top, then the bar's back button returns to "a", then NavigationBack to the root.
+# 3. Push "b" on top, then the bar's back button returns to "a", then NavigationBack to the root.
 assert(pressLabel(rt, host, "Open B"))
 assert(hasText(rt, "page b"))
 assert(hasText(rt, "Page B"))
 assert(pressLabel(rt, host, "‹ Back"))
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
 assert(hasText(rt, "page a"))
 assert(pressLabel(rt, host, "Done"))
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
 assert(hasText(rt, "root"))
 assert(hasText(rt, "Home"))
 
-# An unknown page name has no page: the root shows under a back button, and Back returns to the page below.
+# 4. Escape pops when deeper than root, but dismisses an open Popover first without popping the page.
 assert(pressLabel(rt, host, "Open A"))
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
+assert(hasText(rt, "page a"))
+# Open the Picker's Popover on Page A
+assert(pressLabel(rt, host, "One ▾"))
+assert(rt.presentedPopovers().length == 1)
+# First Escape closes the Popover and keeps us on Page A
+assert(keyPress(rt, host, "Escape"))
+assert_eq(rt.presentedPopovers().length, 0)
+assert(hasText(rt, "page a"))
+# Second Escape pops Page A back to Root
+assert(keyPress(rt, host, "Escape"))
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
+assert(hasText(rt, "root"))
+assert(hasText(rt, "Home"))
+
+# 5. Rightwards swipe pops the top page.
+assert(pressLabel(rt, host, "Open A"))
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
+assert(hasText(rt, "page a"))
+let placedA = lay(rt)
+_ = pointerDown(rt, host, placedA, 30.0, 120.0)
+_ = pointerMove(rt, host, placedA, 110.0, 120.0)
+_ = pointerUp(rt, host, lay(rt), 110.0, 120.0)
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
+assert(hasText(rt, "root"))
+
+# 6. Animated push/pop slide transition via Animator: midway through a push, the entering page is shifted by > 0 px
+# and both the outgoing ghost and the incoming page are present in the presentation tree.
+mut anim = Animator()
+commit(anim, lay(rt), nil, [], 0.0)
+assert(pressLabel(rt, host, "Open A"))
+let targetA = lay(rt)
+commit(anim, targetA, rt.takeAnimation(), rt.takeTriggers(), 100.0)
+assert(isAnimating(anim, 150.0))
+let mid = presentation(anim, 210.0)
+assert(hasTextIn(mid, "page a"))
+assert(hasTextIn(mid, "root"))
+let midPageA = findText(mid, "page a") else (mid)
+let restPageA = findText(targetA, "page a") else (targetA)
+assert(midPageA.x > restPageA.x + 5.0)
+let done = presentation(anim, 400.0)
+assert(!isAnimating(anim, 400.0))
+let donePageA = findText(done, "page a") else (done)
+assert(donePageA.x - restPageA.x < 0.01 and restPageA.x - donePageA.x < 0.01)
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
+
+# 7. An unknown page name has no page: the root shows under a back button, and Back returns to the page below.
 assert(pressLabel(rt, host, "Open B"))
 assert(pressLabel(rt, host, "Open nothing"))
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
 assert(hasText(rt, "root"))
 assert(pressLabel(rt, host, "‹ Back"))
+for id in retiringIds(rt):
+    _ = endRetirement(rt, host, id)
 assert(hasText(rt, "page b"))
+
+# 8. NavigationSplitView: side-by-side master-detail in Regular width, collapses to NavigationStack in Compact width.
+view SplitPanel:
+    ScreenInfo info = ScreenInfo()
+
+    body():
+        NavigationSplitView(info = info, title = "Mail", names = ["inbox", "sent"], titles = ["Inbox", "Sent"]):
+            Column(alignment = .Leading, spacing = 4.0):
+                NavigationLink(label = "Inbox", to = "inbox")
+                NavigationLink(label = "Sent", to = "sent")
+            Text(content = "inbox messages")
+            Text(content = "sent messages")
+
+struct SplitBuilder as ViewBuilder:
+    Slot<ScreenInfo>'actor info = Slot(value = ScreenInfo(width = 800.0, height = 500.0))
+    req View buildView(mut Runtime rt): SplitPanel(info = info.value)
+
+let splitInner = SplitBuilder()
+let splitHost = ViewRoot(inner = splitInner)
+mut splitRt = Runtime()
+splitRt.start(splitHost)
+
+# Regular width (800x500): both sidebar links AND the default first detail ("inbox messages") are visible side by side
+assert(hasText(splitRt, "Mail"))
+assert(hasText(splitRt, "inbox messages"))
+assert(!hasText(splitRt, "sent messages"))
+# Clicking "Sent ›" in the sidebar switches the detail column to "sent messages" while keeping the sidebar visible
+assert(pressLabel(splitRt, splitHost, "Sent"))
+for id in retiringIds(splitRt):
+    _ = endRetirement(splitRt, splitHost, id)
+assert(hasText(splitRt, "Mail"))
+assert(hasText(splitRt, "sent messages"))
+assert(!hasText(splitRt, "inbox messages"))
+
+# Compact width (390x844): collapses to NavigationStack — root shows the sidebar links, detail is pushed on demand
+splitInner.info.value = ScreenInfo(width = 390.0, height = 844.0)
+splitRt.beginEvent()
+splitRt.invalidateRoot()
+splitRt.endEvent(splitHost)
+for id in retiringIds(splitRt):
+    _ = endRetirement(splitRt, splitHost, id)
+assert(hasText(splitRt, "Mail"))
+assert(!hasText(splitRt, "inbox messages"))
+assert(pressLabel(splitRt, splitHost, "Sent"))
+for id in retiringIds(splitRt):
+    _ = endRetirement(splitRt, splitHost, id)
+assert(hasText(splitRt, "Sent"))
+assert(hasText(splitRt, "sent messages"))
+assert(keyPress(splitRt, splitHost, "Escape"))
+for id in retiringIds(splitRt):
+    _ = endRetirement(splitRt, splitHost, id)
+assert(hasText(splitRt, "Mail"))
+assert(!hasText(splitRt, "sent messages"))
+
 print "navigation_test ok"

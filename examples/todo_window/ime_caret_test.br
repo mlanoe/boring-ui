@@ -1,6 +1,6 @@
 # Byte offsets from the platform to grapheme indices (ime_caret.br). Run from this directory: boring run ime_caret_test.br
 
-use ime_caret
+use ui.window.*
 
 # ASCII: bytes are graphemes; none / past the end mean the end
 assert_eq(graphemeAtByte("nihao", 0), 0)

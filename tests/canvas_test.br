@@ -18,6 +18,8 @@ struct Builder1 as ViewBuilder:
                 HLine(color = "#000000", length = 100.0, thickness = 2.0)
             At(x = 100.0, y = 60.0):
                 Capsule(color = "#ffff00", width = 50.0, height = 10.0)
+            At(x = 15.0, y = 50.0):
+                Rectangle(width = 30.0, height = 12.0, stroke = "#ff00ff", strokeWidth = 2.0)
             for i in 0..<3 with i:
                 At(x = 20.0 * (i as float), y = 40.0):
                     Rectangle(color = "#abcdef", width = 4.0, height = 4.0)
@@ -73,4 +75,17 @@ let dots = fills(rt, "#abcdef")
 assert_eq(dots.length, 3)
 assert_eq(dots[2].x, 40.0)
 assert_eq(dots[2].y, 40.0)
+
+# a hollow rectangle (`color = ""`, `stroke = "#ff00ff"`) emits a StrokeRect command, not a FillRect
+mut strokes = [] as [Command]
+for c in displayList(lay(rt)):
+    if c.kind == "StrokeRect" and c.hex == "#ff00ff":
+        strokes.push(c)
+assert_eq(strokes.length, 1)
+assert_eq(strokes[0].x, 15.0)
+assert_eq(strokes[0].y, 50.0)
+assert_eq(strokes[0].w, 30.0)
+assert_eq(strokes[0].h, 12.0)
+assert_eq(strokes[0].value, 2.0)
+assert_eq(fills(rt, "#ff00ff").length, 0)
 print("canvas_test ok")

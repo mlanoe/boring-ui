@@ -716,16 +716,20 @@ window's bottom, after `delay` milliseconds (default 500, `Tooltip(delay = 0)` =
 content (a `Text`, an `Image`), tooltips for keyboard focus, touch long-press.
 
 
-## Navigation — `NavigationStack`, `NavigationLink`, `NavigationBack`
+## Navigation — `NavigationStack`, `NavigationLink`, `NavigationBack`, `NavigationSplitView`
 
 `NavigationStack(title = "Home", names = ["a", "b"], titles = ["Page A", "Page B"]):` takes the root page as its first child and the page named
 `names[i]` as child `1 + i` (`controls.br`, no native facade). It owns the path (its own `state`), shows only the top page under a bar with a
 "‹ Back" button (while deeper than the root) and the page's title, and provides a `Navigator` (an `EnvValue`: `push(name)`, `pop()`, `depth`) to
 everything inside. `NavigationLink(label, to)` pushes a page by name; `NavigationBack(label)` pops (disabled at the root). Pages below the top are not
 mounted, so their state is dropped while covered (as `TabView`'s other tabs); a name that is not in `names` shows the root under a back button.
+While deeper than the root:
+- **Keyboard & gesture back**: pressing `Escape` pops the top page (unless a `Popover` or `Sheet` is open, which `Escape` dismisses first), and a rightwards swipe gesture (`OnSwipe(direction = "right")`) pops one level.
+- **Animated push/pop transitions**: page changes animate with a horizontal slide (`Transition(insertion = .Slide, removal = .Slide, dx = ...)` under an `AnimationScope` keyed by depth and page name).
+- **`NavigationSplitView(info = info, title = "...", names = [...], titles = [...])`**: an adaptive master-detail container that shows the sidebar (`children[0]`) and the active detail page (`children[1 + i]`) side by side in a regular-width window (`!isCompact(info)`), and collapses to a single `NavigationStack` in a compact window (`isCompact(info)`).
+
 The window's Controls panel has a "Settings" stack. Test: `tests/navigation_test.br` (interpreter and `boring build`).
-Not done: the system back gesture / Escape, push and pop animations (`Transition`), a path bound from outside (deep links), a typed
-`navigationDestination(for:)` instead of names, a title bar that lives outside the stack, `NavigationSplitView`.
+Not done: a path bound from outside (deep links), a typed `navigationDestination(for:)` instead of names, a title bar that lives outside the stack.
 
 ## Forms and menus — `Form`, `Section`, `LabeledContent`, `Menu`
 
@@ -739,12 +743,12 @@ context menus (`contextMenu` on any view), submenus, separators and keyboard arr
 
 ## Grid — `Grid` and `equal` stacks
 
-`Grid(columns = 3, spacing = 8.0):` lays its children out left to right, three to a row, in columns of equal width (each cell takes an equal share of
-the width, a short last row keeps its columns); a row is as tall as its tallest cell. It is `controls.br` composition of `Row(equal = true)`s of `Fill`s:
-`equal` is a new field of `Row` and `Column` (stdlib `ui.br`, `layout.br` `equalised`) that raises every child's ideal size along the stack's axis to the
-largest, so the space left over is shared evenly. Every child is mounted (use `List` for long data). Test: `tests/grid_test.br`; the window's
-Settings > About page has a three-column grid of buttons. Not done: columns of different weights or fixed widths, spanning cells, row/column
-alignment per cell, a lazy (windowed) grid, a horizontal grid.
+`Grid(columns = 3, spacing = 8.0, columnWeights = [], widths = []):` lays its children out left to right, three to a row:
+- By default (`columnWeights = []` and `widths = []`), in columns of equal width (`Row(equal = true)`s of `Fill`s: `equal` raises every child's ideal size along the stack's axis to the largest, so the space left over is shared evenly).
+- With `columnWeights = [1, 2, ...]`, in columns whose widths divide the row's width proportionally by integer weights.
+- With `widths = [80.0, 140.0, ...]`, in columns of fixed pixel widths (`Frame(width = widths[c])`).
+
+A short last row keeps its columns; a row is as tall as its tallest cell. Every child is mounted (use `List` for long data). Test: `tests/grid_test.br`; the window's Settings > About page has a three-column grid of buttons. Not done: spanning cells across multiple columns/rows, row/column alignment per cell, a lazy (windowed) grid, a horizontal grid.
 
 ## Context menus — `ContextMenu`, `OnContext` and `contextPress`
 
@@ -766,21 +770,23 @@ submenus, keyboard (the menu key, Shift+F10) and arrow navigation inside the men
 
 See `tests/alert_test.br`; the todo window opens them from "Ask…" and from the context menu's Delete.
 
-## Date picker
+## Date and time pickers
 
-`DatePicker(year, month, day, onChange, minYear = 1900, maxYear = 2100)` is an inline month calendar (SwiftUI's graphical style): a header with previous/next month buttons, weekday initials and a Monday-first grid of day buttons, the selected day shown as the primary button. `onChange(year, month, day)` fires when a day is chosen. Browsing months is the picker's own state (an offset from the selected month, snapping back when a day is chosen), so the date itself stays in the caller's state. Wrap it in a `Popover` for a drop-down. The calendar math (`isLeapYear`, `daysInMonth`, `weekday`) is exported from `controls.br`. Not yet: time of day, ranges, locale-dependent first weekday and month names. See `tests/date_picker_test.br`.
+`DatePicker(year, month, day, onChange, minYear = 1900, maxYear = 2100, minMonth = 1, minDay = 1, maxMonth = 12, maxDay = 31)` is an inline month calendar (SwiftUI's graphical style): a header with previous/next month buttons, weekday initials and a Monday-first grid of day buttons, the selected day shown as the primary button. `onChange(year, month, day)` fires when a day is chosen. Days and months outside the `(minYear, minMonth, minDay)`...`(maxYear, maxMonth, maxDay)` range are disabled. Browsing months is the picker's own state (an offset from the selected month, snapping back when a day is chosen), so the date itself stays in the caller's state. Wrap it in a `Popover` for a drop-down. The calendar math (`isLeapYear`, `daysInMonth`, `weekday`) is exported from `controls.br`.
+
+`TimePicker(hour, minute, onChange, minuteStep = 1, label = "Time")` is a 24-hour `HH:MM` chooser with hour (`H-`/`H+`) and minute (`M-`/`M+`, stepped by `minuteStep`) buttons that wrap around `00:00`...`23:59`. Not yet: locale-dependent first weekday and month names. See `tests/date_picker_test.br`.
 
 ## Color picker
 
-`ColorPicker(bind red, bind green, bind blue, label = "Color")` is an inline color chooser: a swatch of the current color with its `#rrggbb` value, a red / green / blue slider (0...255, whole steps) each and a row of preset colors (Red, Green, Blue, Black, White) that write all three channels. The color is the three bound floats; `colorHex(red, green, blue)` turns them into the `#rrggbb` string every color property of the toolkit takes (values are clamped and truncated). Not yet: alpha, hue/saturation/brightness controls, a hex text field, an eyedropper. See `tests/color_picker_test.br`.
+`ColorPicker(bind red, bind green, bind blue, label = "Color", editableHex = false)` is an inline color chooser: a swatch of the current color with its `#rrggbb` value, an optional editable hex `TextField` (`editableHex = true`, applied on Enter or `"Apply"`), a red / green / blue slider (0...255, whole steps) each and a row of preset colors (Red, Green, Blue, Black, White) that write all three channels. The color is the three bound floats; `colorHex(red, green, blue)` turns them into `#rrggbb`, `colorHexAlpha(red, green, blue, alpha)` into `#rrggbbaa`, and `parseColorHex(hex)` parses `#RRGGBB` / `#RRGGBBAA` into `[r, g, b, a]`. Not yet: hue/saturation/brightness controls, an eyedropper. See `tests/color_picker_test.br`.
 
 ## Canvas and shapes
 
-The renderer paints rectangles (with rounded corners), text and images, so shapes are those, built from existing primitives: `Rectangle(color, width, height, radius = 0, stroke = "", strokeWidth = 1)`, `Circle(color, diameter, ...)`, `Capsule(color, width, height, ...)`, `HLine` / `VLine(color, length, thickness = 1)`. An outline is a second, inset fill under the shape's own, so a shape's fill is opaque (no hollow outlines).
+The renderer paints rectangles (with rounded corners), hollow inside strokes (`StrokeRect`), text and images, so shapes are built from existing primitives: `Rectangle(color = "", width, height, radius = 0, stroke = "", strokeWidth = 1)`, `Circle(color = "", diameter, ...)`, `Capsule(color = "", width, height, ...)`, `HLine` / `VLine(color, length, thickness = 1)`. When `color` is `""` (empty) and `stroke` is set, the shape draws a hollow outline (`Border` / `StrokeRect`); when both `color` and `stroke` are set, an inset fill of `color` sits inside `stroke`.
 
 `Canvas(width, height)` is a fixed-size, clipping drawing surface; its children are stacked in the top-left corner (later over earlier) and each is placed with `At(x, y)` (a paint and hit-test translation, so it never changes sizes). Children are ordinary views: shapes, text, images, even controls. A `for ... with` loop of `At`s inside a `Canvas` works (data-driven charts).
 
-Not yet: diagonal lines, arbitrary paths, ellipses, gradients, hollow strokes (they need renderer commands, not a view-level fix). See `tests/canvas_test.br`.
+Not yet: diagonal lines, arbitrary paths, ellipses, gradients. See `tests/canvas_test.br`.
 
 ## Drag and drop
 
@@ -825,11 +831,11 @@ Desktop(width = 480.0, height = 300.0, windowWidth = 200.0, titles = ["Notes", "
         self.tapped())
 ```
 
-Each child is the content of one window and `titles[i]` its title (a missing title reads "Window n"). Windows start cascaded. Drag a title bar to move its window; ✕ closes it, and a closed window waits in a dock at the bottom whose button brings it back where it was left. Pressing anywhere in a window raises it above the others. Window state (position, order, open) lives in the `Desktop`; each window's content keeps its own state while windows are raised.
+Each child is the content of one window and `titles[i]` its title (a missing title reads "Window n"). Windows start cascaded. Drag a title bar to move its window (clamped so the title bar stays inside the desktop area); `"−"` collapses/restores the window's body in place, `"□"` maximizes/restores the window across the desktop surface, `"⋮"` on the right of the title bar resizes the window's width (`[minWindowWidth, width]`), and `"✕"` closes it to a dock at the bottom whose button brings it back where it was left. Pressing anywhere in a window raises it above the others. Window state (position, width, order, open, minimized, maximized) lives in the `Desktop`; each window's content keeps its own state while windows are raised.
 
-It is built on a new low-level view, `OnPan`: a press inside it that lands on no control starts a pan; every movement writes "dx,dy" (points since the last report) into its bound string `value` and runs `onActivate`, until the release. A control inside (the ✕ button) keeps its own press.
+It is built on a new low-level view, `OnPan`: a press inside it that lands on no control starts a pan; every movement writes "dx,dy" (points since the last report) into its bound string `value` and runs `onActivate`, until the release. A control inside (the `"✕"`, `"−"`, `"□"` buttons) keeps its own press.
 
-Not done: moving a window by a finger (touch drags scroll), resizing, minimizing, keyboard window switching, windows larger than the desktop area being clamped.
+Not done: moving a window by a finger (touch drags scroll), keyboard window switching.
 
 ## Mobile adaptation
 
@@ -847,6 +853,21 @@ ScreenInfo(width = 390.0, height = 844.0, safeTop = 47.0, safeBottom = 34.0, key
 The todo window fills `ScreenInfo` from its size each frame (`syncScreen` in `pace.br`), so narrowing the window to a phone's width flips the "Controls" panel's `Adaptive` sample to its compact layout. The safe-area insets come from `screen.safeTop`/`.safeLeft`/`.safeBottom`/`.safeRight` (the wgpu host reads them from winit on iOS, 0 on a desktop) and the window wraps its root in `SafeArea`, so on a phone nothing sits under the notch or the home indicator. The software keyboard's height is not known to the host yet, so `keyboard` stays 0.
 
 Not done: a shipped iOS or Android host. The wgpu host builds for `aarch64-apple-ios-sim` and runs the todo window in the iOS Simulator (`examples/todo_window/ios_sim.sh [device]` builds, packages and launches it on a booted simulator): the window fills the screen, touch, the soft keyboard following the focused text field and the safe area work, and the generated host adopts the UIScene life cycle that a recent SDK requires (winit 0.30 does not: it registers a scene delegate and attaches winit's window to the scene, see the iOS note in boring's `docs/gpu-display.md`), so the binary keeps the SDK it was linked with. Nothing but that script packages the `.app` (hand-written `Info.plist` with the scene manifest and `UILaunchScreen`, ad-hoc signature). There is no device build (signing and provisioning), no Android host and no platform text-input adapter (see the design draft). Also not done: the software keyboard's height, orientation locking, and a `MinTarget` that enlarges the hit area without moving the layout. The name is `ScreenInfo` because the language reserves `Device` for GPUs.
+
+## Native window host (`ui.window`, `text.window`)
+
+`src/window.br` (`ui.window`) and `text/src/window.br` (`text.window`) encapsulate the host driver that connects a `boring-ui` `Runtime` to a native `Screen` loop and `TileKernel`:
+
+- **`ui.window` (`src/window.br`)** — pure Boring, testable headlessly (`tests/window_host_test.br`):
+  - `Motion` & `BusyCells`: animation frame pacing (`begin`, `paceFrame`, `pacePending`), multi-click & Shift-selection (`pressWith`), touch & right-button gestures and fling inertia (`touchStart`, `touchDrag`, `touchEnd`, `rightDown`, `rightHeld`, `rightUp`, `paceMomentum`, `touchAbort`), keyboard & clipboard routing (`keyDown`), UTF-8 byte-offset IME composition (`graphemeAtByte`, `composingCells`, `textInput`), accessibility request dispatch (`serveRequest`, `noteAccessibilityRequest`), IME candidate caret tracking (`caretAt`, `trackCaret`), and reactive host cell synchronization (`syncBusy`, `syncHover`, `syncScreen`, `syncSystem`, `applySystem`, `syncChoice`, `shouldPollSystem`).
+  - `stepWindow(...)`: single-call per-frame driver that scales physical coordinates by `screen.scale`, routes all pointer/touch/wheel/keyboard/IME events, syncs reactive cells, advances animations, and populates `pace.clipboardChanged` / `pace.clipboardOut`, `pace.redrawImmediate` / `pace.redrawAfterMs`, `pace.imeAllowed`, and `pace.imeX` / `pace.imeY` / `pace.imeW` / `pace.imeH`.
+  - `loadImagesFrom(dir, names)`, `atlasWords()`, `blankPicture(n)`, `startedRuntime(host)`.
+- **`text.window` (`text/src/window.br`)** — real-font (`swash`) measurement and glyphification helpers:
+  - `windowTheme(fontsDir)`: creates a `Theme` equipped with an `EngineMeasurer` loaded from `fontsDir` (with system fallback).
+  - `windowGlyphCache(fontsDir)`: creates a matching `GlyphCache` for regular, bold, italic, bold-italic, and fallback fonts.
+  - `firstFrame(host, images, cache, w, h)` and `encodeFrame(placed, images, cache, scale, w, h)`: scales the layout's display list, shapes every `DrawText` into `DrawGlyph` commands, and encodes the frame for `TileKernel`.
+
+See [`examples/todo_window/main.br`](examples/todo_window/main.br) for a complete native window entry point built with `ui.window` and `text.window`.
 
 ## Contributing & License
 

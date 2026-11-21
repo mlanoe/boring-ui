@@ -7,6 +7,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Desktop Multi-Windowing & Menu Separators (`src/controls.br`)**:
+  - `Desktop`: in-place window minimize/restore (`"−"`), maximize/restore (`"□"`), interactive width resizing via the right-edge handle (`"⋮"`), and desktop boundary clamping on drag.
+  - `Menu` & `ContextMenu`: items equal to `"-"`, `"---"`, or `""` render a horizontal `Separator` line instead of a button while preserving item indices.
+- **Control & Shape Enhancements (`src/controls.br`)**:
+  - `Grid`: proportional integer column weights (`columnWeights = [1, 2, ...]`) and fixed pixel column widths (`widths = [80.0, 140.0, ...]`).
+  - `ColorPicker`: optional editable hex `TextField` (`editableHex = true`), `colorHexAlpha(r, g, b, a)` (`#rrggbbaa`), and `parseColorHex(hex)` parser.
+  - `DatePicker` & `TimePicker`: exact date range bounds (`minMonth`/`minDay` .. `maxMonth`/`maxDay`) disabling out-of-range days and months, plus a 24-hour `TimePicker(hour, minute, onChange, minuteStep = 1)` control.
+  - Hollow stroke shapes: `Rectangle`, `Circle`, and `Capsule` with `color = ""` and non-empty `stroke` emit a hollow `Border` (`StrokeRect`).
+- **Enhanced Navigation (`src/controls.br`, `src/events.br`)**:
+  - `NavigationStack` keyboard & gesture pop: pressing `Escape` pops the top page when deeper than the root (after dismissing any open `Popover` or `Sheet` first), and swiping right (`OnSwipe(direction = "right")`) pops one level.
+  - `NavigationStack` push/pop slide animations: automatic direction-aware horizontal slide transitions (`Transition(.Slide)` under `AnimationScope`).
+  - `NavigationSplitView`: adaptive master-detail container rendering a two-column sidebar + detail layout in `Regular` width (`!isCompact(info)`) and collapsing to a `NavigationStack` in `Compact` width (`isCompact(info)`).
+- **Reusable Native Window Host (`src/window.br`, `text/src/window.br`)**:
+  - `ui.window` (`src/window.br`): unified headless-testable window driver (`Motion`, `BusyCells`, `stepWindow`, `noteAccessibilityRequest`, `shouldPollSystem`, `applySystem`, `loadImagesFrom`, `graphemeAtByte`, `caretAt`, `trackCaret`) encapsulating HiDPI coordinate scaling, pointer/touch/wheel/keyboard/IME event routing, clipboard synchronization, accessibility actions, animation frame pacing, and on-demand redraw scheduling.
+  - `text.window` (`text/src/window.br`): `windowTheme`, `windowGlyphCache`, `firstFrame`, and `encodeFrame` helpers wiring `swash` font loading, `EngineMeasurer`, and `GlyphCache` display-list encoding.
+  - Refactored `examples/todo_window/main.br` to use `ui.window` and `text.window` (reducing `main.br` from 360 lines to ~125 lines) and added `tests/window_host_test.br`.
+
 ## [0.1.0] — 2026-11-16
 
 Initial open-source release of **boring-ui**, a declarative, reactive GUI toolkit for the [Boring](https://github.com/mlanoe/boring) programming language inspired by SwiftUI.

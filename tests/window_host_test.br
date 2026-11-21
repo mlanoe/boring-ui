@@ -1,0 +1,234 @@
+# Tests for the unified native window host driver (`ui.window` in `src/window.br`):
+# pointer clicks, multi-click selection, typing & IME composition/commit, clipboard copy/cut/paste,
+# mouse wheel scrolling, accessibility request routing (`noteAccessibilityRequest`), safe-area &
+# theme choice synchronization, animation frame pacing (`redrawImmediate` vs `redrawAfterMs`),
+# and IME candidate window area (`imeAllowed`, `imeX`, `imeY`).
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use ui.events.*
+use ui.accessibility.*
+use ui.mobile.*
+use ui.system_settings.*
+use ui.window.*
+
+view MiniWindowApp:
+    ScreenInfo info = ScreenInfo()
+    state string note = "hello"
+    state int count = 0
+    state bool flag = false
+
+    body():
+        Column(alignment = .Leading, spacing = 6.0):
+            TextField(value = note, label = "Note")
+            Button(label = "Count {count}", onActivate = ():
+                count += 1)
+            Toggle(value = flag, label = "Flag")
+            Frame(maxHeight = 40.0):
+                Scroll(axis = .Vertical):
+                    Column(alignment = .Leading, spacing = 2.0):
+                        for i in 0..<12:
+                            Text(content = "row {i}")
+
+struct MiniRoot as ViewBuilder:
+    Slot<ScreenInfo>'actor screenInfo
+    Slot<SystemSettings>'actor settings
+    Slot<int>'actor themeChoice
+    Slot<int>'actor appearanceChoice
+    req View buildView(mut Runtime rt):
+        Provide(
+            value = themeForChoice(Theme(), settings.value, themeChoice.value, appearanceChoice.value),
+            children = [SafeArea(info = screenInfo.value, children = [MiniWindowApp(info = screenInfo.value)])]
+        )
+
+def Placed? firstOfKind(Placed p, string kind):
+    if p.kind == kind:
+        return p
+    for c in p.children:
+        if let f = firstOfKind(c, kind):
+            return f
+    nil
+
+let cells = BusyCells()
+cells.settings.value = SystemSettings(platform = "windows")
+let host = ViewRoot(inner = MiniRoot(screenInfo = cells.screenInfo, settings = cells.settings, themeChoice = cells.themeChoice, appearanceChoice = cells.appearanceChoice))
+mut rt = Runtime()
+rt.start(host)
+mut pace = Motion()
+begin(pace, placedOf(rt, 320, 240))
+
+# 1. Initial idle frame at 2x HiDPI scale (640x480 physical = 320x240 logical points)
+let frame0 = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    0, 0, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    0.1
+)
+assert_eq(cells.screenInfo.value.width, 320.0)
+assert_eq(cells.screenInfo.value.height, 240.0)
+assert(!pace.imeAllowed)
+
+# 2. Click on the Button using physical coordinates (2x scale)
+let btn = firstOfKind(frame0, "Button") else (frame0)
+let btnPhysX = ((btn.x + 4.0) * 2.0) as int
+let btnPhysY = ((btn.y + 4.0) * 2.0) as int
+
+_ = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    btnPhysX, btnPhysY, true, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    0.2
+)
+let frame1 = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    btnPhysX, btnPhysY, false, true, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    0.25
+)
+let btnAfter = firstOfKind(frame1, "Button") else (frame1)
+assert_eq(btnAfter.props["label"] else (""), "Count 1")
+
+# 3. Click on the TextField -> focus activates IME (`imeAllowed == true`) and computes physical IME caret area
+let field = firstOfKind(frame1, "TextField") else (frame1)
+let fieldPhysX = ((field.x + 6.0) * 2.0) as int
+let fieldPhysY = ((field.y + 6.0) * 2.0) as int
+
+_ = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, true, true, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    0.5
+)
+assert(pace.imeAllowed)
+assert(pace.imeW == 4 and pace.imeH == 32)
+
+# 4. SelectAll (Ctrl+A), Copy (Ctrl+C -> clipboardChanged), Paste (Ctrl+V with external clipboard), and IME commit
+_ = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    ["a", "c"], false, true, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    0.6
+)
+assert(pace.clipboardChanged)
+assert_eq(pace.clipboardOut, "hello")
+
+let frame2 = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    ["v"], false, true, "world",
+    "", -1, "!",
+    0, 0, 0, 0,
+    0.7
+)
+let fieldAfter = firstOfKind(frame2, "TextField") else (frame2)
+assert_eq(fieldAfter.props["value"] else (""), "world!")
+
+# 5. Accessibility request routing (`noteAccessibilityRequest` maps "activate" on Toggle to "toggle")
+let toggle = firstOfKind(frame2, "Toggle") else (frame2)
+assert_eq(toggle.props["value"] else (""), "false")
+noteAccessibilityRequest(pace, rt, host, frame2, toggle.id, "activate", "")
+assert(pace.axServed)
+let frame3 = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    0.8
+)
+let toggleAfter = firstOfKind(frame3, "Toggle") else (frame3)
+assert_eq(toggleAfter.props["value"] else (""), "true")
+
+# 6. Theme & appearance picker cell sync (`cells.appearanceChoice.value = 2` -> dark theme)
+assert_eq(windowBackground(frame3), "#F5F5F5")
+cells.appearanceChoice.value = 2
+let frame4 = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    0.9
+)
+assert_eq(windowBackground(frame4), "#1F1F1F")
+
+# 7. Busy indicator cell keeps `redrawImmediate` true while active, and sleeps (`redrawAfterMs > 0`) when stopped
+cells.busy.value = true
+_ = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    1.0
+)
+assert(pace.redrawImmediate)
+assert(cells.phase.value > 0.0)
+
+cells.busy.value = false
+_ = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    1.1
+)
+_ = stepWindow(
+    pace, rt, host, cells,
+    640, 480, 2.0, false,
+    fieldPhysX, fieldPhysY, false, false, false, false, false,
+    0.0, 0.0,
+    false, false, false, false, 0, 0,
+    [], false, false, "",
+    "", -1, "",
+    0, 0, 0, 0,
+    1.2
+)
+assert(!pace.redrawImmediate)
+assert(pace.redrawAfterMs > 0)
+
+print "window_host_test ok"

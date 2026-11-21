@@ -1,0 +1,41 @@
+# Real-font window host helpers (`text.window`): wires `swash` font loading, `EngineMeasurer`, `GlyphCache`, and
+# display-list glyphification on top of `ui.window`.
+
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.theme.*
+use ui.window.*
+use render.display_list.*
+use render.scale.*
+use render.raster_gpu.*
+use text.fonts.*
+use text.measurer.*
+use text.glyph_run.*
+
+# Base `Theme` configured with an `EngineMeasurer` loaded from `fontsDir` (falling back to the machine's sans and CJK
+# fonts when the bundled files are missing). Warns once when no sans font exists on the machine.
+pub def Theme windowTheme(string fontsDir):
+    let sansFont = sansFontFrom(fontsDir)
+    if sansFont.length == 0:
+        print "no sans font found on this machine (see text/src/fonts.br): text will not be drawn"
+    Theme(measurer = EngineMeasurer(font = sansFont, styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir)))
+
+# A `GlyphCache` loaded with the same regular, styled (bold, italic, bold italic) and fallback fonts as `windowTheme`.
+pub def GlyphCache windowGlyphCache(string fontsDir):
+    GlyphCache(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))
+
+# Encode the display list of `placed` (the animator's presentation) for a `w` x `h` physical-pixel window at `scale`;
+# `images` are the decoded bitmaps its `Image` views name by `source`.
+pub def Encoded encodeFrame(Placed placed, [Bitmap] images, mut GlyphCache cache, float scale, int w, int h):
+    # Paint the theme's window background over the whole window in physical pixels; the layout itself is in logical
+    # points, so its display list is multiplied by `scale`.
+    mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = w as float, h = h as float, hex = windowBackground(placed))]
+    for c in scaled(displayList(placed), scale):
+        list.push(c)
+    let glyphs = glyphify(list, cache)
+    encodeWith(glyphs, images, cache.atlas, w, h)
+
+# The initial encoded frame used to construct `TileKernel` before the `Screen` render loop opens.
+pub def Encoded firstFrame(Builder host, [Bitmap] images, mut GlyphCache cache, int w, int h):
+    encodeFrame(placedOf(startedRuntime(host), w, h), images, cache, 1.0, w, h)

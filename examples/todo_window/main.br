@@ -1,228 +1,24 @@
-# The Todo application (examples/todo) in a native window, interactive: the view runtime lays it out headlessly,
-# its display list is encoded and binned on the host, and the tiled kernel rasterizer
-# (render/src/raster_tile.br) draws it straight into the pixel buffer `screen.present` shows. On `--target wgpu`
-# that buffer never goes back to the host. The loop runs only when an input event arrives (`redraw = "demand"`):
-# mouse presses and releases, keys, typed text and the wheel go to the runtime (src/events.br), and a changed
-# frame is re-encoded and uploaded to the kernel's buffers.
+# The Todo application (`examples/todo`) in a native window, driven by `ui.window` (`src/window.br`) and
+# `text.window` (`text/src/window.br`).
 #
-# The window is resizable (the layout, the display list and the kernel's picture follow `screen.width/height`),
-# IME composition is shown at the caret and the input method's candidate window is placed next to it, and
-# pointer motion reaches the runtime (it only matters to a slider drag: the runtime has no hover state).
-#
-# The `Image` view's `source` is resolved through `loadImages` (PNG or binary PPM, render/src/image_file.br).
-#
-# Animation: the "Toggle logo" button shrinks and fades the logo (window_app.br, an `AnimationScope` triggered by the
-# toggled value). Each frame paints the animator's presentation (pace.br); while one runs the loop asks for another
-# frame (`screen.requestRedraw()`), otherwise it sleeps. Pointer motion in the middle of an animation waits instead of
-# snapping it. Touch (screen.touch*, or the right mouse button standing in for a finger on a desktop) drives the gesture
-# API of events.br (`touchDown` / `touchMove` / `touchUp`): dragging scrolls the content under the finger, lifting a moving
-# one flings it (`stepMomentum` each frame while it lasts), a short touch is a tap.
-#
-# The caret inside an IME composition comes from `screen.marked_end` (a byte offset, converted by ime_caret.br) and
-# places the input method's candidate window; the focused field draws its own caret bar and selection (scene.br).
+# `ui.window` handles pointer/touch/wheel/keyboard/IME routing, clipboard sync, accessibility requests,
+# safe-area and theme-choice sync, animation frame pacing (`Motion`), and IME caret geometry (`stepWindow`).
+# `text.window` wires `swash` font measurement (`windowTheme`), glyph rasterization (`windowGlyphCache`),
+# and display-list encoding (`firstFrame`, `encodeFrame`).
 
 use boring.ui.*
 use ui.core.*
 use ui.layout.*
-use ui.scene.*
 use ui.theme.*
-use ui.events.*
-use ui.anim.*
 use ui.accessibility.*
-use ui.animator.*
-use render.display_list.*
-use render.scale.*
-use render.raster.*
-use render.raster_font.*
-use render.raster_gpu.*
-use render.raster_tile.*
-use render.image_file.*
-use todo.todo.*
-use pace
-use ime_caret
-use window_app
-use host_settings
 use ui.system_settings.*
 use ui.mobile.*
-use ui.theme.*
+use ui.window.*
+use render.raster_tile.*
 use text.glyph_run.*
-use text.measurer.*
-use text.fonts.*
-
-# The decoded files the window's `Image` views refer to. The program runs from the generated crate (main_wgpu/), so
-# the path is relative to that. A file that is missing or not a PNG / JPEG / binary PPM is simply not drawn.
-def [Bitmap] readImages() throws:
-    mut images = []
-    if fs.exists("../assets/logo.png"):
-        if let img = loadImage("logo.png", "../assets/logo.png"):
-            images.push(img)
-    if fs.exists("../assets/photo.jpg"):
-        if let img = loadImage("photo.jpg", "../assets/photo.jpg"):
-            images.push(img)
-    images
-
-def [Bitmap] loadImages():
-    readImages() else ([])
-
-# Encode the display list of the layout `placed` (the animator's presentation) for a `w` x `h` window; `images` are the decoded files its
-# `Image` views name by `source`.
-def Encoded encodeFrame(Placed placed, [Bitmap] images, mut GlyphCache cache, float scale, int w, int h):
-    # the Todo paints no window background of its own: put the theme's under it (opaque pixels, not transparent), over
-    # the whole window in physical pixels; the layout itself is in points, so its list is multiplied by the scale
-    mut list = [Command(kind = "FillRect", x = 0.0, y = 0.0, w = w as float, h = h as float, hex = windowBackground(placed))]
-    for c in scaled(displayList(placed), scale):
-        list.push(c)
-    # the text is shaped with the real font: every DrawText becomes glyphs from the cache's atlas
-    let glyphs = glyphify(list, cache)
-    encodeWith(glyphs, images, cache.atlas, w, h)
-
-def [uint] atlasWords():
-    let small = buildAtlas()
-    mut [uint] atlas = []
-    for i in 0..<small.length:
-        atlas.push(small[i] as uint)
-    atlas
-
-# A transparent picture for a window of `n` pixels (the kernel overwrites every one of them).
-def [uint] blank(int n):
-    [0 as uint for ..<n]
-
-# A cleared picture of `n` pixels (a loop body cannot build the array itself).
-def [uint] blankPicture(int n):
-    [0 as uint for ..<n]
-
-def Runtime startedRuntime(Builder host):
-    mut fresh = Runtime()
-    fresh.start(host)
-    fresh
-
-# The picture the kernel is built with. The loop body runs once before the window is first shown and replaces it
-# with the live runtime's frame, so a throwaway runtime is enough here (a read-only `rt` argument in the setup code
-# is not borrowed by the Screen lowering yet).
-def Encoded firstFrame(Builder host, [Bitmap] images, mut GlyphCache cache, int w, int h):
-    encodeFrame(placedOf(startedRuntime(host), w, h), images, cache, 1.0, w, h)
-
-# ── input, as the runtime understands it ─────────────────────────────────────────────────────────
-
-def void release(mut Runtime rt, Builder host, int w, int h, int x, int y):
-    _ = pointerUp(rt, host, placedOf(rt, w, h), x as float, y as float)
-
-def void motion(mut Runtime rt, Builder host, int w, int h, int x, int y):
-    _ = pointerMove(rt, host, placedOf(rt, w, h), x as float, y as float)
-
-def void wheel(mut Runtime rt, Builder host, int w, int h, int x, int y, float dx, float dy):
-    _ = scrollBy(rt, host, placedOf(rt, w, h), x as float, y as float, dx as float, dy as float)
-
-# A key as events.br names it: Space, Shift-variants, and the editing shortcuts of the platform's command key.
-def void keyDown(mut Runtime rt, Builder host, string name, bool shift, bool command):
-    var mapped = name
-    if name == " ":
-        mapped = "Space"
-    if shift and (name == "Tab" or name == "Left" or name == "Right" or name == "Home" or name == "End" or name == "Up" or name == "Down"):
-        mapped = "Shift{name}"
-    if command and name == "a":
-        mapped = "SelectAll"
-    # the internal clipboard (copy and cut fill it from the focused field's selection, paste inserts it)
-    if command and name == "c":
-        _ = copySelection(rt)
-        return
-    if command and name == "x":
-        _ = cutSelection(rt, host)
-        return
-    if command and name == "v":
-        _ = pasteClipboard(rt, host)
-        return
-    if command and name == "z":
-        if shift:
-            mapped = "Redo"
-        else:
-            mapped = "Undo"
-    _ = keyPress(rt, host, mapped)
-
-# One frame of text input. While the input method composes, its marked text is shown at the caret (the bound
-# value is untouched); the text that arrives with the end of a composition is committed as one edit, and typed
-# text is inserted. An empty `marked` with no text, while a composition is on, abandons it.
-def void textInput(mut Runtime rt, Builder host, string marked, int markedEnd, string text):
-    if marked != "":
-        # the caret inside the composing text, from the platform's byte offset (the end when it gave none)
-        _ = imeUpdate(rt, host, marked, graphemeAtByte(marked, markedEnd))
-    if text != "":
-        if rt.composition != nil:
-            _ = imeCommit(rt, host, text)
-        else:
-            _ = typeText(rt, host, text)
-    if marked == "" and text == "":
-        if rt.composition != nil:
-            _ = imeCancel(rt, host)
-
-# ── assistive technology ─────────────────────────────────────────────────────────────────────────
-
-# A request from the screen reader (`screen.accessibilityRequests`). The host reports a click as "activate" whatever
-# the control: a toggle takes it as its own "toggle". True when the runtime acted on it (the window must be drawn again).
-# `placed` is the last frame laid out: the one the screen reader saw, which "scrollIntoView" measures against.
-def bool serveRequest(mut Runtime rt, Builder host, Placed placed, int id, string action, string arg):
-    if action == "scrollIntoView":
-        return axScrollIntoView(rt, placed, id)
-    var wanted = action
-    if action == "activate":
-        if let node = rt.find(id):
-            if node.kind == "Toggle":
-                wanted = "toggle"
-    axPerform(rt, host, id, wanted, arg)
-
-# ── animation ────────────────────────────────────────────────────────────────────────────────────
-
-# ── where the caret is, for the input method's candidate window ──────────────────────────────────
-
-def Placed? nodeOf(Placed p, int id):
-    if p.id == id:
-        return p
-    for c in p.children:
-        if let found = nodeOf(c, id):
-            return found
-    nil
-
-# The focused text field's caret as [x, y] in window pixels (the window's corner when none).
-def [int] caretAt(Runtime rt, int w, int h):
-    if let f = rt.focus:
-        # (laid out only for a focused field: most frames have none)
-        let placed = placedOf(rt, w, h)
-        if let node = nodeOf(placed, f.id):
-            if node.kind == "TextField":
-                let body = placed.theme.fontSizeNamed("Body")
-                let caret = selectionOf(rt, f)[0]
-                let value = node.props["value"] else ("")
-                # (the measurer's caret stops follow the visual order in right-to-left or mixed text)
-                var shown = "{value}"
-                var at = caret
-                if let c = rt.composition:
-                    shown = "{value.graphemeSlice(0, caret)}{c.text}{value.graphemeSlice(caret, value.graphemeCount)}"
-                    at = caret + c.cursor
-                let offset = placed.theme.measurer.caretX(shown, at, body, 0)
-                let origin = fieldOrigin(placed.theme.measurer, shown, at, node.w, body)
-                return [(node.x + 4.0 + origin + offset) as int, (node.y + maxOf(0.0, (node.h - body) / 2.0)) as int]
-    [0, 0]
-
-
-# Remembers where the caret is for the quiet frames that follow.
-def void trackCaret(mut Motion m, Runtime rt, int w, int h):
-    let caret = caretAt(rt, w, h)
-    m.caretX = caret[0]
-    m.caretY = caret[1]
-    m.caretKnown = true
-
-# ── setup, run once before the window opens ──────────────────────────────────────────────────────
-
-# The window's text is measured and drawn with a real font (swash): the theme carries its measurer, the cache its glyphs.
-# The sans UI font is the bundled Inter (text/fonts, the same picture on every machine); the graphemes it lacks (Hebrew, Arabic, an IME
-# composing Chinese or Japanese) fall back to the bundled DejaVu Sans, then to a CJK font from the system.
-# Fonts from text/fonts (the program runs from main_wgpu/), the machine's sans when the files are missing
-let fontsDir = "../../../text/fonts"
-let sansFont = sansFontFrom(fontsDir)
-if sansFont.length == 0:
-    print "no sans font found on this machine (see text/src/fonts.br): text will not be drawn"
-# the base theme (measurer only): the platform's theme (mac, Fluent) and the system's appearance are applied on top in `ThemedRoot`, each time the root is built
-let theme = (Theme(measurer = EngineMeasurer(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))))
+use text.window.*
+use window_app
+use host_settings
 
 # `phase` and `busy` are cells the loop writes (the indeterminate bar of the controls panel): the builder reads them
 # whenever the root is rebuilt, and the view's `onBusy` callback flips `busy`.
@@ -245,7 +41,9 @@ struct ThemedRoot as ViewBuilder:
         Provide(value = themeForChoice(theme, settings.value, themeChoice.value, appearanceChoice.value), children = [SafeArea(info = screenInfo.value, children = [WindowApp(phase = phase.value, busy = busy.value, info = screenInfo.value, themeIndex = themeChoice.value, appearanceIndex = appearanceChoice.value, onTheme = (i): self.pickTheme(i), onAppearance = (i): self.pickAppearance(i), onBusy = (v):
             busy.value = v)])])
 
-mut cache = GlyphCache(font = sansFontFrom(fontsDir), styled = sansStylesFrom(fontsDir), fallbacks = fallbackFontsFrom(fontsDir))
+let fontsDir = "../../../text/fonts"
+let theme = windowTheme(fontsDir)
+mut cache = windowGlyphCache(fontsDir)
 let cells = BusyCells()
 cells.settings.value = readSystemSettings()
 let host = ViewRoot(inner = ThemedRoot(theme = theme, phase = cells.phase, busy = cells.busy, screenInfo = cells.screenInfo, settings = cells.settings, themeChoice = cells.themeChoice, appearanceChoice = cells.appearanceChoice))
@@ -254,7 +52,7 @@ rt.start(host)
 
 let width = 640
 let height = 360
-let images = loadImages()
+let images = loadImagesFrom("../assets", ["logo.png", "photo.jpg"])
 let frame = firstFrame(host, images, cache, width, height)
 let bins = bin(frame, width, height)
 
@@ -267,73 +65,54 @@ mut k = TileKernel(frame.f, frame.u, atlasWords(), frame.pool, bins.starts, bins
 
 kernel:
     loop:
-        # the window is in physical pixels (`screen.width`), the UI in points: layout, hit testing and scrolling use points
-        let scale = screen.scale as float
-        let pw = (screen.width as float / scale) as int
-        let ph = (screen.height as float / scale) as int
-        let mx = (screen.mouse.x as float / scale) as int
-        let my = (screen.mouse.y as float / scale) as int
-        let tx = (screen.touch.x as float / scale) as int
-        let ty = (screen.touch.y as float / scale) as int
         if screen.resized:
-            # the picture is reallocated at the new size; the presented buffer follows it (no kernel rebuild)
             k.out = blankPicture(screen.width * screen.height)
             k.width = screen.width
             k.height = screen.height
-        # what a screen reader asked for (focus, press, toggle, set the text, step a slider) acts like the same input would
-        var served = false
         for r in screen.accessibilityRequests:
-            served = serveRequest(rt, host, lastShown, r.id, r.action, r.arg) or served
-        # a quiet frame (a redraw asked for by an animation, no input since the last one) leaves the runtime as it was:
-        # nothing to hit-test, and the caret has not moved, so neither lays the window out again
-        let quiet = !screen.resized and !screen.mouse_pressed("left") and !screen.mouse_released("left") and !screen.mouse_pressed("right") and !screen.mouse_released("right") and !screen.mouse.right and screen.mouse.scroll_x == 0.0 and screen.mouse.scroll_y == 0.0 and !screen.touchStarted and !screen.touching and !screen.touchEnded and !screen.touchCancelled and screen.key_events.length == 0 and screen.text == "" and screen.marked == "" and !served and !pace.rolling and !pace.dirty and mx == pace.lastX and my == pace.lastY and pace.caretKnown
-        if !quiet and pointerKnown(pace, mx, my, screen.mouse_pressed("left") or screen.mouse_pressed("right")):
-            motion(rt, host, pw, ph, mx, my)
-        if screen.mouse_pressed("left"):
-            pressWith(pace, rt, host, pw, ph, mx, my, screen.time, screen.shift)
-        if screen.mouse_released("left"):
-            release(rt, host, pw, ph, mx, my)
-        # a finger on a touch screen (screen.touch*): drag to scroll, lift a moving one to fling, a short touch is a tap
-        if screen.touchStarted:
-            touchStart(rt, host, pw, ph, tx, ty, screen.time)
-        if screen.touching:
-            touchDrag(pace, rt, host, pw, ph, tx, ty, screen.time)
-        if screen.touchEnded:
-            touchEnd(pace, rt, host, pw, ph, tx, ty, screen.time)
-        if screen.touchCancelled:
-            touchAbort(pace, rt)
-        # the right mouse button opens a context menu under the pointer; elsewhere it stands in for a finger on a desktop: the same gesture
-        if screen.mouse_pressed("right"):
-            rightDown(pace, rt, host, pw, ph, mx, my, screen.time)
-        if screen.mouse.right:
-            rightHeld(pace, rt, host, pw, ph, mx, my, screen.time)
-        if screen.mouse_released("right"):
-            rightUp(pace, rt, host, pw, ph, mx, my, screen.time)
-        paceMomentum(pace, rt, host, pw, ph, screen.time)
-        if screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0:
-            wheel(rt, host, pw, ph, mx, my, screen.mouse.scroll_x as float / scale, screen.mouse.scroll_y as float / scale)
-        for name in screen.key_events:
-            if (screen.meta or screen.ctrl) and name == "v":
-                rt.clipboard = screen.clipboard
-            keyDown(rt, host, name, screen.shift, screen.meta or screen.ctrl)
-            if (screen.meta or screen.ctrl) and (name == "c" or name == "x"):
-                screen.setClipboard(rt.clipboard)
-        textInput(rt, host, screen.marked, screen.marked_end, screen.text)
-        for name in screen.key_events:
-            touch(pace)
-        let busyRebuilt = syncBusy(pace, rt, host, cells, screen.time)
-        let hoverRebuilt = syncHover(pace, rt, host, screen.time)
-        let screenRebuilt = syncScreen(pace, rt, host, cells, pw, ph, screen.safeTop as float / scale, screen.safeLeft as float / scale, screen.safeBottom as float / scale, screen.safeRight as float / scale)
-        # the system's light/dark choice is read again when the window regains focus and every few seconds (a timed wake-up, the loop otherwise sleeps)
-        var systemRebuilt = false
-        if screen.focus_gained or float(screen.time) >= pace.nextSystemPoll:
-            pace.nextSystemPoll = float(screen.time) + 3.0
-            systemRebuilt = syncSystem(pace, rt, host, cells, readSystemSettings())
-        let choiceRebuilt = syncChoice(pace, rt, host, cells)
-        let rebuilt = busyRebuilt or hoverRebuilt or screenRebuilt or systemRebuilt or choiceRebuilt
-        let eventful = rebuilt or served or screen.resized or screen.mouse_pressed("left") or screen.mouse_released("left") or screen.mouse.scroll_x != 0.0 or screen.mouse.scroll_y != 0.0 or screen.text != "" or screen.marked != ""
-        let shown = paceFrame(pace, rt, host, eventful, mx, my, pw, ph, screen.time)
-        # the accessibility tree (laid out only while an assistive technology is connected)
+            noteAccessibilityRequest(pace, rt, host, lastShown, r.id, r.action, r.arg)
+        if shouldPollSystem(pace, screen.focus_gained, screen.time):
+            applySystem(pace, rt, host, cells, readSystemSettings())
+        let scale = screen.scale as float
+        let shown = stepWindow(
+            pace,
+            rt,
+            host,
+            cells,
+            screen.width,
+            screen.height,
+            scale,
+            screen.resized,
+            screen.mouse.x,
+            screen.mouse.y,
+            screen.mouse_pressed("left"),
+            screen.mouse_released("left"),
+            screen.mouse_pressed("right"),
+            screen.mouse_released("right"),
+            screen.mouse.right,
+            screen.mouse.scroll_x as float,
+            screen.mouse.scroll_y as float,
+            screen.touchStarted,
+            screen.touching,
+            screen.touchEnded,
+            screen.touchCancelled,
+            screen.touch.x,
+            screen.touch.y,
+            screen.key_events,
+            screen.shift,
+            screen.meta or screen.ctrl,
+            screen.clipboard,
+            screen.marked,
+            screen.marked_end,
+            screen.text,
+            screen.safeTop,
+            screen.safeLeft,
+            screen.safeBottom,
+            screen.safeRight,
+            screen.time
+        )
+        if pace.clipboardChanged:
+            screen.setClipboard(pace.clipboardOut)
         screen.setAccessibility(axFrame(rt, shown))
         let next = encodeFrame(shown, images, cache, scale, screen.width, screen.height)
         lastShown = shown
@@ -347,14 +126,11 @@ kernel:
         k.count = next.count
         k(block = (16, 16), grid = ((screen.width + 15) / 16, (screen.height + 15) / 16))
         screen.present(k.out)
-        if pacePending(pace, screen.time) or isBusy(cells) or hoverWaiting(rt):
+        if pace.redrawImmediate:
             screen.requestRedraw()
         else:
-            screen.requestRedrawAfter(((pace.nextSystemPoll - float(screen.time)) * 1000.0) as int + 1)
-        if !quiet:
-            trackCaret(pace, rt, pw, ph)
-        # the soft keyboard of a phone follows the focus: up while a text field has it
-        screen.setImeAllowed(textFieldFocused(rt))
-        screen.setImeArea((pace.caretX as float * scale) as int, (pace.caretY as float * scale) as int, (2.0 * scale) as int, (16.0 * scale) as int)
+            screen.requestRedrawAfter(pace.redrawAfterMs)
+        screen.setImeAllowed(pace.imeAllowed)
+        screen.setImeArea(pace.imeX, pace.imeY, pace.imeW, pace.imeH)
         if screen.meta and screen.key("q"):
             break

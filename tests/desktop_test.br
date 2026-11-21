@@ -106,4 +106,51 @@ assert(shown(rt, "Button", "label", "Inside one"))
 # it came back where it was left, and on top
 assert_eq(named(rt, "Text", "content", "First").x, t1.x + 30.0)
 
+# minimize ("−") collapses the window body while keeping its title bar in place; clicking "−" again restores the body
+let minButtons = findAll(lay(rt), "Button", "label", "−")
+assert_eq(minButtons.length, 2)
+var topMin = minButtons[0]
+for b in minButtons:
+    if b.y < topMin.y:
+        topMin = b
+assert(click(rt, host, lay(rt), topMin.x + 4.0, topMin.y + 4.0))
+assert(!shown(rt, "Button", "label", "Inside one"))
+assert(shown(rt, "Text", "content", "First"))
+assert(click(rt, host, lay(rt), topMin.x + 4.0, topMin.y + 4.0))
+assert(shown(rt, "Button", "label", "Inside one"))
+
+# dragging the right-edge resize handle ("⋮") widens the window
+let handles = findAll(lay(rt), "Text", "content", "⋮")
+var topHandle = handles[0]
+for h in handles:
+    if h.y < topHandle.y:
+        topHandle = h
+let handleX0 = topHandle.x
+_ = pointerDown(rt, host, lay(rt), topHandle.x + 2.0, topHandle.y + 2.0)
+_ = pointerMove(rt, host, lay(rt), topHandle.x + 42.0, topHandle.y + 2.0)
+_ = pointerUp(rt, host, lay(rt), topHandle.x + 42.0, topHandle.y + 2.0)
+let resizedHandles = findAll(lay(rt), "Text", "content", "⋮")
+var topHandleAfter = resizedHandles[0]
+for h in resizedHandles:
+    if h.y < topHandleAfter.y:
+        topHandleAfter = h
+assert(topHandleAfter.x > handleX0 + 35.0)
+
+# maximize ("□") expands the window to the desktop's top-left (0, 0) and full width; clicking "□" again restores its position
+let maxButtons = findAll(lay(rt), "Button", "label", "□")
+var topMax = maxButtons[0]
+for b in maxButtons:
+    if b.y < topMax.y:
+        topMax = b
+let beforeMaxX = named(rt, "Text", "content", "First").x
+assert(click(rt, host, lay(rt), topMax.x + 4.0, topMax.y + 4.0))
+assert(named(rt, "Text", "content", "First").x < beforeMaxX)
+let maxButtons2 = findAll(lay(rt), "Button", "label", "□")
+var topMax2 = maxButtons2[0]
+for b in maxButtons2:
+    if b.y < topMax2.y:
+        topMax2 = b
+assert(click(rt, host, lay(rt), topMax2.x + 4.0, topMax2.y + 4.0))
+assert_eq(named(rt, "Text", "content", "First").x, beforeMaxX)
+
 print("desktop_test ok")

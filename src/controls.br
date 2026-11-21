@@ -4,6 +4,7 @@
 
 use boring.ui.*
 use ui.anim.*
+use ui.mobile.*
 
 # A determinate progress bar: a track with a leading fill of `value` (clamped to 0...1) of its width.
 pub view ProgressBar:
@@ -86,7 +87,8 @@ pub view Picker:
 
 # A menu of actions: a button labelled `label ▾` that opens the `items` in a `Popover` below it (above when the window has more room there). Choosing
 # an item closes the menu and calls `onSelect` with its index (nothing is marked as selected, unlike `Picker`); a press outside or Escape closes it
-# too. The item at index `danger` (when it is not -1) is a destructive one and shows as such.
+# too. The item at index `danger` (when it is not -1) is a destructive one and shows as such. An item equal to `"-"`, `"---"`, or `""` renders a
+# horizontal `Separator` line instead of a button (preserving the indices of the remaining items).
 pub view Menu:
     string label
     [string] items
@@ -110,11 +112,15 @@ pub view Menu:
             Padding(insets = 4.0):
                 Column(alignment = .Leading, spacing = 2.0):
                     for i in 0..<items.length with i:
-                        Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
-                            self.choose(i))
+                        if items[i] == "-" or items[i] == "---" or items[i] == "":
+                            Separator()
+                        else:
+                            Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                self.choose(i))
 
 # A context menu: the first child, right-clicked anywhere inside, opens `items` in a `Popover` below it (the host calls `contextPress` on a right
-# press). Like `Menu`, choosing an item closes it and reports its index, a press outside or Escape closes it, and `danger` marks a destructive item.
+# press). Like `Menu`, choosing an item closes it and reports its index, a press outside or Escape closes it, `danger` marks a destructive item,
+# and `"-"`, `"---"`, or `""` renders a horizontal `Separator`.
 # The menu opens under the child, not at the pointer.
 pub view ContextMenu:
     state bool open = false
@@ -135,8 +141,11 @@ pub view ContextMenu:
             Padding(insets = 4.0):
                 Column(alignment = .Leading, spacing = 2.0):
                     for i in 0..<items.length with i:
-                        Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
-                            self.choose(i))
+                        if items[i] == "-" or items[i] == "---" or items[i] == "":
+                            Separator()
+                        else:
+                            Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                self.choose(i))
 
 # A modal alert: a `Sheet` holding a title, an optional message and a row of buttons. Choosing a button closes the alert and calls `onSelect` with its
 # index. `defaultIndex` is the button focused first and activated by Enter; `cancel` (an index, -1 for none) is the button Escape activates (an alert
@@ -236,8 +245,9 @@ pub def int weekday(int year, int month, int day):
 
 # A month calendar: a header with previous/next month buttons and the month's name, a row of weekday initials and the days in a Monday-first
 # grid. `year`/`month` (1...12)/`day` is the selected date; choosing a day calls `onChange(year, month, day)`. Browsing months is the picker's own
-# state (an offset from the selected month) and snaps back to the selected month when a day is chosen. Days outside `minYear`...`maxYear` can't be
-# browsed to. Inline only (SwiftUI's graphical style); wrap it in a `Popover` for a drop-down.
+# state (an offset from the selected month) and snaps back to the selected month when a day is chosen. Days outside `minYear`...`maxYear` (or outside
+# the optional `minMonth`/`minDay` and `maxMonth`/`maxDay` bounds) are disabled and cannot be browsed past. Inline only (SwiftUI's graphical style);
+# wrap it in a `Popover` for a drop-down.
 pub view DatePicker:
     state int offset = 0
 
@@ -247,6 +257,10 @@ pub view DatePicker:
     DateAction onChange
     int minYear = 1900
     int maxYear = 2100
+    int minMonth = 1
+    int minDay = 1
+    int maxMonth = 12
+    int maxDay = 31
 
     def browse(int by):
         let now = offset
@@ -255,6 +269,12 @@ pub view DatePicker:
     def pick(int y, int m, int d):
         offset = 0
         onChange(y, m, d)
+
+    req bool dayOutOfBounds(int y, int m, int d):
+        let key = y * 10000 + m * 100 + d
+        let lo = minYear * 10000 + minMonth * 100 + minDay
+        let hi = maxYear * 10000 + maxMonth * 100 + maxDay
+        key < lo or key > hi
 
     body():
         let names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
@@ -265,14 +285,16 @@ pub view DatePicker:
         let lead = weekday(shownYear, shownMonth, 1)
         let days = daysInMonth(shownYear, shownMonth)
         let weeks = (lead + days + 6) / 7
+        let atMinMonth = shownYear * 12 + shownMonth <= minYear * 12 + minMonth
+        let atMaxMonth = shownYear * 12 + shownMonth >= maxYear * 12 + maxMonth
         Frame(width = 240.0):
             Column(alignment = .Leading, spacing = 6.0):
                 Row(alignment = .Center, spacing = 8.0):
-                    Disabled(value = shownYear <= minYear and shownMonth == 1):
+                    Disabled(value = atMinMonth):
                         Button(label = "<", style = ButtonStyle.Plain, onActivate = ():
                             self.browse(-1))
                     Text(content = "{names[shownMonth - 1]} {shownYear}", bold = true)
-                    Disabled(value = shownYear >= maxYear and shownMonth == 12):
+                    Disabled(value = atMaxMonth):
                         Button(label = ">", style = ButtonStyle.Plain, onActivate = ():
                             self.browse(1))
                 Row(alignment = .Leading, spacing = 2.0, equal = true):
@@ -284,10 +306,52 @@ pub view DatePicker:
                         for c in 0..<7 with c:
                             Fill(height = false, alignment = .TopLeading):
                                 if w * 7 + c >= lead and w * 7 + c < lead + days:
-                                    Button(label = "{w * 7 + c - lead + 1}", style = (if shownYear == year and shownMonth == month and w * 7 + c - lead + 1 == day: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
-                                        self.pick(shownYear, shownMonth, w * 7 + c - lead + 1))
+                                    Disabled(value = (shownYear * 10000 + shownMonth * 100 + (w * 7 + c - lead + 1) < minYear * 10000 + minMonth * 100 + minDay or shownYear * 10000 + shownMonth * 100 + (w * 7 + c - lead + 1) > maxYear * 10000 + maxMonth * 100 + maxDay)):
+                                        Button(label = "{w * 7 + c - lead + 1}", style = (if shownYear == year and shownMonth == month and w * 7 + c - lead + 1 == day: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
+                                            self.pick(shownYear, shownMonth, w * 7 + c - lead + 1))
                                 else:
                                     Spacer()
+
+# ── time picker ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+pub use TimeAction as def void(int, int)
+
+def string pad2(int n):
+    if n < 10:
+        return "0{n}"
+    "{n}"
+
+# A 24-hour time chooser: a zero-padded `HH:MM` display alongside Hour (0...23) and Minute (0...59, stepped by `minuteStep`) steppers.
+pub view TimePicker:
+    int hour
+    int minute
+    TimeAction onChange
+    int minuteStep = 1
+    string label = "Time"
+
+    def stepHour(int by):
+        let next = (hour + by + 24) % 24
+        onChange(next, minute)
+
+    def stepMinute(int by):
+        var step = minuteStep
+        if step < 1:
+            step = 1
+        let next = (minute + by * step + 60) % 60
+        onChange(hour, next)
+
+    body():
+        let shown = "{pad2(hour)}:{pad2(minute)}"
+        Row(alignment = .Center, spacing = 8.0):
+            AccessibilityLabel(label = "{label}: {shown}"):
+                Text(content = shown, font = .Monospace, bold = true)
+            Button(label = "H-", onActivate = ():
+                self.stepHour(-1))
+            Button(label = "H+", onActivate = ():
+                self.stepHour(1))
+            Button(label = "M-", onActivate = ():
+                self.stepMinute(-1))
+            Button(label = "M+", onActivate = ():
+                self.stepMinute(1))
 
 # ── color picker ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 def int clampByte(float v):
@@ -306,18 +370,66 @@ def string hexByte(int n):
 pub def string colorHex(float red, float green, float blue):
     "#{hexByte(clampByte(red))}{hexByte(clampByte(green))}{hexByte(clampByte(blue))}"
 
-# A color chooser: a swatch of the current color with its `#rrggbb` value, a red / green / blue slider (0...255) each and a row of preset colors.
-# The color is the three bound channels (use `colorHex` to get the string); presets write all three. Inline, like `DatePicker`.
+# `#rrggbbaa` for channel values 0...255 (clamped, fractions truncated) including an alpha channel.
+pub def string colorHexAlpha(float red, float green, float blue, float alpha):
+    "#{hexByte(clampByte(red))}{hexByte(clampByte(green))}{hexByte(clampByte(blue))}{hexByte(clampByte(alpha))}"
+
+def int hexNibble(string ch):
+    let lo = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    let hi = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"]
+    for i in 0..<16:
+        if ch == lo[i] or ch == hi[i]:
+            return i
+    -1
+
+# Parses `#RRGGBB` or `RRGGBB` (or `#RRGGBBAA` / `RRGGBBAA`) into `[r, g, b, a]` (0...255, `a` = 255 when omitted);
+# returns `[]` when the string is not a valid 6- or 8-digit hex color.
+pub def [float] parseColorHex(string hex):
+    var s = hex
+    if s.graphemeCount > 0 and s.graphemeSlice(0, 1) == "#":
+        s = s.graphemeSlice(1, s.graphemeCount)
+    let n = s.graphemeCount
+    if n != 6 and n != 8:
+        return []
+    mut [int] vals = []
+    for i in 0..<n:
+        let v = hexNibble(s.graphemeSlice(i, i + 1))
+        if v < 0:
+            return []
+        vals.push(v)
+    let r = (vals[0] * 16 + vals[1]) as float
+    let g = (vals[2] * 16 + vals[3]) as float
+    let b = (vals[4] * 16 + vals[5]) as float
+    var a = 255.0
+    if n == 8:
+        a = (vals[6] * 16 + vals[7]) as float
+    [r, g, b, a]
+
+# A color chooser: a swatch of the current color with its `#rrggbb` value, an optional editable hex `TextField` (`editableHex = true`, applied on Enter),
+# a red / green / blue slider (0...255) each and a row of preset colors. The color is the three bound channels (use `colorHex` to get the string);
+# presets write all three. Inline, like `DatePicker`.
 pub view ColorPicker:
+    state string hexInput = ""
+
     bind float red
     bind float green
     bind float blue
     string label = "Color"
+    bool editableHex = false
 
     def preset(float r, float g, float b):
         red = r
         green = g
         blue = b
+        hexInput = colorHex(r, g, b)
+
+    def applyHex():
+        let parsed = parseColorHex(hexInput)
+        if parsed.length >= 3:
+            red = parsed[0]
+            green = parsed[1]
+            blue = parsed[2]
+            hexInput = colorHex(parsed[0], parsed[1], parsed[2])
 
     body():
         let hex = colorHex(red, green, blue)
@@ -329,6 +441,12 @@ pub view ColorPicker:
                             Background(color = hex, radius = 4.0):
                                 Spacer()
                     Text(content = hex, font = .Monospace)
+                if editableHex:
+                    Row(alignment = .Center, spacing = 6.0):
+                        TextField(value = hexInput, label = "{label} hex", placeholder = hex, onSubmit = ():
+                            self.applyHex())
+                        Button(label = "Apply", onActivate = ():
+                            self.applyHex())
                 Row(alignment = .Center, spacing = 8.0):
                     Text(content = "R")
                     Frame(width = 200.0):
@@ -354,13 +472,14 @@ pub view ColorPicker:
                         self.preset(255.0, 255.0, 255.0))
 
 # ── shapes and canvas ──────────────────────────────────────────────────────────────────────────────────────────────────────
-# The renderer paints rectangles (with rounded corners), text and images, so shapes are those: a filled rectangle, circle or capsule, optionally
-# outlined, and axis-aligned lines. An outline is a second, inset fill of the outline's color under the shape's own (so a shape's fill is opaque
-# and a hollow outline is not possible); diagonal lines and arbitrary paths are not drawable yet.
+# The renderer paints rectangles (with rounded corners), hollow inside strokes (`Border` / `StrokeRect`), text and images, so shapes are built
+# from those: a filled or hollow rectangle, circle or capsule, and axis-aligned lines. When `color` is `""` (empty) and `stroke` is set, the
+# shape is a hollow outline (`Border`); when both `color` and `stroke` are set, the outline sits around the opaque fill.
 
-# A filled rectangle of `width` x `height` with corners rounded by `radius` and, when `stroke` is a color, an outline of `strokeWidth` inside it.
+# A rectangle of `width` x `height` with corners rounded by `radius`: filled with `color` (when non-empty) and/or outlined with `stroke` of
+# `strokeWidth` inside it. Passing `color = ""` with a non-empty `stroke` draws a hollow outline.
 pub view Rectangle:
-    string color
+    string color = ""
     float width
     float height
     float radius = 0.0
@@ -369,7 +488,10 @@ pub view Rectangle:
 
     body():
         Frame(width = width, height = height):
-            if stroke != "" and strokeWidth > 0.0:
+            if color == "" and stroke != "" and strokeWidth > 0.0:
+                Border(color = stroke, lineWidth = strokeWidth):
+                    Spacer(minLength = 0.0)
+            elif stroke != "" and strokeWidth > 0.0:
                 Background(color = stroke, radius = radius):
                     Padding(insets = strokeWidth):
                         Background(color = color, radius = (if radius > strokeWidth: radius - strokeWidth else: 0.0)):
@@ -378,9 +500,9 @@ pub view Rectangle:
                 Background(color = color, radius = radius):
                     Spacer(minLength = 0.0)
 
-# A filled circle of `diameter`, optionally outlined like `Rectangle`.
+# A circle of `diameter`, filled with `color` and/or outlined with `stroke` like `Rectangle`.
 pub view Circle:
-    string color
+    string color = ""
     float diameter
     string stroke = ""
     float strokeWidth = 1.0
@@ -388,9 +510,9 @@ pub view Circle:
     body():
         Rectangle(color = color, width = diameter, height = diameter, radius = diameter / 2.0, stroke = stroke, strokeWidth = strokeWidth)
 
-# A filled capsule (a rectangle whose short sides are fully rounded).
+# A capsule (a rectangle whose short sides are fully rounded), filled with `color` and/or outlined with `stroke` like `Rectangle`.
 pub view Capsule:
-    string color
+    string color = ""
     float width
     float height
     string stroke = ""
@@ -576,20 +698,26 @@ pub struct Navigator as EnvValue:
     pub int depth
 
 # The stack. `children[0]` is the root page (titled `title`); `children[1 + i]` is the page named `names[i]`, titled `titles[i]`. `NavigationLink(to = name)`
-# pushes a page by name.
+# pushes a page by name. While deeper than the root, the bar's back button has `ButtonRole.Cancel` (so Escape pops when no modal sheet or popover is open),
+# a rightwards swipe anywhere in the stack pops one level, and page changes animate with a horizontal slide (`Transition(.Slide)` under `AnimationScope`).
 pub view NavigationStack:
     state [string] path = []
+    state string swipeDir = ""
+    state int lastDepth = 0
 
     string title = ""
     [string] names = []
     [string] titles = []
+    float slideOffset = 48.0
     [View] children
 
     def push(string name):
+        lastDepth = path.length
         path.push(name)
 
     def pop():
         if path.length > 0:
+            lastDepth = path.length
             _ = path.pop()
 
     def int indexOf(string name):
@@ -603,26 +731,105 @@ pub view NavigationStack:
         let depth = path.length
         var at = 0
         var heading = title
+        var topKey = "root"
         if depth > 0:
+            topKey = "{depth}:{path[depth - 1]}"
             let i = self.indexOf(path[depth - 1])
             if i >= 0 and i + 1 < children.length:
                 at = i + 1
                 if i < titles.length:
                     heading = titles[i]
+        let enterDx = (if depth >= lastDepth: slideOffset else: 0.0 - slideOffset)
         let doPush = (name): self.push(name)
         let doPop = (): self.pop()
         Provide(value = Navigator(push = doPush, pop = doPop, depth = depth)):
-            Column(alignment = .Leading, spacing = 8.0):
-                Row(alignment = .Center, spacing = 8.0):
-                    if depth > 0:
-                        Button(label = "‹ Back", style = ButtonStyle.Plain, onActivate = ():
-                            self.pop())
-                    AccessibilityHeading(level = 1):
-                        Text(content = heading)
-                Separator()
-                Column(alignment = .Leading, spacing = 0.0):
-                    if at < children.length:
-                        children[at]
+            OnSwipe(value = swipeDir, direction = "right", onActivate = ():
+                self.pop()):
+                Column(alignment = .Leading, spacing = 8.0):
+                    Row(alignment = .Center, spacing = 8.0):
+                        if depth > 0:
+                            Button(label = "‹ Back", role = ButtonRole.Cancel, style = ButtonStyle.Plain, onActivate = ():
+                                self.pop())
+                        AccessibilityHeading(level = 1):
+                            Text(content = heading)
+                    Separator()
+                    AnimationScope(curve = "EaseInOut", duration = 220.0, value = topKey):
+                        Column(alignment = .Leading, spacing = 0.0):
+                            for k in 0..<1 with topKey:
+                                Transition(insertion = .Slide, removal = .Slide, dx = enterDx):
+                                    Column(alignment = .Leading, spacing = 0.0):
+                                        if at < children.length:
+                                            children[at]
+
+# A master-detail navigation container that adapts to `info` (`ScreenInfo`):
+#   - Regular width (`!isCompact(info)`): a two-column layout with the sidebar (`children[0]`, width `sidebarWidth`, titled `title`) on the leading side,
+#     a vertical `Separator`, and the active detail page (`children[1 + selected]`, or `children[1]` when `selected` is none, titled from `titles`) on the
+#     trailing side. `NavigationLink(to = name)` inside either pane switches the active detail page without pushing a back bar.
+#   - Compact width (`isCompact(info)`): collapses into a single `NavigationStack(title = title, names = names, titles = titles)` where `children[0]` is
+#     the root page and activating a `NavigationLink(to = name)` pushes the detail page with back button, Escape, swipe-right pop, and slide transition.
+pub view NavigationSplitView:
+    state string selected = ""
+
+    ScreenInfo info = ScreenInfo()
+    string title = ""
+    [string] names = []
+    [string] titles = []
+    float sidebarWidth = 180.0
+    [View] children
+
+    def selectPage(string name):
+        selected = name
+
+    def clearPage():
+        selected = ""
+
+    def int indexOf(string name):
+        var found = -1
+        for i in 0..<names.length:
+            if names[i] == name:
+                found = i
+        found
+
+    body():
+        if isCompact(info):
+            NavigationStack(title = title, names = names, titles = titles):
+                for i in 0..<children.length with i:
+                    children[i]
+        else:
+            let idx = self.indexOf(selected)
+            var detailAt = 1
+            var detailTitle = ""
+            if idx >= 0 and idx + 1 < children.length:
+                detailAt = idx + 1
+                if idx < titles.length:
+                    detailTitle = titles[idx]
+            elif titles.length > 0:
+                detailTitle = titles[0]
+            let doPush = (name): self.selectPage(name)
+            let doPop = (): self.clearPage()
+            Provide(value = Navigator(push = doPush, pop = doPop, depth = (if idx >= 0: 1 else: 0))):
+                Row(alignment = .Leading, spacing = 12.0):
+                    Frame(width = sidebarWidth):
+                        Column(alignment = .Leading, spacing = 8.0):
+                            if title != "":
+                                AccessibilityHeading(level = 1):
+                                    Text(content = title, bold = true)
+                                Separator()
+                            if children.length > 0:
+                                children[0]
+                    Separator(axis = .VerticalRule)
+                    Column(alignment = .Leading, spacing = 8.0):
+                        if detailTitle != "":
+                            AccessibilityHeading(level = 2):
+                                Text(content = detailTitle, bold = true)
+                            Separator()
+                        AnimationScope(curve = "EaseInOut", duration = 200.0, value = "{detailAt}"):
+                            Column(alignment = .Leading, spacing = 0.0):
+                                for k in 0..<1 with detailAt:
+                                    Transition(insertion = .Fade, removal = .Fade):
+                                        Column(alignment = .Leading, spacing = 0.0):
+                                            if detailAt < children.length:
+                                                children[detailAt]
 
 # A button that pushes the page named `to` onto the enclosing `NavigationStack`.
 pub view NavigationLink:
@@ -690,48 +897,88 @@ pub view LabeledContent:
                 children[i]
 
 # ── grid ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-# `Grid(columns = n)` lays its children out left to right, `n` to a row, in rows of equal-width columns (each cell takes an equal share of the width;
-# the last row may be short). Cells in a row are aligned at the top. Rows are as tall as their tallest cell. Built from `Row(equal = true)`s of `Fill`s
-# (`equal` makes a stack share its axis evenly, see the facade); every child is mounted (use `List` for long, virtualised data).
+# `Grid(columns = n)` lays its children out left to right, `n` to a row:
+#   - By default (` columnWeights = []` and `widths = []`), each column takes an equal share of the available width (`Row(equal = true)` of `Fill`s).
+#   - With `columnWeights = [w0, w1, ...]` (integer column weights, e.g. `[1, 2]` so column 1 takes 1/3 and column 2 takes 2/3), each column `c` spans
+#     `columnWeights[c]` sub-columns of a `Row(equal = true)` of `totalWeight` equal units, so the row divides `availableWidth - (across - 1) * spacing`
+#     in the exact weight ratios.
+#   - With `widths = [px0, px1, ...]` (fixed pixel column widths), each column `c` has `Frame(width = widths[c])`.
+# Cells in a row are aligned at the top; rows are as tall as their tallest cell; a short last row pads its empty trailing columns.
+# Every child is mounted (use `List` for long, virtualised data).
 pub view Grid:
     int columns = 2
     float spacing = 8.0
+    [int] columnWeights = []
+    [float] widths = []
     [View] children
 
     body():
         let across = if columns < 1: 1 else columns
         let rows = (children.length + across - 1) / across
+        let useFixed = widths.length > 0
+        let useWeights = !useFixed and columnWeights.length > 0
         Column(alignment = .Leading, spacing = spacing):
             for r in 0..<rows with r:
-                Row(alignment = .Leading, spacing = spacing, equal = true):
-                    for c in 0..<across with c:
-                        Fill(height = false, alignment = .TopLeading):
-                            if r * across + c < children.length:
-                                children[r * across + c]
-                            if r * across + c >= children.length:
-                                Spacer()   # a `Frame` needs a child: the short last row's empty cells
+                if useFixed:
+                    Row(alignment = .Leading, spacing = spacing):
+                        for c in 0..<across with c:
+                            if c < widths.length and widths[c] > 0.0:
+                                Frame(width = widths[c]):
+                                    Fill(height = false, alignment = .TopLeading):
+                                        if r * across + c < children.length:
+                                            children[r * across + c]
+                                        if r * across + c >= children.length:
+                                            Spacer()
+                            else:
+                                Fill(height = false, alignment = .TopLeading):
+                                    if r * across + c < children.length:
+                                        children[r * across + c]
+                                    if r * across + c >= children.length:
+                                        Spacer()
+                elif useWeights:
+                    Row(alignment = .Leading, spacing = spacing, equal = true):
+                        for c in 0..<across with c:
+                            for u in 0..<(if c < columnWeights.length and columnWeights[c] > 0: columnWeights[c] else: 1) with u:
+                                Fill(height = false, alignment = .TopLeading):
+                                    if u == 0 and r * across + c < children.length:
+                                        children[r * across + c]
+                                    else:
+                                        Spacer(minLength = 0.0)
+                else:
+                    Row(alignment = .Leading, spacing = spacing, equal = true):
+                        for c in 0..<across with c:
+                            Fill(height = false, alignment = .TopLeading):
+                                if r * across + c < children.length:
+                                    children[r * across + c]
+                                if r * across + c >= children.length:
+                                    Spacer()   # a `Frame` needs a child: the short last row's empty cells
 
 # ── windows ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # `Desktop` hosts several windows inside one surface: each child is the content of one floating window, `titles[i]` its title. A window has a
-# title bar (drag it to move the window, ✕ closes it) and rises above the others when pressed; a closed window waits in a small dock at the
-# bottom, where its title brings it back. The windows are drawn in the one OS window the host has — a `Screen` is one native window.
+# title bar (drag it to move the window, "−" collapses/restores its body in place, "□" maximizes/restores its width across the desktop, and "✕"
+# closes it to the dock at the bottom, where its title brings it back) and rises above the others when pressed. Dragging a window clamps its
+# position so the title bar stays reachable inside the desktop surface, and dragging the right-edge resize handle (`"⋮"`) resizes the window's
+# width (clamped to `[minWindowWidth, width]`).
 pub struct DesktopWindow:
     pub int id
     pub float x
     pub float y
+    pub float w = 0.0
     pub bool open
+    pub bool minimized = false
+    pub bool maximized = false
 
-def [DesktopWindow] defaultWins(int n):
+def [DesktopWindow] defaultWins(int n, float defaultWidth):
     mut out = [] as [DesktopWindow]
     for i in 0..<n:
-        out.push(DesktopWindow(id = i, x = 24.0 + 36.0 * (i as float), y = 16.0 + 36.0 * (i as float), open = true))
+        out.push(DesktopWindow(id = i, x = 24.0 + 36.0 * (i as float), y = 16.0 + 36.0 * (i as float), w = defaultWidth, open = true, minimized = false, maximized = false))
     out
 
 # The windows back to front; the defaults (cascaded) until the first change.
-def [DesktopWindow] normalized([DesktopWindow] wins, int n):
+def [DesktopWindow] normalized([DesktopWindow] wins, int n, float defaultWidth):
     if wins.length == n:
         return wins
-    defaultWins(n)
+    defaultWins(n, defaultWidth)
 
 def [DesktopWindow] raisedWin([DesktopWindow] wins, int id):
     mut out = [] as [DesktopWindow]
@@ -745,11 +992,32 @@ def [DesktopWindow] raisedWin([DesktopWindow] wins, int id):
         out.push(w)
     out
 
-def [DesktopWindow] movedWin([DesktopWindow] wins, int id, float dx, float dy):
+def float clampWinPos(float v, float lo, float hi):
+    if hi < lo:
+        return lo
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    v
+
+def [DesktopWindow] movedWin([DesktopWindow] wins, int id, float dx, float dy, float deskW, float deskH):
     mut out = [] as [DesktopWindow]
     for w in wins:
         if w.id == id:
-            out.push(DesktopWindow(id = w.id, x = w.x + dx, y = w.y + dy, open = w.open))
+            let nx = clampWinPos(w.x + dx, 0.0, deskW - 48.0)
+            let ny = clampWinPos(w.y + dy, 0.0, deskH - 36.0)
+            out.push(DesktopWindow(id = w.id, x = nx, y = ny, w = w.w, open = w.open, minimized = w.minimized, maximized = false))
+        else:
+            out.push(w)
+    out
+
+def [DesktopWindow] resizedWin([DesktopWindow] wins, int id, float dw, float minW, float maxW):
+    mut out = [] as [DesktopWindow]
+    for w in wins:
+        if w.id == id:
+            let nw = clampWinPos(w.w + dw, minW, maxW)
+            out.push(DesktopWindow(id = w.id, x = w.x, y = w.y, w = nw, open = w.open, minimized = w.minimized, maximized = false))
         else:
             out.push(w)
     out
@@ -758,10 +1026,33 @@ def [DesktopWindow] openedWin([DesktopWindow] wins, int id, bool open):
     mut out = [] as [DesktopWindow]
     for w in wins:
         if w.id == id:
-            out.push(DesktopWindow(id = w.id, x = w.x, y = w.y, open = open))
+            out.push(DesktopWindow(id = w.id, x = w.x, y = w.y, w = w.w, open = open, minimized = (if open: false else: w.minimized), maximized = w.maximized))
         else:
             out.push(w)
     raisedWin(out, id)
+
+def [DesktopWindow] toggledMinWin([DesktopWindow] wins, int id):
+    mut out = [] as [DesktopWindow]
+    for w in wins:
+        if w.id == id:
+            out.push(DesktopWindow(id = w.id, x = w.x, y = w.y, w = w.w, open = w.open, minimized = !w.minimized, maximized = w.maximized))
+        else:
+            out.push(w)
+    raisedWin(out, id)
+
+def [DesktopWindow] toggledMaxWin([DesktopWindow] wins, int id):
+    mut out = [] as [DesktopWindow]
+    for w in wins:
+        if w.id == id:
+            out.push(DesktopWindow(id = w.id, x = w.x, y = w.y, w = w.w, open = w.open, minimized = false, maximized = !w.maximized))
+        else:
+            out.push(w)
+    raisedWin(out, id)
+
+def float winWidthOf(DesktopWindow w, float fullWidth):
+    if w.maximized:
+        return fullWidth
+    w.w
 
 def string titleOf([string] titles, int id):
     if id < titles.length:
@@ -771,10 +1062,12 @@ def string titleOf([string] titles, int id):
 pub view Desktop:
     state [DesktopWindow] wins = []
     state string got = ""
+    state string resizeGot = ""
 
     float width
     float height
     float windowWidth = 220.0
+    float minWindowWidth = 120.0
     [string] titles
     [View] children
 
@@ -788,10 +1081,16 @@ pub view Desktop:
             wins.push(w)
 
     def raise(int id):
-        self.apply(raisedWin(normalized(wins, children.length), id))
+        self.apply(raisedWin(normalized(wins, children.length, windowWidth), id))
 
     def setOpen(int id, bool open):
-        self.apply(openedWin(normalized(wins, children.length), id, open))
+        self.apply(openedWin(normalized(wins, children.length, windowWidth), id, open))
+
+    def toggleMin(int id):
+        self.apply(toggledMinWin(normalized(wins, children.length, windowWidth), id))
+
+    def toggleMax(int id):
+        self.apply(toggledMaxWin(normalized(wins, children.length, windowWidth), id))
 
     def moved(int id):
         let parts = got.split(",")
@@ -800,10 +1099,17 @@ pub view Desktop:
         if parts.length == 2:
             dx = parts[0].parseFloat() else (0.0)
             dy = parts[1].parseFloat() else (0.0)
-        self.apply(raisedWin(movedWin(normalized(wins, children.length), id, dx, dy), id))
+        self.apply(raisedWin(movedWin(normalized(wins, children.length, windowWidth), id, dx, dy, width, height), id))
+
+    def resized(int id):
+        let parts = resizeGot.split(",")
+        var dx = 0.0
+        if parts.length == 2:
+            dx = parts[0].parseFloat() else (0.0)
+        self.apply(raisedWin(resizedWin(normalized(wins, children.length, windowWidth), id, dx, minWindowWidth, width), id))
 
     body():
-        let list = normalized(wins, children.length)
+        let list = normalized(wins, children.length, windowWidth)
         Frame(width = width, height = height):
             Clip:
                 Background(color = "#e4e8f0"):
@@ -814,7 +1120,7 @@ pub view Desktop:
                                 Spacer(minLength = 0.0)
                             for k in 0..<list.length with list[k].id:
                                 if list[k].open:
-                                    Offset(x = list[k].x, y = list[k].y):
+                                    Offset(x = (if list[k].maximized: 0.0 else: list[k].x), y = (if list[k].maximized: 0.0 else: list[k].y)):
                                         OnTap(onActivate = ():
                                             self.raise(list[k].id)):
                                             Shadow(radius = 10.0, dy = 4.0):
@@ -823,15 +1129,23 @@ pub view Desktop:
                                                         OnPan(value = got, onActivate = ():
                                                             self.moved(list[k].id)):
                                                             Background(color = "#d8dde8", radius = 8.0):
-                                                                Frame(width = windowWidth):
+                                                                Frame(width = winWidthOf(list[k], width)):
                                                                     Row(alignment = .Center, spacing = 4.0):
                                                                         Button(label = "✕", style = ButtonStyle.Plain, onActivate = ():
                                                                             self.setOpen(list[k].id, false))
+                                                                        Button(label = "−", style = ButtonStyle.Plain, onActivate = ():
+                                                                            self.toggleMin(list[k].id))
+                                                                        Button(label = "□", style = ButtonStyle.Plain, onActivate = ():
+                                                                            self.toggleMax(list[k].id))
                                                                         Text(content = titleOf(titles, list[k].id), bold = true)
                                                                         Spacer(minLength = 0.0)
-                                                        Frame(width = windowWidth):
-                                                            Padding(insets = 8.0):
-                                                                children[list[k].id]
+                                                                        OnPan(value = resizeGot, onActivate = ():
+                                                                            self.resized(list[k].id)):
+                                                                            Text(content = "⋮")
+                                                        if !list[k].minimized:
+                                                            Frame(width = winWidthOf(list[k], width)):
+                                                                Padding(insets = 8.0):
+                                                                    children[list[k].id]
                             Offset(x = 8.0, y = height - 30.0):
                                 Row(alignment = .Center, spacing = 6.0):
                                     for k in 0..<list.length with list[k].id:

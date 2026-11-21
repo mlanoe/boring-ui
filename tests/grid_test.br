@@ -62,4 +62,45 @@ assert(b.x - a.x > 90.0)
 # Rows: the second row is below the first; cells of a row share a top.
 assert(d.y > a.y)
 assert(near(a.y, b.y) and near(b.y, c.y))
+
+# Weighted columns (`columnWeights = [1, 2]`): column 2 is twice as wide as column 1 (100 px and 200 px in a 300 px window).
+view WeightedPanel:
+    body():
+        Grid(columns = 2, spacing = 0.0, columnWeights = [1, 2]):
+            Text(content = "left1")
+            Text(content = "right1")
+            Text(content = "left2")
+            Text(content = "right2")
+
+struct WeightedBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): WeightedPanel()
+
+let whost = ViewRoot(inner = WeightedBuilder())
+mut wrt = Runtime()
+wrt.start(whost)
+let l1 = textOf(wrt, "left1")
+let r1 = textOf(wrt, "right1")
+let l2 = textOf(wrt, "left2")
+let r2 = textOf(wrt, "right2")
+assert(near(l1.x, 0.0) and near(l2.x, 0.0))
+assert(near(r1.x, 100.0) and near(r2.x, 100.0))
+
+# Fixed column widths (`widths = [80.0, 140.0]`): column 2 starts at 80 + spacing.
+view FixedPanel:
+    body():
+        Grid(columns = 2, spacing = 10.0, widths = [80.0, 140.0]):
+            Text(content = "fixA")
+            Text(content = "fixB")
+
+struct FixedBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): FixedPanel()
+
+let fhost = ViewRoot(inner = FixedBuilder())
+mut frt = Runtime()
+frt.start(fhost)
+let fa = textOf(frt, "fixA")
+let fb = textOf(frt, "fixB")
+assert(near(fa.x, 0.0))
+assert(near(fb.x, 90.0))
+
 print "grid_test ok"

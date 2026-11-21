@@ -6,7 +6,7 @@ use ui.core.*
 use ui.layout.*
 use ui.events.*
 use ui.animator.*
-use pace
+use ui.window.*
 use window_app
 
 let host = ViewRoot(inner = AppRoot())

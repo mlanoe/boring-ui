@@ -10,6 +10,7 @@ set -euo pipefail
 
 BORING="${BORING:-boring}"
 cd "$(dirname "${BASH_SOURCE[0]}")"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$(pwd)/../target}"
 
 # Interpreter-only tests: they pull in a kernel (`RasterKernel`) that the standard target does not transpile; the kernel
 # targets do not transpile the whole UI runtime yet (see render/tests/run_kernel_tests.sh for the kernel corpus).

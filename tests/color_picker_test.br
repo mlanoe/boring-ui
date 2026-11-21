@@ -11,6 +11,10 @@ assert_eq(colorHex(0.0, 0.0, 0.0), "#000000")
 assert_eq(colorHex(255.0, 255.0, 255.0), "#ffffff")
 assert_eq(colorHex(255.0, 59.0, 48.0), "#ff3b30")
 assert_eq(colorHex(300.0, -5.0, 16.9), "#ff0010")
+assert_eq(colorHexAlpha(255.0, 59.0, 48.0, 128.0), "#ff3b3080")
+assert_eq(parseColorHex("#ff3b30"), [255.0, 59.0, 48.0, 255.0])
+assert_eq(parseColorHex("007AFF80"), [0.0, 122.0, 255.0, 128.0])
+assert_eq(parseColorHex("invalid"), [])
 
 view Page:
     state float r = 10.0
@@ -21,7 +25,7 @@ view Page:
         colorHex(r, g, b)
 
     body():
-        ColorPicker(red = r, green = g, blue = b, label = "Fill")
+        ColorPicker(red = r, green = g, blue = b, label = "Fill", editableHex = true)
 
 struct PageBuilder as ViewBuilder:
     req View buildView(mut Runtime rt): Page()
@@ -71,4 +75,12 @@ let redSlider = named(rt, "Slider", "label", "Fill red")
 assert(pointerDown(rt, host, lay(rt), redSlider.x + redSlider.w - 0.1, redSlider.y + redSlider.h / 2.0))
 _ = pointerUp(rt, host, lay(rt), redSlider.x + redSlider.w - 0.1, redSlider.y + redSlider.h / 2.0)
 assert_eq(Page().current(pageState(rt)), "#ff7aff")
+
+# editableHex = true: typing a hex color into the TextField and pressing Enter updates all three channels
+let hexField = named(rt, "TextField", "label", "Fill hex")
+assert(click(rt, host, lay(rt), hexField.x + hexField.w / 2.0, hexField.y + hexField.h / 2.0))
+assert(keyPress(rt, host, "SelectAll"))
+assert(typeText(rt, host, "#12ab34"))
+assert(keyPress(rt, host, "Enter"))
+assert_eq(Page().current(pageState(rt)), "#12ab34")
 print("color_picker_test ok")

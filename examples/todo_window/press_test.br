@@ -5,7 +5,7 @@ use boring.ui.*
 use ui.core.*
 use ui.layout.*
 use ui.events.*
-use pace
+use ui.window.*
 
 view Form:
     state string text = ""
