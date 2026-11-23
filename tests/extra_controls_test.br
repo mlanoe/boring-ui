@@ -1,0 +1,108 @@
+# Tests for Badge, Card, RadioGroup, and SearchField (src/controls.br).
+# Run: boring run tests/extra_controls_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.controls.*
+use ui.events.*
+
+view Panel:
+    state int mode = 0
+    state string query = ""
+    state string submitted = ""
+
+    def pickMode(int i):
+        mode = i
+
+    def submitQuery():
+        submitted = query
+
+    req int modeNow():
+        mode
+
+    req string submittedNow():
+        submitted
+
+    body():
+        Card():
+            Row(alignment = .Center, spacing = 8.0):
+                Text(content = "Filters", bold = true)
+                Badge(text = "NEW", color = "#34c759")
+            SearchField(value = query, label = "Filter", onSubmit = ():
+                self.submitQuery())
+            RadioGroup(selected = mode, options = ["All", "Active", "Done"], onSelect = (i):
+                self.pickMode(i))
+            RadioGroup(selected = mode, options = ["A", "B"], axis = .Horizontal, onSelect = (i):
+                self.pickMode(i))
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 400.0, 400.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Placed? buttonByLabel(Runtime rt, string label):
+    for b in ofKind(lay(rt), "Button"):
+        if (b.props["label"] else ("")) == label:
+            return b
+    nil
+
+def Panel__State panelState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# 1. Card wraps with Shadow and ElevatedSurface Background; Badge displays "NEW"
+let tree0 = lay(rt)
+assert(ofKind(tree0, "Shadow").length >= 1)
+var foundBadge = false
+for t in ofKind(tree0, "Text"):
+    if (t.props["content"] else ("")) == "NEW":
+        foundBadge = true
+assert(foundBadge)
+
+# 2. RadioGroup marks the selected option with "◉" and unselected with "○"
+assert(buttonByLabel(rt, "◉ All") != nil)
+assert(buttonByLabel(rt, "○ Active") != nil)
+let activeBtn = buttonByLabel(rt, "○ Active") else (tree0)
+assert(click(rt, host, lay(rt), activeBtn.x + 2.0, activeBtn.y + 2.0))
+assert_eq(Panel().modeNow(panelState(rt)), 1)
+assert(buttonByLabel(rt, "○ All") != nil)
+assert(buttonByLabel(rt, "◉ Active") != nil)
+
+# Horizontal RadioGroup lays options side-by-side (B.x > A.x, B.y == A.y)
+let optA = buttonByLabel(rt, "○ A") else (tree0)
+let optB = buttonByLabel(rt, "◉ B") else (tree0)
+assert(optB.x > optA.x)
+assert_eq(optB.y, optA.y)
+
+# 3. SearchField: clear button "✕" is hidden while empty, appears when text is typed, and clears on click
+assert(buttonByLabel(rt, "✕") == nil)
+let field = ofKind(lay(rt), "TextField")[0]
+assert(click(rt, host, lay(rt), field.x + 4.0, field.y + 4.0))
+assert(typeText(rt, host, "milk"))
+assert(keyPress(rt, host, "Enter"))
+assert_eq(Panel().submittedNow(panelState(rt)), "milk")
+let clearBtn = buttonByLabel(rt, "✕") else (tree0)
+assert(clearBtn.id >= 0)
+assert(click(rt, host, lay(rt), clearBtn.x + 2.0, clearBtn.y + 2.0))
+assert(buttonByLabel(rt, "✕") == nil)
+assert_eq(ofKind(lay(rt), "TextField")[0].props["value"] else ("x"), "")
+
+print "extra_controls_test ok"

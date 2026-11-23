@@ -1,0 +1,144 @@
+# Tests for NumberInput, ComboBox, TagInput, and Rating (src/controls.br).
+# Run: boring run tests/form_inputs_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.controls.*
+use ui.events.*
+
+view Panel:
+    state float num = 10.0
+    state string country = ""
+    state [string] tags = ["ui"]
+    state int stars = 2
+
+    def setNum(float v):
+        num = v
+
+    def setCountry(string c):
+        country = c
+
+    def setTags([string] next):
+        mut idx = [] as [int]
+        for i in 0..<tags.length:
+            idx.push(i)
+        tags.removeIndices(idx)
+        for t in next:
+            tags.push(t)
+
+    def setStars(int s):
+        stars = s
+
+    req float currentNum():
+        num
+
+    req string currentCountry():
+        country
+
+    req [string] currentTags():
+        tags
+
+    req int currentStars():
+        stars
+
+    body():
+        Column(alignment = .Leading, spacing = 10.0):
+            NumberInput(value = num, min = 0.0, max = 50.0, step = 5.0, label = "Amount", onChange = (v):
+                self.setNum(v))
+            ComboBox(options = ["France", "Germany", "Japan", "Canada"], label = "Country", onSelect = (c):
+                self.setCountry(c))
+            TagInput(tags = tags, label = "Tag", onChange = (next):
+                self.setTags(next))
+            Rating(value = stars, max = 5, onChange = (s):
+                self.setStars(s))
+            Rating(value = 3, max = 5, readOnly = true, onChange = (s):
+                self.setStars(s))
+
+struct PanelBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): Panel()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 420.0, 460.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def Placed? buttonByLabel(Runtime rt, string label):
+    for b in ofKind(lay(rt), "Button"):
+        if (b.props["label"] else ("")) == label:
+            return b
+    nil
+
+def Placed? fieldByLabel(Runtime rt, string label):
+    for f in ofKind(lay(rt), "TextField"):
+        if (f.props["label"] else ("")) == label:
+            return f
+    nil
+
+def Panel__State panelState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as Panel__State else (Panel__State())
+
+let host = ViewRoot(inner = PanelBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# 1. NumberInput: "+" steps by 5, "-" steps by -5, typing "999" + Enter clamps to max (50.0)
+let plusBtn = buttonByLabel(rt, "+") else (lay(rt))
+assert(click(rt, host, lay(rt), plusBtn.x + 2.0, plusBtn.y + 2.0))
+assert_eq(Panel().currentNum(panelState(rt)), 15.0)
+let minusBtn = buttonByLabel(rt, "-") else (lay(rt))
+assert(click(rt, host, lay(rt), minusBtn.x + 2.0, minusBtn.y + 2.0))
+assert_eq(Panel().currentNum(panelState(rt)), 10.0)
+let numField = fieldByLabel(rt, "Amount") else (lay(rt))
+assert(click(rt, host, lay(rt), numField.x + numField.w / 2.0, numField.y + numField.h / 2.0))
+assert(typeText(rt, host, "999"))
+assert(keyPress(rt, host, "Enter"))
+assert_eq(Panel().currentNum(panelState(rt)), 50.0)
+
+# 2. ComboBox: typing "jap" filters dropdown options; opening dropdown shows "Japan" and hides "France"
+let comboField = fieldByLabel(rt, "Country") else (lay(rt))
+assert(click(rt, host, lay(rt), comboField.x + 4.0, comboField.y + 4.0))
+assert(typeText(rt, host, "jap"))
+let dropBtn = buttonByLabel(rt, "▾") else (lay(rt))
+assert(click(rt, host, lay(rt), dropBtn.x + 2.0, dropBtn.y + 2.0))
+assert(buttonByLabel(rt, "Japan") != nil)
+assert(buttonByLabel(rt, "France") == nil)
+let japanBtn = buttonByLabel(rt, "Japan") else (lay(rt))
+assert(click(rt, host, lay(rt), japanBtn.x + 2.0, japanBtn.y + 2.0))
+assert_eq(Panel().currentCountry(panelState(rt)), "Japan")
+assert(buttonByLabel(rt, "Japan") == nil)
+
+# 3. TagInput: starts with ["ui"]; typing "gpu" + Add appends "gpu"; clicking "ui ✕" removes "ui"
+assert(buttonByLabel(rt, "ui ✕") != nil)
+let tagField = fieldByLabel(rt, "Tag") else (lay(rt))
+assert(click(rt, host, lay(rt), tagField.x + tagField.w / 2.0, tagField.y + tagField.h / 2.0))
+assert(typeText(rt, host, "gpu"))
+let addBtn = buttonByLabel(rt, "Add") else (lay(rt))
+assert(click(rt, host, lay(rt), addBtn.x + 2.0, addBtn.y + 2.0))
+assert_eq(Panel().currentTags(panelState(rt)), ["ui", "gpu"])
+let removeUi = buttonByLabel(rt, "ui ✕") else (lay(rt))
+assert(click(rt, host, lay(rt), removeUi.x + 2.0, removeUi.y + 2.0))
+assert_eq(Panel().currentTags(panelState(rt)), ["gpu"])
+
+# 4. Rating: interactive Rating starts at 2 (2 "★" buttons, 3 "☆" buttons); clicking the 4th star updates to 4
+mut starBtns = [] as [Placed]
+for b in ofKind(lay(rt), "Button"):
+    let lbl = b.props["label"] else ("")
+    if lbl == "★" or lbl == "☆":
+        starBtns.push(b)
+assert_eq(starBtns.length, 5)
+assert(click(rt, host, lay(rt), starBtns[3].x + 2.0, starBtns[3].y + 2.0))
+assert_eq(Panel().currentStars(panelState(rt)), 4)
+
+print "form_inputs_test ok"

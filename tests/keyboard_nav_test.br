@@ -1,0 +1,163 @@
+# Tests for keyboard navigation in Picker, Menu, and Desktop.
+# Run: boring run tests/keyboard_nav_test.br
+
+use boring.ui.*
+use ui.core.*
+use ui.layout.*
+use ui.scene.*
+use ui.controls.*
+use ui.events.*
+use ui.animator.*
+
+view App:
+    state int picked = 0
+    state int menuAction = -1
+    state int ctxAction = -1
+
+    def setPicked(int i):
+        picked = i
+
+    def setMenuAction(int i):
+        menuAction = i
+
+    def setCtxAction(int i):
+        ctxAction = i
+
+    req int currentPicked():
+        picked
+
+    req int currentMenuAction():
+        menuAction
+
+    req int currentCtxAction():
+        ctxAction
+
+    body():
+        Column(alignment = .Leading, spacing = 10.0):
+            Row(alignment = .Center, spacing = 12.0):
+                Picker(selected = picked, options = ["Alpha", "Beta", "Gamma"], onSelect = (i):
+                    self.setPicked(i))
+                Menu(label = "Actions", items = ["New", "-", "Delete"], danger = 2, onSelect = (i):
+                    self.setMenuAction(i))
+                ContextMenu(items = ["Copy", "-", "Remove"], danger = 2, onSelect = (i):
+                    self.setCtxAction(i)):
+                    Text(content = "RightClickTarget")
+            Desktop(width = 420.0, height = 240.0, windowWidth = 180.0, titles = ["Editor", "Console"]):
+                Text(content = "Editor body")
+                Text(content = "Console body")
+
+struct AppBuilder as ViewBuilder:
+    req View buildView(mut Runtime rt): App()
+
+def Placed lay(Runtime rt):
+    let p = layout(rt, 460.0, 340.0)
+    p else (Placed(id = -1, kind = "", x = 0.0, y = 0.0, w = 0.0, h = 0.0))
+
+def [Placed] ofKind(Placed p, string kind):
+    mut out = []
+    if p.kind == kind:
+        out.push(p)
+    for c in p.children:
+        for f in ofKind(c, kind):
+            out.push(f)
+    out
+
+def bool hasText(Runtime rt, string content):
+    for t in ofKind(lay(rt), "Text"):
+        if (t.props["content"] else ("")) == content:
+            return true
+    false
+
+def Placed? buttonByLabel(Runtime rt, string label):
+    for b in ofKind(lay(rt), "Button"):
+        if (b.props["label"] else ("")) == label:
+            return b
+    nil
+
+def string focusedLabel(Runtime rt):
+    if let f = rt.focus:
+        if let n = rt.find(f.id):
+            return n.props["label"] else ("")
+    ""
+
+def App__State appState(Runtime rt):
+    let h = rt.handle(1) else (Handle(id = -1, generation = -1))
+    let box = rt.stateOf(h) else (NoState())
+    box as App__State else (App__State())
+
+let host = ViewRoot(inner = AppBuilder())
+mut rt = Runtime()
+rt.start(host)
+
+# 1. Picker keyboard navigation: Down -> DefaultFocus ("Alpha") -> Down ("Beta") -> Enter
+let pickerBtn = buttonByLabel(rt, "Alpha ▾") else (lay(rt))
+assert(click(rt, host, lay(rt), pickerBtn.x + 2.0, pickerBtn.y + 2.0))
+assert(buttonByLabel(rt, "Beta") != nil)
+
+assert(keyPress(rt, host, "Down"))
+assert_eq(focusedLabel(rt), "Alpha")
+assert(keyPress(rt, host, "Down"))
+assert_eq(focusedLabel(rt), "Beta")
+assert(keyPress(rt, host, "Enter"))
+assert_eq(App().currentPicked(appState(rt)), 1)
+assert(buttonByLabel(rt, "Gamma") == nil)
+
+# Re-open Picker: End ("Gamma"), Up ("Beta"), Escape closes without changing selection
+let pickerBtn2 = buttonByLabel(rt, "Beta ▾") else (lay(rt))
+assert(click(rt, host, lay(rt), pickerBtn2.x + 2.0, pickerBtn2.y + 2.0))
+assert(keyPress(rt, host, "End"))
+assert_eq(focusedLabel(rt), "Gamma")
+assert(keyPress(rt, host, "Up"))
+assert_eq(focusedLabel(rt), "Beta")
+assert(keyPress(rt, host, "Escape"))
+assert_eq(App().currentPicked(appState(rt)), 1)
+assert(buttonByLabel(rt, "Gamma") == nil)
+
+# 2. Menu keyboard navigation: Down ("New") -> Down ("Delete", skips Separator) -> Space
+let menuBtn = buttonByLabel(rt, "Actions ▾") else (lay(rt))
+assert(click(rt, host, lay(rt), menuBtn.x + 2.0, menuBtn.y + 2.0))
+assert(keyPress(rt, host, "Down"))
+assert_eq(focusedLabel(rt), "New")
+assert(keyPress(rt, host, "Down"))
+assert_eq(focusedLabel(rt), "Delete")
+assert(keyPress(rt, host, "Space"))
+assert_eq(App().currentMenuAction(appState(rt)), 2)
+assert(buttonByLabel(rt, "New") == nil)
+
+# Re-open Menu: Tab wraps inside FocusScope(trap = true), Escape dismisses
+assert(click(rt, host, lay(rt), menuBtn.x + 2.0, menuBtn.y + 2.0))
+assert(keyPress(rt, host, "Down"))
+assert_eq(focusedLabel(rt), "New")
+assert(keyPress(rt, host, "Tab"))
+assert_eq(focusedLabel(rt), "Delete")
+assert(keyPress(rt, host, "Tab"))
+assert_eq(focusedLabel(rt), "New")
+assert(keyPress(rt, host, "Escape"))
+assert(buttonByLabel(rt, "New") == nil)
+
+# 3. ContextMenu keyboard navigation: contextPress -> Down ("Copy") -> Down ("Remove") -> Enter
+var ctxX = 0.0
+var ctxY = 0.0
+for t in ofKind(lay(rt), "Text"):
+    if (t.props["content"] else ("")) == "RightClickTarget":
+        ctxX = t.x + 2.0
+        ctxY = t.y + 2.0
+assert(contextPress(rt, host, lay(rt), ctxX, ctxY))
+assert(keyPress(rt, host, "Down"))
+assert_eq(focusedLabel(rt), "Copy")
+assert(keyPress(rt, host, "Down"))
+assert_eq(focusedLabel(rt), "Remove")
+assert(keyPress(rt, host, "Enter"))
+assert_eq(App().currentCtxAction(appState(rt)), 2)
+assert(buttonByLabel(rt, "Copy") == nil)
+
+# 4. Desktop keyboard navigation: Escape closes topmost open window ("Console"), then "Editor"
+assert(hasText(rt, "Editor body"))
+assert(hasText(rt, "Console body"))
+assert(keyPress(rt, host, "Escape"))
+assert(!hasText(rt, "Console body"))
+assert(hasText(rt, "Editor body"))
+assert(keyPress(rt, host, "Escape"))
+assert(!hasText(rt, "Editor body"))
+
+print "keyboard_nav_test ok"

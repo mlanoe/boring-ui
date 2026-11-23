@@ -25,6 +25,799 @@ pub view ProgressBar:
                                 Spacer()
                         Spacer()
 
+# A compact rounded pill displaying `text` over `color`.
+pub view Badge:
+    string text
+    string color = "#e5e5ea"
+    float radius = 10.0
+
+    body():
+        Background(color = color, radius = radius):
+            Padding(insets = 4.0):
+                Text(content = text, font = .Caption, bold = true)
+
+# An elevated surface container with rounded corners, subtle shadow, and inner padding.
+pub view Card:
+    string color = "ElevatedSurface"
+    float radius = 8.0
+    float padding = 12.0
+    [View] children
+
+    body():
+        Shadow(radius = 6.0, dy = 2.0):
+            Background(color = color, radius = radius):
+                Padding(insets = padding):
+                    Column(alignment = .Leading, spacing = 6.0):
+                        for i in 0..<children.length with i:
+                            children[i]
+
+# A group of mutually exclusive radio options: `selected` is the active index and `onSelect(i)` fires when an option
+# is chosen. `axis` can be `.Vertical` (default) or `.Horizontal`.
+pub view RadioGroup:
+    int selected
+    [string] options
+    IndexAction onSelect
+    ScrollAxis axis = .Vertical
+    float spacing = 6.0
+
+    body():
+        if axis == .Horizontal:
+            Row(alignment = .Center, spacing = spacing):
+                for i in 0..<options.length with i:
+                    Button(label = (if selected == i: "◉ {options[i]}" else: "○ {options[i]}"), style = ButtonStyle.Plain, onActivate = ():
+                        onSelect(i))
+        else:
+            Column(alignment = .Leading, spacing = spacing):
+                for i in 0..<options.length with i:
+                    Button(label = (if selected == i: "◉ {options[i]}" else: "○ {options[i]}"), style = ButtonStyle.Plain, onActivate = ():
+                        onSelect(i))
+
+# A search input field (`TextField`) with an inline clear button (`"✕"`) shown whenever `value` is non-empty.
+pub view SearchField:
+    bind string value
+    string label = "Search"
+    string placeholder = "Search…"
+    UIAction? onSubmit = nil
+
+    def clear():
+        value = ""
+
+    def submit() throws:
+        if let f = onSubmit:
+            f()
+
+    body():
+        Row(alignment = .Center, spacing = 4.0):
+            if onSubmit != nil:
+                TextField(value = value, label = label, placeholder = placeholder, onSubmit = ():
+                    self.submit())
+            else:
+                TextField(value = value, label = label, placeholder = placeholder)
+            if value != "":
+                Button(label = "✕", style = ButtonStyle.Plain, onActivate = ():
+                    self.clear())
+
+def string bannerColor(string kind):
+    if kind == "success":
+        return "#e6f7ed"
+    if kind == "warning":
+        return "#fff4e5"
+    if kind == "danger":
+        return "#fdecea"
+    "#e8f1ff"
+
+def string bannerIcon(string kind):
+    if kind == "success":
+        return "✓"
+    if kind == "warning":
+        return "⚠"
+    if kind == "danger":
+        return "!"
+    "ℹ"
+
+# An inline notification banner with semantic `kind` (`"info"`, `"success"`, `"warning"`, `"danger"`), an optional `message`,
+# and an optional `onDismiss` callback (which adds a `"✕"` dismiss button).
+pub view Banner:
+    string title
+    string message = ""
+    string kind = "info"
+    UIAction? onDismiss = nil
+
+    def dismiss() throws:
+        if let f = onDismiss:
+            f()
+
+    body():
+        Background(color = bannerColor(kind), radius = 6.0):
+            Padding(insets = 8.0):
+                Row(alignment = .Center, spacing = 8.0):
+                    Text(content = bannerIcon(kind), bold = true)
+                    Column(alignment = .Leading, spacing = 2.0):
+                        Text(content = title, bold = true)
+                        if message != "":
+                            Text(content = message, font = .Caption)
+                    Spacer(minLength = 0.0)
+                    if onDismiss != nil:
+                        Button(label = "✕", style = ButtonStyle.Plain, onActivate = ():
+                            self.dismiss())
+
+# A floating toast overlay positioned at the bottom of `children[0]` while `isPresented` is true, with a dismiss button
+# that writes `false` into `isPresented` and an animated fade transition.
+pub view Toast:
+    bind bool isPresented
+    string message
+    string kind = "info"
+    [View] children
+
+    def dismiss():
+        isPresented = false
+
+    body():
+        Layer(alignment = .Bottom):
+            children[0]
+            AnimationScope(curve = "EaseInOut", duration = 180.0, value = "{isPresented}"):
+                if isPresented:
+                    Transition(insertion = .Fade, removal = .Fade):
+                        Padding(insets = 12.0):
+                            Shadow(radius = 8.0, dy = 2.0):
+                                Banner(title = message, kind = kind, onDismiss = ():
+                                    self.dismiss())
+
+# A group of collapsible sections where at most one section is expanded at a time (or none when `allowAllClosed` is true).
+pub view Accordion:
+    state int openIndex = -1
+
+    [string] titles
+    bool allowAllClosed = true
+    [View] children
+
+    def toggle(int i):
+        if openIndex == i:
+            if allowAllClosed:
+                openIndex = -1
+        else:
+            openIndex = i
+
+    body():
+        Column(alignment = .Leading, spacing = 4.0):
+            for i in 0..<children.length with i:
+                Button(label = "{(if openIndex == i: "▾" else: "▸")} {(if i < titles.length: titles[i] else: "Section {i + 1}")}", style = ButtonStyle.Plain, onActivate = ():
+                    self.toggle(i))
+                AnimationScope(curve = "EaseInOut", duration = 180.0, value = "{openIndex == i}"):
+                    if openIndex == i:
+                        Transition(insertion = .Fade, removal = .Fade):
+                            Padding(insets = 6.0):
+                                children[i]
+
+# A multi-column data table with a bold `headers` row, a hairline `Separator`, `rows` of cell strings, optional
+# `columnWeights` (integer ratios), and optional single-row selection (`selected` + `onSelect`).
+pub view Table:
+    [string] headers
+    [[string]] rows
+    int selected = -1
+    IndexAction? onSelect = nil
+    [int] columnWeights = []
+    float spacing = 8.0
+
+    def pickRow(int r) throws:
+        if let f = onSelect:
+            f(r)
+
+    body():
+        let cols = headers.length
+        let useWeights = columnWeights.length > 0
+        Column(alignment = .Leading, spacing = 4.0):
+            if cols > 0:
+                if useWeights:
+                    Row(alignment = .Center, spacing = spacing, equal = true):
+                        for c in 0..<cols with c:
+                            for u in 0..<(if c < columnWeights.length and columnWeights[c] > 0: columnWeights[c] else: 1) with u:
+                                Fill(height = false, alignment = .TopLeading):
+                                    if u == 0:
+                                        Text(content = headers[c], font = .Caption, bold = true)
+                                    else:
+                                        Spacer(minLength = 0.0)
+                else:
+                    Row(alignment = .Center, spacing = spacing, equal = true):
+                        for c in 0..<cols with c:
+                            Fill(height = false, alignment = .TopLeading):
+                                Text(content = headers[c], font = .Caption, bold = true)
+                Separator()
+            for r in 0..<rows.length with r:
+                Background(color = (if r == selected: "Selection" else: "#00000000"), radius = 4.0):
+                    Padding(insets = 4.0):
+                        if onSelect != nil:
+                            Row(alignment = .Center, spacing = spacing):
+                                Button(label = (if rows[r].length > 0: rows[r][0] else: ""), style = ButtonStyle.Plain, onActivate = ():
+                                    self.pickRow(r))
+                                for c in 1..<cols with c:
+                                    Spacer(minLength = 0.0)
+                                    Text(content = (if c < rows[r].length: rows[r][c] else: ""))
+                        elif useWeights:
+                            Row(alignment = .Center, spacing = spacing, equal = true):
+                                for c in 0..<cols with c:
+                                    for u in 0..<(if c < columnWeights.length and columnWeights[c] > 0: columnWeights[c] else: 1) with u:
+                                        Fill(height = false, alignment = .TopLeading):
+                                            if u == 0 and c < rows[r].length:
+                                                Text(content = rows[r][c])
+                                            else:
+                                                Spacer(minLength = 0.0)
+                        else:
+                            Row(alignment = .Center, spacing = spacing, equal = true):
+                                for c in 0..<cols with c:
+                                    Fill(height = false, alignment = .TopLeading):
+                                        if c < rows[r].length:
+                                            Text(content = rows[r][c])
+                                        else:
+                                            Spacer(minLength = 0.0)
+
+# A horizontal breadcrumb trail: each item before the last is a clickable button calling `onSelect(i)`,
+# separated by `separator`, and the final item is bold text representing the current location.
+pub view Breadcrumb:
+    [string] items
+    IndexAction onSelect
+    string separator = "›"
+
+    body():
+        Row(alignment = .Center, spacing = 6.0):
+            for i in 0..<items.length with i:
+                if i > 0:
+                    Text(content = separator, font = .Caption)
+                if i < items.length - 1:
+                    Button(label = items[i], style = ButtonStyle.Plain, onActivate = ():
+                        onSelect(i))
+                else:
+                    Text(content = items[i], bold = true)
+
+# A 1-based page navigator (`1...totalPages`) with `"‹ Prev"` and `"Next ›"` buttons disabled at the bounds
+# and optional direct page buttons when `totalPages <= 7`.
+pub view Pagination:
+    int page
+    int totalPages
+    IndexAction onChange
+
+    body():
+        let safeTotal = if totalPages < 1: 1 else: totalPages
+        Row(alignment = .Center, spacing = 4.0):
+            Disabled(value = page <= 1):
+                Button(label = "‹ Prev", style = ButtonStyle.Secondary, onActivate = ():
+                    onChange(page - 1))
+            if safeTotal <= 7:
+                for p in 1..=safeTotal with p:
+                    Button(label = "{p}", style = (if p == page: ButtonStyle.Primary else: ButtonStyle.Plain), onActivate = ():
+                        onChange(p))
+            else:
+                Text(content = "Page {page} / {safeTotal}", bold = true)
+            Disabled(value = page >= safeTotal):
+                Button(label = "Next ›", style = ButtonStyle.Secondary, onActivate = ():
+                    onChange(page + 1))
+
+# A horizontal row of toggleable filter chips: chips present in `selected` use `ButtonStyle.Primary`, others `ButtonStyle.Secondary`.
+pub view ChipGroup:
+    [string] options
+    [string] selected
+    NameAction onToggle
+    float spacing = 6.0
+
+    body():
+        Row(alignment = .Center, spacing = spacing):
+            for i in 0..<options.length with i:
+                Button(label = options[i], style = (if selected.contains(options[i]): ButtonStyle.Primary else: ButtonStyle.Secondary), onActivate = ():
+                    onToggle(options[i]))
+
+# An interactive two-pane horizontal split container of `width` points with a draggable `"⋮"` divider.
+# Dragging the divider adjusts the split ratio within `[minRatio, maxRatio]`.
+pub view SplitPane:
+    state float deltaRatio = 0.0
+    state string panGot = ""
+
+    float width
+    float initialRatio = 0.4
+    float minRatio = 0.15
+    float maxRatio = 0.85
+    [View] children
+
+    def dragged():
+        let parts = panGot.split(",")
+        if parts.length == 2 and width > 0.0:
+            let dx = parts[0].parseFloat() else (0.0)
+            var next = initialRatio + deltaRatio + dx / width
+            if next < minRatio:
+                next = minRatio
+            if next > maxRatio:
+                next = maxRatio
+            deltaRatio = next - initialRatio
+
+    body():
+        var ratio = initialRatio + deltaRatio
+        if ratio < minRatio:
+            ratio = minRatio
+        if ratio > maxRatio:
+            ratio = maxRatio
+        Frame(width = width):
+            Row(alignment = .Leading, spacing = 6.0):
+                Frame(width = width * ratio):
+                    Fill(height = false, alignment = .TopLeading):
+                        if children.length > 0:
+                            children[0]
+                OnPan(value = panGot, onActivate = ():
+                    self.dragged()):
+                    Padding(insets = 2.0):
+                        Text(content = "⋮")
+                Fill(height = false, alignment = .TopLeading):
+                    if children.length > 1:
+                        children[1]
+
+# ── form inputs: NumberInput, ComboBox, TagInput, Rating ────────────────────────────────────────────────────────────────────
+
+pub use FloatAction as def void(float)
+pub use TagsAction as def void([string])
+
+# A numeric input combining a `TextField` (commit on Enter) with `-` and `+` step buttons, clamped to `[min, max]`.
+pub view NumberInput:
+    state string draft = ""
+
+    float value
+    float min = 0.0
+    float max = 100.0
+    float step = 1.0
+    string label = "Number"
+    FloatAction onChange
+
+    def float clampVal(float v):
+        if v < min:
+            return min
+        if v > max:
+            return max
+        v
+
+    def stepBy(float delta):
+        draft = ""
+        onChange(self.clampVal(value + delta))
+
+    def commitDraft():
+        if let parsed = draft.parseFloat():
+            draft = ""
+            onChange(self.clampVal(parsed))
+
+    body():
+        Row(alignment = .Center, spacing = 4.0):
+            Disabled(value = value <= min):
+                Button(label = "-", onActivate = ():
+                    self.stepBy(0.0 - step))
+            Frame(minWidth = 80.0):
+                TextField(value = draft, label = label, placeholder = "{value}", onSubmit = ():
+                    self.commitDraft())
+            Disabled(value = value >= max):
+                Button(label = "+", onActivate = ():
+                    self.stepBy(step))
+
+# A filterable combo box: a `TextField` paired with a `Popover` dropdown of `options` filtered case-insensitively by the typed text.
+# Pressing Enter selects the first matching option; clicking an option selects it and closes the dropdown.
+pub view ComboBox:
+    state bool open = false
+    state string filterText = ""
+
+    [string] options
+    NameAction onSelect
+    string label = "Select"
+    string placeholder = "Type to filter…"
+
+    def toggle():
+        let now = open
+        open = !now
+
+    def choose(string item):
+        filterText = item
+        open = false
+        onSelect(item)
+
+    def pickFirst():
+        let q = filterText.toLower()
+        for opt in options:
+            if q == "" or opt.toLower().contains(q):
+                self.choose(opt)
+                return
+
+    body():
+        Popover(isPresented = open):
+            Row(alignment = .Center, spacing = 4.0):
+                Frame(minWidth = 160.0):
+                    TextField(value = filterText, label = label, placeholder = placeholder, onSubmit = ():
+                        self.pickFirst())
+                Button(label = "▾", style = ButtonStyle.Secondary, onActivate = ():
+                    self.toggle())
+            Padding(insets = 4.0):
+                Column(alignment = .Leading, spacing = 2.0):
+                    for i in 0..<options.length with i:
+                        if filterText == "" or options[i].toLower().contains(filterText.toLower()):
+                            Button(label = options[i], style = ButtonStyle.Plain, onActivate = ():
+                                self.choose(options[i]))
+
+# A tag editor: displays `tags` as removable `"tag ✕"` chips alongside a `TextField` + `"Add"` button to append new unique tags.
+pub view TagInput:
+    state string draft = ""
+
+    [string] tags
+    TagsAction onChange
+    string label = "Add tag"
+    string placeholder = "New tag…"
+
+    def addTag():
+        if draft != "" and !tags.contains(draft):
+            mut next = [] as [string]
+            for t in tags:
+                next.push(t)
+            next.push(draft)
+            draft = ""
+            onChange(next)
+
+    def removeTag(int idx):
+        mut next = [] as [string]
+        for i in 0..<tags.length:
+            if i != idx:
+                next.push(tags[i])
+        onChange(next)
+
+    body():
+        Column(alignment = .Leading, spacing = 6.0):
+            if tags.length > 0:
+                Row(alignment = .Center, spacing = 4.0):
+                    for i in 0..<tags.length with i:
+                        Button(label = "{tags[i]} ✕", style = ButtonStyle.Secondary, onActivate = ():
+                            self.removeTag(i))
+            Row(alignment = .Center, spacing = 4.0):
+                Frame(minWidth = 140.0):
+                    TextField(value = draft, label = label, placeholder = placeholder, onSubmit = ():
+                        self.addTag())
+                Button(label = "Add", onActivate = ():
+                    self.addTag())
+
+# A star rating selector (`1...max`): interactive `Button`s by default, or static `Text` stars when `readOnly = true`.
+pub view Rating:
+    int value
+    int max = 5
+    IndexAction onChange
+    bool readOnly = false
+    string label = "Rating"
+
+    body():
+        AccessibilityLabel(label = "{label}: {value} / {max}"):
+            Row(alignment = .Center, spacing = 2.0):
+                for i in 1..=max with i:
+                    if readOnly:
+                        Text(content = (if i <= value: "★" else: "☆"))
+                    else:
+                        Button(label = (if i <= value: "★" else: "☆"), style = ButtonStyle.Plain, onActivate = ():
+                            onChange(i))
+
+# ── layout & navigation: Drawer, Toolbar, EmptyState, Wizard ────────────────────────────────────────────────────────────────
+
+# A slide-over navigation drawer: `children[0]` is the main content, `children[1]` is the drawer panel shown on the leading
+# edge while `isOpen` is true. Clicking the backdrop scrim or the `"✕"` button sets `isOpen` to false.
+pub view Drawer:
+    bind bool isOpen
+    float drawerWidth = 220.0
+    [View] children
+
+    def close():
+        isOpen = false
+
+    body():
+        Layer(alignment = .TopLeading):
+            if children.length > 0:
+                children[0]
+            if isOpen:
+                OnTap(onActivate = ():
+                    self.close()):
+                    Background(color = "#00000050"):
+                        Fill():
+                            Spacer(minLength = 0.0)
+            AnimationScope(curve = "EaseInOut", duration = 200.0, value = "{isOpen}"):
+                if isOpen:
+                    Transition(insertion = .Slide, removal = .Slide, dx = 0.0 - drawerWidth):
+                        Frame(width = drawerWidth):
+                            Fill(width = false, height = true, alignment = .TopLeading):
+                                Background(color = "ElevatedSurface"):
+                                    Padding(insets = 10.0):
+                                        Column(alignment = .Leading, spacing = 8.0):
+                                            Row(alignment = .Center, spacing = 8.0):
+                                                Spacer(minLength = 0.0)
+                                                Button(label = "✕", style = ButtonStyle.Plain, onActivate = ():
+                                                    self.close())
+                                            if children.length > 1:
+                                                children[1]
+
+# A horizontal toolbar strip with an optional bold `title` and a row of action controls.
+pub view Toolbar:
+    string title = ""
+    float spacing = 8.0
+    [View] children
+
+    body():
+        Background(color = "Surface"):
+            Padding(insets = 8.0):
+                Row(alignment = .Center, spacing = spacing):
+                    if title != "":
+                        Text(content = title, bold = true)
+                        Separator(axis = .VerticalRule)
+                    for i in 0..<children.length with i:
+                        children[i]
+
+# A centered empty-state placeholder with an icon/symbol, title, optional description, and optional primary action button.
+pub view EmptyState:
+    string title
+    string message = ""
+    string icon = "○"
+    string actionLabel = ""
+    UIAction? onAction = nil
+
+    def trigger() throws:
+        if let f = onAction:
+            f()
+
+    body():
+        Fill(alignment = .Middle):
+            Padding(insets = 16.0):
+                Column(alignment = .Center, spacing = 8.0):
+                    if icon != "":
+                        Text(content = icon, font = .Title)
+                    Text(content = title, font = .Headline, bold = true)
+                    if message != "":
+                        Text(content = message, font = .Caption)
+                    if actionLabel != "" and onAction != nil:
+                        Button(label = actionLabel, style = ButtonStyle.Primary, onActivate = ():
+                            self.trigger())
+
+# A multi-step wizard assistant: displays numbered step badges (`titles`), the active step `children[step]`,
+# and Back / Next / Finish navigation controls.
+pub view Wizard:
+    int step
+    [string] titles
+    IndexAction onStep
+    PlainAction onFinish
+    string backLabel = "Back"
+    string nextLabel = "Next"
+    string finishLabel = "Finish"
+    [View] children
+
+    body():
+        Column(alignment = .Leading, spacing = 12.0):
+            Row(alignment = .Center, spacing = 6.0):
+                for i in 0..<titles.length with i:
+                    Badge(text = "{i + 1}. {titles[i]}", color = (if i == step: "#3478f6" elif i < step: "#34c759" else: "#e5e5ea"))
+            Separator()
+            if step >= 0 and step < children.length:
+                children[step]
+            Separator()
+            Row(alignment = .Center, spacing = 8.0):
+                Disabled(value = step <= 0):
+                    Button(label = backLabel, onActivate = ():
+                        onStep(step - 1))
+                Spacer(minLength = 0.0)
+                if step < children.length - 1:
+                    Button(label = nextLabel, style = ButtonStyle.Primary, onActivate = ():
+                        onStep(step + 1))
+                else:
+                    Button(label = finishLabel, style = ButtonStyle.Primary, onActivate = ():
+                        onFinish())
+
+# ── data visualization & hierarchy: Skeleton, BarChart, Sparkline, StatCard, TreeView ──────────────────────────────────────
+
+# A loading placeholder: a single rounded rectangle, a circular avatar (`circle = true`), or `lines` stacked text lines
+# where the last line is shorter (`width * 0.65`).
+pub view Skeleton:
+    float width = 120.0
+    float height = 16.0
+    float radius = 4.0
+    bool circle = false
+    int lines = 1
+    string color = "#e2e4e9"
+    string label = "Loading"
+
+    body():
+        AccessibilityLabel(label = label):
+            if circle:
+                Circle(color = color, diameter = (if width < height: width else: height))
+            elif lines > 1:
+                Column(alignment = .Leading, spacing = 6.0):
+                    for i in 0..<lines with i:
+                        Rectangle(color = color, width = (if i == lines - 1: width * 0.65 else: width), height = height, radius = radius)
+            else:
+                Rectangle(color = color, width = width, height = height, radius = radius)
+
+# A vertical bar chart rendered on a `Canvas`: scales `values` against the maximum positive value and optionally renders
+# `labels` below each bar.
+pub view BarChart:
+    [float] values
+    [string] labels = []
+    float width = 240.0
+    float height = 120.0
+    string barColor = "#3478f6"
+    float barSpacing = 6.0
+    string label = "BarChart"
+
+    req float maxVal():
+        mut m = 1.0
+        for v in values:
+            if v > m:
+                m = v
+        m
+
+    req float barH(int i, float m):
+        let v = if values[i] > 0.0: values[i] else: 0.0
+        let rawH = (v / m) * (height - 4.0)
+        if rawH > 2.0: rawH else: 2.0
+
+    body():
+        let n = values.length
+        let m = self.maxVal()
+        let totalGap = if n > 1: barSpacing * ((n - 1) as float) else: 0.0
+        let rawBarW = if n > 0: (width - totalGap) / (n as float) else: width
+        let barW = if rawBarW > 2.0: rawBarW else: 2.0
+        AccessibilityLabel(label = label):
+            if n == 0:
+                Frame(width = width, height = height):
+                    Spacer(minLength = 0.0)
+            else:
+                Column(alignment = .Leading, spacing = 4.0):
+                    Canvas(width = width, height = height):
+                        At(x = 0.0, y = height - 1.0):
+                            HLine(color = "#d0d0d8", length = width, thickness = 1.0)
+                        for i in 0..<n with i:
+                            At(x = (i as float) * (barW + barSpacing), y = height - self.barH(i, m)):
+                                Rectangle(color = barColor, width = barW, height = self.barH(i, m), radius = 3.0)
+                    if labels.length == n:
+                        Row(alignment = .Center, spacing = barSpacing):
+                            for i in 0..<n with i:
+                                Frame(width = barW):
+                                    Text(content = labels[i], font = .Caption)
+
+# A compact inline trend plot: plots `values` normalized between their min and max as dots with subtle vertical stems.
+pub view Sparkline:
+    [float] values
+    float width = 100.0
+    float height = 28.0
+    string color = "#3478f6"
+    float dotSize = 4.0
+    string label = "Sparkline"
+
+    req float minVal():
+        if values.length == 0:
+            return 0.0
+        mut m = values[0]
+        for v in values:
+            if v < m:
+                m = v
+        m
+
+    req float maxVal():
+        if values.length == 0:
+            return 1.0
+        mut m = values[0]
+        for v in values:
+            if v > m:
+                m = v
+        m
+
+    req float ptX(int i, int n, float usableW):
+        if n > 1: (i as float) * usableW / ((n - 1) as float) else: usableW / 2.0
+
+    req float ptY(int i, float lo, float span, float usableH):
+        let norm = (values[i] - lo) / span
+        (1.0 - norm) * usableH
+
+    body():
+        let n = values.length
+        let lo = self.minVal()
+        let hi = self.maxVal()
+        let span = if hi > lo: hi - lo else: 1.0
+        let usableH = if height > dotSize: height - dotSize else: 1.0
+        let usableW = if width > dotSize: width - dotSize else: 1.0
+        AccessibilityLabel(label = label):
+            Canvas(width = width, height = height):
+                At(x = 0.0, y = height - 1.0):
+                    HLine(color = "#e5e5ea", length = width, thickness = 1.0)
+                for i in 0..<n with i:
+                    if height - self.ptY(i, lo, span, usableH) - (dotSize / 2.0) > 1.0:
+                        At(x = self.ptX(i, n, usableW) + (dotSize / 2.0) - 0.5, y = self.ptY(i, lo, span, usableH) + (dotSize / 2.0)):
+                            VLine(color = "#d8e6fd", length = height - self.ptY(i, lo, span, usableH) - (dotSize / 2.0), thickness = 1.0)
+                    At(x = self.ptX(i, n, usableW), y = self.ptY(i, lo, span, usableH)):
+                        Circle(color = color, diameter = dotSize)
+
+# A KPI summary card displaying `title`, a prominent `value`, an optional `delta` badge (`positive` green or negative red),
+# an optional `subtitle`, and any trailing `children` (such as a `Sparkline`).
+pub view StatCard:
+    string title
+    string value
+    string delta = ""
+    bool positive = true
+    string subtitle = ""
+    [View] children
+
+    body():
+        Card():
+            Row(alignment = .Center, spacing = 12.0):
+                Column(alignment = .Leading, spacing = 4.0):
+                    Text(content = title, font = .Caption)
+                    Row(alignment = .Center, spacing = 8.0):
+                        Text(content = value, font = .Title, bold = true)
+                        if delta != "":
+                            Badge(text = delta, color = (if positive: "#d4f5dd" else: "#ffd9d6"))
+                    if subtitle != "":
+                        Text(content = subtitle, font = .Caption)
+                if children.length > 0:
+                    Spacer(minLength = 0.0)
+                    for i in 0..<children.length with i:
+                        children[i]
+
+# An entry in a `TreeView` hierarchy, listed in depth-first order with `depth` >= 0.
+pub struct TreeItem:
+    string id
+    string label
+    int depth = 0
+    bool hasChildren = false
+
+# A collapsible hierarchical tree list: `items` are given in depth-first order; clicking `▸`/`▾` expands or collapses
+# a node's descendants, and clicking an item label calls `onSelect(item.id)`.
+pub view TreeView:
+    state [string] expandedIds = []
+
+    [TreeItem] items
+    string selectedId = ""
+    NameAction onSelect
+    float indent = 16.0
+
+    req bool isExpanded(string id):
+        expandedIds.contains(id)
+
+    def toggleExpand(string id):
+        mut next = [] as [string]
+        mut removed = false
+        for eid in expandedIds:
+            if eid == id:
+                removed = true
+            else:
+                next.push(eid)
+        if !removed:
+            next.push(id)
+        while expandedIds.length > 0:
+            _ = expandedIds.pop()
+        for eid in next:
+            expandedIds.push(eid)
+
+    req [int] visibleIndices():
+        mut out = [] as [int]
+        mut hiddenAboveDepth = -1
+        for i in 0..<items.length:
+            let item = items[i]
+            if hiddenAboveDepth >= 0:
+                if item.depth > hiddenAboveDepth:
+                    continue
+                else:
+                    hiddenAboveDepth = -1
+            out.push(i)
+            if item.hasChildren and !self.isExpanded(item.id):
+                hiddenAboveDepth = item.depth
+        out
+
+    body():
+        let visible = self.visibleIndices()
+        Column(alignment = .Leading, spacing = 2.0):
+            for idx in visible with idx:
+                Row(alignment = .Center, spacing = 4.0):
+                    if items[idx].depth > 0:
+                        Frame(width = (items[idx].depth as float) * indent):
+                            Spacer(minLength = 0.0)
+                    if items[idx].hasChildren:
+                        Button(label = (if self.isExpanded(items[idx].id): "▾" else: "▸"), style = ButtonStyle.Plain, onActivate = ():
+                            self.toggleExpand(items[idx].id))
+                    else:
+                        Frame(width = 14.0):
+                            Spacer(minLength = 0.0)
+                    Button(label = items[idx].label, style = (if items[idx].id == selectedId: ButtonStyle.Primary else: ButtonStyle.Plain), onActivate = ():
+                        onSelect(items[idx].id))
+
 pub use IndexAction as def void(int)
 
 # A row of mutually exclusive options; `selected` is the chosen index and `onSelect` receives the index of the
@@ -76,14 +869,21 @@ pub view Picker:
 
     body():
         let shown = if selected >= 0 and selected < options.length: options[selected] else "Choose"
+        let defIdx = if selected >= 0 and selected < options.length: selected else: 0
         Popover(isPresented = open):
             Button(label = "{shown} ▾", style = ButtonStyle.Secondary, onActivate = ():
                 self.toggle())
-            Padding(insets = 4.0):
-                Column(alignment = .Leading, spacing = 2.0):
-                    for i in 0..<options.length with i:
-                        Button(label = options[i], style = (if selected == i: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
-                            self.choose(i))
+            FocusScope(trap = true):
+                Padding(insets = 4.0):
+                    Column(alignment = .Leading, spacing = 2.0):
+                        for i in 0..<options.length with i:
+                            if i == defIdx:
+                                DefaultFocus:
+                                    Button(label = options[i], style = (if selected == i: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
+                                        self.choose(i))
+                            else:
+                                Button(label = options[i], style = (if selected == i: ButtonStyle.Primary else ButtonStyle.Plain), onActivate = ():
+                                    self.choose(i))
 
 # A menu of actions: a button labelled `label ▾` that opens the `items` in a `Popover` below it (above when the window has more room there). Choosing
 # an item closes the menu and calls `onSelect` with its index (nothing is marked as selected, unlike `Picker`); a press outside or Escape closes it
@@ -105,18 +905,30 @@ pub view Menu:
         let now = open
         open = !now
 
+    req int firstItem():
+        for i in 0..<items.length:
+            if items[i] != "-" and items[i] != "---" and items[i] != "":
+                return i
+        -1
+
     body():
+        let defIdx = self.firstItem()
         Popover(isPresented = open):
             Button(label = "{label} ▾", style = ButtonStyle.Secondary, onActivate = ():
                 self.toggle())
-            Padding(insets = 4.0):
-                Column(alignment = .Leading, spacing = 2.0):
-                    for i in 0..<items.length with i:
-                        if items[i] == "-" or items[i] == "---" or items[i] == "":
-                            Separator()
-                        else:
-                            Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
-                                self.choose(i))
+            FocusScope(trap = true):
+                Padding(insets = 4.0):
+                    Column(alignment = .Leading, spacing = 2.0):
+                        for i in 0..<items.length with i:
+                            if items[i] == "-" or items[i] == "---" or items[i] == "":
+                                Separator()
+                            elif i == defIdx:
+                                DefaultFocus:
+                                    Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                        self.choose(i))
+                            else:
+                                Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                    self.choose(i))
 
 # A context menu: the first child, right-clicked anywhere inside, opens `items` in a `Popover` below it (the host calls `contextPress` on a right
 # press). Like `Menu`, choosing an item closes it and reports its index, a press outside or Escape closes it, `danger` marks a destructive item,
@@ -134,18 +946,30 @@ pub view ContextMenu:
         open = false
         onSelect(i)
 
+    req int firstItem():
+        for i in 0..<items.length:
+            if items[i] != "-" and items[i] != "---" and items[i] != "":
+                return i
+        -1
+
     body():
+        let defIdx = self.firstItem()
         Popover(isPresented = open):
             OnContext(value = open):
                 children[0]
-            Padding(insets = 4.0):
-                Column(alignment = .Leading, spacing = 2.0):
-                    for i in 0..<items.length with i:
-                        if items[i] == "-" or items[i] == "---" or items[i] == "":
-                            Separator()
-                        else:
-                            Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
-                                self.choose(i))
+            FocusScope(trap = true):
+                Padding(insets = 4.0):
+                    Column(alignment = .Leading, spacing = 2.0):
+                        for i in 0..<items.length with i:
+                            if items[i] == "-" or items[i] == "---" or items[i] == "":
+                                Separator()
+                            elif i == defIdx:
+                                DefaultFocus:
+                                    Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                        self.choose(i))
+                            else:
+                                Button(label = items[i], style = ButtonStyle.Plain, role = (if i == danger: ButtonRole.Destructive else ButtonRole.Normal), onActivate = ():
+                                    self.choose(i))
 
 # A modal alert: a `Sheet` holding a title, an optional message and a row of buttons. Choosing a button closes the alert and calls `onSelect` with its
 # index. `defaultIndex` is the button focused first and activated by Enter; `cancel` (an index, -1 for none) is the button Escape activates (an alert
@@ -1108,8 +1932,16 @@ pub view Desktop:
             dx = parts[0].parseFloat() else (0.0)
         self.apply(raisedWin(resizedWin(normalized(wins, children.length, windowWidth), id, dx, minWindowWidth, width), id))
 
+    req int topOpenIndex([DesktopWindow] list):
+        var found = -1
+        for k in 0..<list.length:
+            if list[k].open:
+                found = k
+        found
+
     body():
         let list = normalized(wins, children.length, windowWidth)
+        let topOpen = self.topOpenIndex(list)
         Frame(width = width, height = height):
             Clip:
                 Background(color = "#e4e8f0"):
@@ -1121,31 +1953,32 @@ pub view Desktop:
                             for k in 0..<list.length with list[k].id:
                                 if list[k].open:
                                     Offset(x = (if list[k].maximized: 0.0 else: list[k].x), y = (if list[k].maximized: 0.0 else: list[k].y)):
-                                        OnTap(onActivate = ():
-                                            self.raise(list[k].id)):
-                                            Shadow(radius = 10.0, dy = 4.0):
-                                                Background(color = "#ffffff", radius = 8.0):
-                                                    Column(alignment = .Leading, spacing = 0.0):
-                                                        OnPan(value = got, onActivate = ():
-                                                            self.moved(list[k].id)):
-                                                            Background(color = "#d8dde8", radius = 8.0):
+                                        FocusSection:
+                                            OnTap(onActivate = ():
+                                                self.raise(list[k].id)):
+                                                Shadow(radius = 10.0, dy = 4.0):
+                                                    Background(color = "#ffffff", radius = 8.0):
+                                                        Column(alignment = .Leading, spacing = 0.0):
+                                                            OnPan(value = got, onActivate = ():
+                                                                self.moved(list[k].id)):
+                                                                Background(color = "#d8dde8", radius = 8.0):
+                                                                    Frame(width = winWidthOf(list[k], width)):
+                                                                        Row(alignment = .Center, spacing = 4.0):
+                                                                            Button(label = "✕", style = ButtonStyle.Plain, role = (if k == topOpen: ButtonRole.Cancel else: ButtonRole.Normal), onActivate = ():
+                                                                                self.setOpen(list[k].id, false))
+                                                                            Button(label = "−", style = ButtonStyle.Plain, onActivate = ():
+                                                                                self.toggleMin(list[k].id))
+                                                                            Button(label = "□", style = ButtonStyle.Plain, onActivate = ():
+                                                                                self.toggleMax(list[k].id))
+                                                                            Text(content = titleOf(titles, list[k].id), bold = true)
+                                                                            Spacer(minLength = 0.0)
+                                                                            OnPan(value = resizeGot, onActivate = ():
+                                                                                self.resized(list[k].id)):
+                                                                                Text(content = "⋮")
+                                                            if !list[k].minimized:
                                                                 Frame(width = winWidthOf(list[k], width)):
-                                                                    Row(alignment = .Center, spacing = 4.0):
-                                                                        Button(label = "✕", style = ButtonStyle.Plain, onActivate = ():
-                                                                            self.setOpen(list[k].id, false))
-                                                                        Button(label = "−", style = ButtonStyle.Plain, onActivate = ():
-                                                                            self.toggleMin(list[k].id))
-                                                                        Button(label = "□", style = ButtonStyle.Plain, onActivate = ():
-                                                                            self.toggleMax(list[k].id))
-                                                                        Text(content = titleOf(titles, list[k].id), bold = true)
-                                                                        Spacer(minLength = 0.0)
-                                                                        OnPan(value = resizeGot, onActivate = ():
-                                                                            self.resized(list[k].id)):
-                                                                            Text(content = "⋮")
-                                                        if !list[k].minimized:
-                                                            Frame(width = winWidthOf(list[k], width)):
-                                                                Padding(insets = 8.0):
-                                                                    children[list[k].id]
+                                                                    Padding(insets = 8.0):
+                                                                        children[list[k].id]
                             Offset(x = 8.0, y = height - 30.0):
                                 Row(alignment = .Center, spacing = 6.0):
                                     for k in 0..<list.length with list[k].id:

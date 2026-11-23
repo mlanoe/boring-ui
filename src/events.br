@@ -1647,6 +1647,32 @@ def bool defaultKey(mut Runtime rt, Builder host, string name):
             if let h = rt.handle(rt.openSheets[rt.openSheets.length - 1]):
                 return act(rt, host, h, "dismiss", "")
         return false
+    if name == "Down" or name == "Up" or name == "Home" or name == "End":
+        let popovers = rt.presentedPopovers()
+        if popovers.length > 0:
+            if let top = rt.find(popovers[popovers.length - 1]):
+                let panel = if top.children.length > 1: top.children[1] else: top
+                let popOrder = focusablesIn(panel, false)
+                if popOrder.length > 0:
+                    var at = -1
+                    if let f = rt.focus:
+                        at = indexOf(popOrder, f)
+                    var target = popOrder[0]
+                    if name == "Down":
+                        if at < 0:
+                            if let defFocus = initialFocusIn(panel):
+                                target = defFocus
+                        else:
+                            target = popOrder[(at + 1) % popOrder.length]
+                    elif name == "Up":
+                        if at < 0:
+                            target = popOrder[popOrder.length - 1]
+                        else:
+                            target = popOrder[(at - 1 + popOrder.length) % popOrder.length]
+                    elif name == "End":
+                        target = popOrder[popOrder.length - 1]
+                    focusControl(rt, host, target)
+                    return true
     if let f = rt.focus:
         if rt.valid(f) and !isDisabled(rt, f.id):
             if let node = rt.find(f.id):

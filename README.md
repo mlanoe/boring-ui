@@ -869,6 +869,40 @@ Not done: a shipped iOS or Android host. The wgpu host builds for `aarch64-apple
 
 See [`examples/todo_window/main.br`](examples/todo_window/main.br) for a complete native window entry point built with `ui.window` and `text.window`.
 
+## Additional composite controls (`Badge`, `Card`, `RadioGroup`, `SearchField`, `Banner`, `Toast`, `Accordion`, `Table`)
+
+`src/controls.br` also provides pure-Boring composite building blocks (tested in `tests/extra_controls_test.br` and `tests/components_test.br`, interpreter and `boring build`):
+- `Badge(text, color = "#e5e5ea", radius = 10.0)`: compact rounded pill displaying caption text.
+- `Card(color = "ElevatedSurface", radius = 8.0, padding = 12.0)`: elevated surface container with drop shadow and inner padding.
+- `RadioGroup(selected, options, onSelect, axis = .Vertical, spacing = 6.0)`: mutually exclusive radio option group (`◉` / `○`) in vertical or horizontal layout.
+- `SearchField(bind value, label = "Search", placeholder = "Search…", onSubmit = nil)`: `TextField` with an inline `"✕"` clear button shown while non-empty.
+- `Banner(title, message = "", kind = "info", onDismiss = nil)`: inline notification banner (`"info"`, `"success"`, `"warning"`, `"danger"`) with optional dismiss button.
+- `Toast(bind isPresented, message, kind = "info")`: floating bottom overlay notification with fade transition and dismiss button.
+- `Accordion(titles, allowAllClosed = true)`: collapsible sections where at most one section is expanded at a time.
+- `Table(headers, rows, selected = -1, onSelect = nil, columnWeights = [], spacing = 8.0)`: multi-column data table with optional proportional weights and row selection.
+- `Breadcrumb(items, onSelect, separator = "›")`: clickable horizontal breadcrumb trail with bold current item.
+- `Pagination(page, totalPages, onChange)`: 1-based page navigator with `"‹ Prev"`, `"Next ›"`, and direct page buttons.
+- `ChipGroup(options, selected, onToggle, spacing = 6.0)`: horizontal row of toggleable filter chips.
+- `SplitPane(width, initialRatio = 0.4, minRatio = 0.15, maxRatio = 0.85)`: interactive two-pane horizontal split container with a draggable `"⋮"` divider.
+- `NumberInput(value, min = 0.0, max = 100.0, step = 1.0, onChange)`: numeric `TextField` with `-`/`+` step buttons and range clamping.
+- `ComboBox(options, onSelect, label = "Select", placeholder = "Type to filter…")`: filterable `TextField` + `Popover` dropdown.
+- `TagInput(tags, onChange, label = "Add tag", placeholder = "New tag…")`: removable tag chips with `TextField` + `"Add"` button.
+- `Rating(value, max = 5, onChange, readOnly = false)`: interactive or read-only star rating selector (`★` / `☆`).
+- `Drawer(isOpen, side = "left", width = 280.0, onClose, content)`: slide-in overlay panel (`"left"` or `"right"`) with backdrop dismiss.
+- `Toolbar(title, subtitle = "", leading, trailing)`: horizontal header/action bar with leading/trailing slots and optional subtitle.
+- `EmptyState(icon = "", title, message = "", actionLabel = "", onAction)`: centered placeholder view with optional icon, message, and action button.
+- `Wizard(steps, currentStep, onStep, onFinish, content)`: multi-step wizard with step indicator, Back/Next/Finish buttons, and step content.
+- `Skeleton(width = 120.0, height = 16.0, radius = 4.0, circle = false, lines = 1)`: loading placeholder shape (rectangle, circle, or multi-line block).
+- `BarChart(values, labels = [], width = 240.0, height = 120.0, barColor = "#3478f6")`: vertical `Canvas` bar chart with optional bar labels.
+- `Sparkline(values, width = 100.0, height = 28.0, color = "#3478f6", dotSize = 4.0)`: compact inline trend plot.
+- `StatCard(title, value, delta = "", positive = true, subtitle = "")`: KPI summary `Card` with optional delta `Badge`, subtitle, and trailing slot.
+- `TreeView(items, selectedId = "", onSelect, indent = 16.0)` with `TreeItem(id, label, depth = 0, hasChildren = false)`: collapsible hierarchical tree list.
+
+## Keyboard navigation (`Picker`, `Menu`, `ContextMenu`, `Desktop`)
+
+- **`Picker`, `Menu`, `ContextMenu`**: when their `Popover` is open, focus is trapped with `FocusScope(trap = true)` and seeded via `DefaultFocus` (selected item for `Picker`, first non-separator item for `Menu` / `ContextMenu`). `Up`, `Down`, `Home`, and `End` cycle through items (`Tab`/`ShiftTab` wrap inside the popover), `Enter`/`Space` activate the focused item, and `Escape` dismisses the popover.
+- **`Desktop`**: open windows are wrapped in `FocusSection` and the topmost open window's `"✕"` close button carries `ButtonRole.Cancel` so `Escape` closes the active window. Test: `tests/keyboard_nav_test.br`.
+
 ## Contributing & License
 
 This project is licensed under the terms of the [GNU General Public License v3.0](LICENSE).

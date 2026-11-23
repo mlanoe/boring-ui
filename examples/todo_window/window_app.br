@@ -39,6 +39,8 @@ view WindowApp:
     state int dy = 2026
     state int dm = 11
     state int dd = 2
+    state int th = 14
+    state int tm = 30
     state string bin = "-"
     state string gest = "-"
     state int taps = 0
@@ -69,6 +71,10 @@ view WindowApp:
         dy = y
         dm = m
         dd = d
+
+    def setTime(int h, int m):
+        th = h
+        tm = m
 
     def decided(string v):
         verdict = v
@@ -110,7 +116,9 @@ view WindowApp:
                                     DatePicker(year = dy, month = dm, day = dd, onChange = (y, m, d):
                                         self.setDate(y, m, d))
                                     Text(content = "{dy}-{dm}-{dd}")
-                                    ColorPicker(red = cr, green = cg, blue = cb, label = "Accent")
+                                    TimePicker(hour = th, minute = tm, minuteStep = 5, onChange = (h, m):
+                                        self.setTime(h, m))
+                                    ColorPicker(red = cr, green = cg, blue = cb, label = "Accent", editableHex = true)
                                     Row(alignment = .Center, spacing = 12.0):
                                         Draggable(payload = "fruit:Apple", preview = "Apple"):
                                             Background(color = "#ff9e98", radius = 6.0):
@@ -154,6 +162,8 @@ view WindowApp:
                                             Capsule(color = "#ff9500", width = 18.0, height = 3.0 * (stepped as float))
                                         At(x = 110.0, y = 10.0):
                                             Circle(color = "#ff3b30", diameter = 8.0 + 4.0 * (stepped as float), stroke = "#ffffff", strokeWidth = 2.0)
+                                        At(x = 138.0, y = 38.0):
+                                            Rectangle(width = 14.0, height = 14.0, radius = 3.0, stroke = "#007aff", strokeWidth = 2.0)
                                     Stepper(value = stepped, min = 0, max = 10, label = "Count", onChange = (v):
                                         stepped = v)
                                     ProgressBar(value = (stepped as float) / 10.0, width = 200.0, label = "Count")
@@ -170,8 +180,8 @@ view WindowApp:
                                                 LabeledContent(label = "Name"):
                                                     Text(content = "Demo user")
                                                 LabeledContent(label = "Language"):
-                                                    Menu(label = (["English", "Français", "Deutsch"])[lang], items = ["English", "Français", "Deutsch"], onSelect = (i):
-                                                        lang = i)
+                                                    Menu(label = (["English", "Français", "Deutsch"])[lang], items = ["English", "-", "Français", "Deutsch"], onSelect = (i):
+                                                        lang = (if i > 1: i - 1 else: i))
                                             Section(header = "More"):
                                                 NavigationLink(label = "About", to = "about")
                                         Column(alignment = .Leading, spacing = 8.0):
